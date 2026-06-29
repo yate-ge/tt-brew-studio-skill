@@ -317,16 +317,6 @@ export default function ProjectHome() {
             <span style={STYLES.stageTag}>{STAGE_LABELS[projectStage] || projectStage}</span>
           </div>
           <p style={STYLES.projectDesc}>{projectDesc}</p>
-          <div style={STYLES.projectActions}>
-            <Link to="/reports" style={STYLES.btnPrimary}>
-              {ICONS.report}
-              继续当前工作
-            </Link>
-            <Link to="/reports/new" style={STYLES.btnSecondary}>
-              {ICONS.edit}
-              新建汇报
-            </Link>
-          </div>
         </div>
       </div>
 

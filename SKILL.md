@@ -88,6 +88,27 @@ If `first_run` is true, also tell user in matched language:
 - `zh`: "设计规范已初始化：{design_spec_path}"
 - `en`: "Design spec initialized at {design_spec_path}".
 
+#### Step 1.5: Analyze project (first run only)
+
+On first run, the Agent should **intelligently analyze the project** to set up the project name and description. Read project files to understand what this project is about:
+
+1. Read `package.json` (if exists) — get `name`, `description`, `version`
+2. Read `README.md` or `README.zh-CN.md` (if exists) — get project summary
+3. Read other relevant files (e.g., `SPEC.md`, project config files) to understand the project
+
+Then update the project configuration via API:
+
+```bash
+curl -s -X PUT http://localhost:3847/api/project \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "YOUR DETECTED PROJECT NAME",
+    "description": "YOUR DETECTED PROJECT DESCRIPTION (1-2 sentences)"
+  }'
+```
+
+This ensures the dashboard shows meaningful project information instead of "未命名项目".
+
 Immediately ask remote access choice in matched language (specific, not open-ended):
 
 - `zh`:

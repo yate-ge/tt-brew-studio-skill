@@ -142,6 +142,20 @@ async function main() {
     fs.mkdirSync(path.join(dataDir, 'data', 'deliveries'), { recursive: true });
     fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
 
+    // Initialize project.json with defaults (Agent will update with smart analysis)
+    const projectConfigPath = path.join(dataDir, 'data', 'project.json');
+    const projectConfig = {
+      name: '未命名项目',
+      description: '',
+      stage: 'dev',
+      initial: 'P',
+      theme: 'system',
+      accent: 'blue',
+      density: 'comfortable',
+      host_mode: 'local',
+    };
+    fs.writeFileSync(projectConfigPath, JSON.stringify(projectConfig, null, 2), 'utf8');
+
     // Initialize index.json
     const indexPath = path.join(dataDir, 'data', 'index.json');
     if (!fs.existsSync(indexPath)) {
