@@ -23,3 +23,8 @@ dist/
 
 # Playwright MCP
 .playwright-mcp/
+
+# Local tool directories
+.learnbuddy/
+.workbuddy/
+.codebuddy/

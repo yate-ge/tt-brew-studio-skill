@@ -1,438 +1,365 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { fetchSettings, updateSettings, fetchDesignTokens } from '../lib/api';
-import { useSettings } from '../hooks/useSettings';
-import { t } from '../lib/i18n';
+import { useState, useEffect } from 'react';
+import { getThemePreference, setThemePreference } from '../lib/theme';
+import { fetchProjectConfig, updateProjectConfig } from '../lib/api';
 
-const TRIGGER_MODES = ['auto', 'smart', 'manual'];
+const STYLES = {
+  page: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--vd-space-6)',
+    maxWidth: 640,
+  },
+  title: {
+    fontSize: 'var(--vd-font-size-2xl)',
+    fontWeight: 'var(--vd-font-weight-bold)',
+    color: 'var(--vd-text-primary)',
+  },
+  loadingState: {
+    textAlign: 'center',
+    padding: 'var(--vd-space-16) var(--vd-space-6)',
+    color: 'var(--vd-text-tertiary)',
+  },
+  group: {
+    marginBottom: 'var(--vd-space-2)',
+  },
+  groupTitle: {
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+    color: 'var(--vd-text-tertiary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    marginBottom: 'var(--vd-space-3)',
+  },
+  card: {
+    background: 'var(--vd-surface-bg)',
+    borderRadius: 'var(--vd-radius-lg)',
+    border: '1px solid var(--vd-border-default)',
+    overflow: 'hidden',
+  },
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 'var(--vd-space-4)',
+    borderBottom: '1px solid var(--vd-border-subtle)',
+    gap: 'var(--vd-space-4)',
+  },
+  rowLabel: {
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+    color: 'var(--vd-text-primary)',
+    minWidth: 100,
+  },
+  rowValue: {
+    fontSize: 'var(--vd-font-size-sm)',
+    color: 'var(--vd-text-secondary)',
+    flex: 1,
+  },
+  input: {
+    padding: 'var(--vd-space-2) var(--vd-space-3)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-surface-bg)',
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    width: '100%',
+    maxWidth: 280,
+  },
+  select: {
+    padding: 'var(--vd-space-2) var(--vd-space-3)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-surface-bg)',
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+  },
+  themeOption: (active) => ({
+    padding: 'var(--vd-space-2) var(--vd-space-4)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: `1px solid ${active ? 'var(--vd-primary)' : 'var(--vd-border-default)'}`,
+    background: active ? 'var(--vd-primary-bg)' : 'transparent',
+    color: active ? 'var(--vd-primary)' : 'var(--vd-text-secondary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    cursor: 'pointer',
+  }),
+  colorDot: (color) => ({
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    background: color,
+    border: '2px solid var(--vd-border-default)',
+    cursor: 'pointer',
+    flexShrink: 0,
+  }),
+  colorDotActive: (color) => ({
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    background: color,
+    border: '2px solid var(--vd-primary)',
+    boxShadow: `0 0 0 2px var(--vd-primary-bg)`,
+    cursor: 'pointer',
+    flexShrink: 0,
+  }),
+  previewBox: {
+    marginTop: 'var(--vd-space-4)',
+    padding: 'var(--vd-space-4)',
+    borderRadius: 'var(--vd-radius-lg)',
+    background: 'var(--vd-surface-bg)',
+    border: '1px solid var(--vd-border-default)',
+  },
+  previewLabel: {
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+    color: 'var(--vd-text-tertiary)',
+    marginBottom: 'var(--vd-space-3)',
+  },
+  previewCard: (primaryColor) => ({
+    padding: 'var(--vd-space-4)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-page-bg)',
+  }),
+  previewBtn: (primaryColor) => ({
+    display: 'inline-flex',
+    padding: 'var(--vd-space-2) var(--vd-space-4)',
+    borderRadius: 'var(--vd-radius-md)',
+    background: primaryColor,
+    color: '#fff',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 500,
+    marginTop: 'var(--vd-space-3)',
+  }),
+  saveBtn: {
+    padding: 'var(--vd-space-2) var(--vd-space-6)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: 'none',
+    background: 'var(--vd-primary)',
+    color: 'var(--vd-text-inverse)',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+    cursor: 'pointer',
+    alignSelf: 'flex-end',
+  },
+};
+
+const ACCENT_COLORS = [
+  { key: 'blue', value: '#2563EB' },
+  { key: 'cyan', value: '#0891B2' },
+  { key: 'purple', value: '#7C3AED' },
+  { key: 'green', value: '#16A34A' },
+  { key: 'orange', value: '#EA580C' },
+];
 
 export default function Settings() {
-  const { update: updateGlobal } = useSettings();
-  const [settings, setSettings] = useState(null);
-  const [tokens, setTokens] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [theme, setTheme] = useState(() => getThemePreference());
+  const [accent, setAccent] = useState('blue');
+  const [layoutDensity, setLayoutDensity] = useState('comfortable');
+  const [projectName, setProjectName] = useState('');
+  const [projectDesc, setProjectDesc] = useState('');
+  const [projectStage, setProjectStage] = useState('dev');
+  const [hostMode, setHostMode] = useState('local');
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    fetchSettings()
-      .then((data) => setSettings(data))
-      .catch((err) => setMessage(t('errorLoadingSettings', { message: err.message })));
-    fetchDesignTokens()
-      .then((data) => setTokens(data))
-      .catch(() => {});
+    fetchProjectConfig()
+      .then((config) => {
+        setProjectName(config.name || '');
+        setProjectDesc(config.description || '');
+        setProjectStage(config.stage || 'dev');
+        setTheme(config.theme === 'system' ? getThemePreference() : config.theme || getThemePreference());
+        setAccent(config.accent || 'blue');
+        setLayoutDensity(config.density || 'comfortable');
+        setHostMode(config.host_mode || 'local');
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, []);
 
-  async function handleSave() {
-    if (!settings) return;
+  const handleThemeChange = (t) => {
+    setTheme(t);
+    setThemePreference(t);
+  };
 
-    setSaving(true);
-    setMessage('');
+  const handleSave = async () => {
     try {
-      const result = await updateSettings(settings);
-      setSettings(result);
-      updateGlobal(result);
-      setMessage(t('settingsSaved'));
-    } catch (err) {
-      setMessage(t('saveFailed', { message: err.message }));
-    } finally {
-      setSaving(false);
+      await updateProjectConfig({
+        name: projectName,
+        description: projectDesc,
+        stage: projectStage,
+        theme,
+        accent,
+        density: layoutDensity,
+        host_mode: hostMode,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      /* silently fail */
     }
-  }
+  };
 
-  function updatePlatformField(field, value) {
-    setSettings((prev) => ({
-      ...prev,
-      platform: {
-        ...(prev?.platform || {}),
-        [field]: value,
-      },
-    }));
-  }
+  const primaryColor = ACCENT_COLORS.find((c) => c.key === accent)?.value || '#2563EB';
 
-  function updateTriggerMode(mode) {
-    setSettings((prev) => ({ ...prev, trigger_mode: mode }));
+  if (loading) {
+    return (
+      <div style={STYLES.loadingState}>
+        <div style={{ fontSize: 'var(--vd-font-size-lg)', marginBottom: 'var(--vd-space-2)' }}>加载中...</div>
+      </div>
+    );
   }
 
   return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <Link to="/" style={styles.backLink}>{t('back')}</Link>
-        <h1 style={styles.title}>{t('settingsTitle')}</h1>
-      </header>
+    <div style={STYLES.page}>
+      <h1 style={STYLES.title}>设置</h1>
 
-      {!settings ? (
-        <p style={styles.description}>{t('loadingSettings')}</p>
-      ) : (
-        <>
-          {/* Trigger Mode */}
-          <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>{t('triggerMode')}</h2>
-            <p style={styles.hint}>{t('triggerModeDesc')}</p>
-            <div style={styles.radioGroup}>
-              {TRIGGER_MODES.map((mode) => {
-                const selected = settings.trigger_mode === mode;
-                return (
-                  <div
-                    key={mode}
-                    style={{
-                      ...styles.radioOption,
-                      ...(selected ? styles.radioOptionSelected : {}),
-                    }}
-                    onClick={() => updateTriggerMode(mode)}
-                  >
-                    <input
-                      type="radio"
-                      name="trigger_mode"
-                      value={mode}
-                      checked={selected}
-                      onChange={() => updateTriggerMode(mode)}
-                      style={{ marginTop: '2px', accentColor: 'var(--vds-colors-primary)' }}
-                    />
-                    <div>
-                      <div style={styles.radioLabel}>{t(`triggerMode_${mode}`)}</div>
-                      <div style={styles.radioDesc}>{t(`triggerMode_${mode}_desc`)}</div>
-                    </div>
-                  </div>
-                );
-              })}
+      {/* Project Info */}
+      <div style={STYLES.group}>
+        <div style={STYLES.groupTitle}>项目信息</div>
+        <div style={STYLES.card}>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>项目名称</span>
+            <input
+              style={STYLES.input}
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+            />
+          </div>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>项目描述</span>
+            <input
+              style={STYLES.input}
+              value={projectDesc}
+              onChange={(e) => setProjectDesc(e.target.value)}
+            />
+          </div>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>项目阶段</span>
+            <select
+              style={STYLES.select}
+              value={projectStage}
+              onChange={(e) => setProjectStage(e.target.value)}
+            >
+              <option value="requirements">需求对齐</option>
+              <option value="dev">开发中</option>
+              <option value="review">评审中</option>
+              <option value="done">已收尾</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Personalization */}
+      <div style={STYLES.group}>
+        <div style={STYLES.groupTitle}>个性化</div>
+        <div style={STYLES.card}>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>主题</span>
+            <div style={{ display: 'flex', gap: 'var(--vd-space-2)' }}>
+              {['light', 'dark'].map((t) => (
+                <button
+                  key={t}
+                  style={STYLES.themeOption(theme === t)}
+                  onClick={() => handleThemeChange(t)}
+                >
+                  {t === 'light' ? '浅色' : '深色'}
+                </button>
+              ))}
             </div>
-          </section>
-
-          {/* Platform Branding */}
-          <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>{t('platformBranding')}</h2>
-            <div style={styles.form}>
-              <label style={styles.label}>
-                {t('language')}
-                <div style={styles.langDisplay}>{t('languageName')}</div>
-              </label>
-
-              <label style={styles.label}>
-                {t('platformName')}
-                <input
-                  value={settings.platform?.name || ''}
-                  onChange={(e) => updatePlatformField('name', e.target.value)}
-                  style={styles.input}
+          </div>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>主色调</span>
+            <div style={{ display: 'flex', gap: 'var(--vd-space-3)' }}>
+              {ACCENT_COLORS.map((c) => (
+                <div
+                  key={c.key}
+                  style={accent === c.key ? STYLES.colorDotActive(c.value) : STYLES.colorDot(c.value)}
+                  onClick={() => setAccent(c.key)}
+                  title={c.key}
                 />
-              </label>
-
-              <label style={styles.label}>
-                {t('slogan')}
-                <input
-                  value={settings.platform?.slogan || ''}
-                  onChange={(e) => updatePlatformField('slogan', e.target.value)}
-                  style={styles.input}
-                />
-              </label>
-
-              <label style={styles.label}>
-                {t('favicon')}
-                <input
-                  value={settings.platform?.favicon || ''}
-                  onChange={(e) => updatePlatformField('favicon', e.target.value)}
-                  placeholder="🐂"
-                  style={{ ...styles.input, maxWidth: '120px' }}
-                />
-              </label>
-
-              <label style={styles.label}>
-                {t('port')}
-                <input
-                  type="number"
-                  min={1024}
-                  max={65535}
-                  value={settings.port ?? 3847}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value);
-                    setSettings((prev) => ({ ...prev, port: isNaN(v) ? '' : v }));
-                  }}
-                  style={{ ...styles.input, maxWidth: '120px' }}
-                />
-                <span style={styles.fieldHint}>{t('portHint')}</span>
-              </label>
-
-              <label style={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={settings.remote ?? false}
-                  onChange={(e) => setSettings((prev) => ({ ...prev, remote: e.target.checked }))}
-                  style={{ accentColor: 'var(--vds-colors-primary)' }}
-                />
-                <div>
-                  <div style={{ fontSize: '14px', color: 'var(--vds-colors-text)' }}>{t('remoteAccess')}</div>
-                  <span style={styles.fieldHint}>{t('remoteAccessHint')}</span>
-                </div>
-              </label>
+              ))}
             </div>
-          </section>
-
-          {/* Save button (shared for trigger mode + branding) */}
-          <div style={styles.saveArea}>
-            <button onClick={handleSave} style={styles.saveBtn} disabled={saving}>
-              {saving ? t('saving') : t('savePlatformSettings')}
-            </button>
-            {message && <div style={styles.message}>{message}</div>}
+          </div>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>布局密度</span>
+            <div style={{ display: 'flex', gap: 'var(--vd-space-2)' }}>
+              <button
+                style={STYLES.themeOption(layoutDensity === 'comfortable')}
+                onClick={() => setLayoutDensity('comfortable')}
+              >
+                舒适
+              </button>
+              <button
+                style={STYLES.themeOption(layoutDensity === 'compact')}
+                onClick={() => setLayoutDensity('compact')}
+              >
+                紧凑
+              </button>
+            </div>
           </div>
 
-          {/* Visual Design (read-only) */}
-          <section style={{ ...styles.section, marginTop: '36px' }}>
-            <h2 style={styles.sectionTitle}>{t('visualDesign')}</h2>
-            <p style={styles.hint}>{t('visualDesignHint')}</p>
-
-            {tokens ? (
-              <div>
-                {/* Color palette */}
-                {tokens.colors && (
-                  <>
-                    <div style={styles.subsectionLabel}>{t('colorPalette')}</div>
-                    <div style={styles.colorGrid}>
-                      {Object.entries(tokens.colors).map(([name, hex]) => (
-                        <div key={name} style={styles.colorSwatch}>
-                          <div style={{ ...styles.swatchBox, background: hex }} />
-                          <div style={styles.swatchLabel}>{name}</div>
-                          <div style={styles.swatchHex}>{hex}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-
-                {/* Typography */}
-                {tokens.typography && (
-                  <>
-                    <div style={styles.subsectionLabel}>{t('typographyLabel')}</div>
-                    <div style={styles.tokenList}>
-                      {Object.entries(tokens.typography).map(([key, val]) => (
-                        <div key={key} style={styles.tokenRow}>
-                          <span style={styles.tokenKey}>{key}</span>
-                          <span style={styles.tokenValue}>{val}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-
-                {/* Spacing */}
-                {tokens.spacing && (
-                  <>
-                    <div style={styles.subsectionLabel}>{t('spacingLabel')}</div>
-                    <div style={styles.tokenList}>
-                      {Object.entries(tokens.spacing).map(([key, val]) => (
-                        <div key={key} style={styles.tokenRow}>
-                          <span style={styles.tokenKey}>{key}</span>
-                          <span style={styles.tokenValue}>{val}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
+          {/* Preview */}
+          <div style={{ padding: '0 var(--vd-space-4) var(--vd-space-4)' }}>
+            <div style={STYLES.previewBox}>
+              <div style={STYLES.previewLabel}>实时预览</div>
+              <div style={STYLES.previewCard(primaryColor)}>
+                <div style={{ fontSize: 'var(--vd-font-size-sm)', fontWeight: 600, color: 'var(--vd-text-primary)' }}>
+                  样例标题
+                </div>
+                <div style={{ fontSize: 'var(--vd-font-size-sm)', color: 'var(--vd-text-secondary)', marginTop: 4 }}>
+                  这是受当前主题和主色调影响的样例文本
+                </div>
+                <div style={STYLES.previewBtn(primaryColor)}>主要按钮</div>
               </div>
-            ) : (
-              <p style={styles.description}>{t('loadingDesignTokens')}</p>
-            )}
-          </section>
-        </>
-      )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Host & Access */}
+      <div style={STYLES.group}>
+        <div style={STYLES.groupTitle}>访问设置</div>
+        <div style={STYLES.card}>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>运行模式</span>
+            <div style={{ display: 'flex', gap: 'var(--vd-space-2)' }}>
+              {[
+                { key: 'local', label: '本地' },
+                { key: 'lan', label: '局域网' },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  style={STYLES.themeOption(hostMode === m.key)}
+                  onClick={() => setHostMode(m.key)}
+                >
+                  {m.label}
+                </button>
+              ))}
+              <button
+                style={{ ...STYLES.themeOption(false), opacity: 0.5, cursor: 'not-allowed' }}
+                disabled
+                title="即将推出"
+              >
+                在线平台
+              </button>
+            </div>
+          </div>
+          <div style={STYLES.row}>
+            <span style={STYLES.rowLabel}>访问密钥</span>
+            <input
+              style={STYLES.input}
+              type="password"
+              value="auto-generated-key"
+              readOnly
+            />
+          </div>
+        </div>
+      </div>
+
+      <button style={STYLES.saveBtn} onClick={handleSave}>
+        {saved ? '已保存 ✓' : '保存设置'}
+      </button>
     </div>
   );
 }
-
-const styles = {
-  container: {
-    maxWidth: '920px',
-    margin: '0 auto',
-    padding: 'var(--vds-spacing-page-padding)',
-  },
-  header: {
-    marginBottom: '26px',
-  },
-  backLink: {
-    color: 'var(--vds-colors-text-secondary)',
-    fontSize: '14px',
-    display: 'inline-block',
-    marginBottom: '10px',
-  },
-  title: {
-    fontSize: '24px',
-    color: 'var(--vds-colors-text)',
-  },
-  section: {
-    marginBottom: '28px',
-  },
-  sectionTitle: {
-    fontSize: '18px',
-    marginBottom: '6px',
-    color: 'var(--vds-colors-text)',
-  },
-  description: {
-    color: 'var(--vds-colors-text-secondary)',
-    fontSize: '14px',
-  },
-  hint: {
-    fontSize: '13px',
-    color: 'var(--vds-colors-text-secondary)',
-    fontStyle: 'italic',
-    marginBottom: '14px',
-  },
-
-  /* Trigger mode radio cards */
-  radioGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  radioOption: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: '10px',
-    padding: '12px 14px',
-    border: '1.5px solid var(--vds-colors-border)',
-    borderColor: 'var(--vds-colors-border)',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    background: 'white',
-    transition: 'border-color 0.15s',
-  },
-  radioOptionSelected: {
-    borderColor: 'var(--vds-colors-primary)',
-    background: 'var(--vds-colors-surface)',
-  },
-  radioLabel: {
-    fontSize: '14px',
-    fontWeight: '600',
-    color: 'var(--vds-colors-text)',
-  },
-  radioDesc: {
-    fontSize: '13px',
-    color: 'var(--vds-colors-text-secondary)',
-    marginTop: '2px',
-  },
-
-  /* Platform branding form */
-  form: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-    gap: '12px',
-  },
-  label: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
-    fontSize: '13px',
-    color: 'var(--vds-colors-text-secondary)',
-  },
-  input: {
-    border: '1px solid var(--vds-colors-border)',
-    borderRadius: '8px',
-    padding: '8px 10px',
-    fontFamily: 'inherit',
-    fontSize: '14px',
-    outline: 'none',
-  },
-  langDisplay: {
-    padding: '8px 10px',
-    fontSize: '14px',
-    color: 'var(--vds-colors-text)',
-    background: 'var(--vds-colors-surface)',
-    border: '1px solid var(--vds-colors-border)',
-    borderRadius: '8px',
-  },
-  fieldHint: {
-    fontSize: '11px',
-    color: 'var(--vds-colors-text-secondary)',
-    fontStyle: 'italic',
-  },
-  checkboxLabel: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: '8px',
-    fontSize: '13px',
-    color: 'var(--vds-colors-text-secondary)',
-    cursor: 'pointer',
-    gridColumn: '1 / -1',
-    paddingTop: '4px',
-  },
-
-  /* Save area */
-  saveArea: {
-    marginBottom: '28px',
-  },
-  saveBtn: {
-    border: 'none',
-    borderRadius: '8px',
-    padding: '10px 24px',
-    background: 'var(--vds-colors-primary)',
-    color: 'white',
-    fontWeight: '600',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  message: {
-    fontSize: '13px',
-    color: 'var(--vds-colors-text-secondary)',
-    marginTop: '8px',
-  },
-
-  /* Visual design tokens (read-only) */
-  subsectionLabel: {
-    fontSize: '12px',
-    fontWeight: '600',
-    color: 'var(--vds-colors-text-secondary)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-    marginTop: '16px',
-    marginBottom: '8px',
-  },
-  colorGrid: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '10px',
-    marginBottom: '8px',
-  },
-  colorSwatch: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '3px',
-    width: '62px',
-  },
-  swatchBox: {
-    width: '32px',
-    height: '32px',
-    borderRadius: '6px',
-    border: '1px solid var(--vds-colors-border)',
-  },
-  swatchLabel: {
-    fontSize: '10px',
-    color: 'var(--vds-colors-text-secondary)',
-    textAlign: 'center',
-    wordBreak: 'break-all',
-    lineHeight: '1.2',
-  },
-  swatchHex: {
-    fontSize: '10px',
-    color: 'var(--vds-colors-text-secondary)',
-    opacity: 0.6,
-  },
-  tokenList: {
-    marginBottom: '4px',
-  },
-  tokenRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    padding: '5px 0',
-    borderBottom: '1px solid var(--vds-colors-border)',
-    fontSize: '13px',
-  },
-  tokenKey: {
-    color: 'var(--vds-colors-text-secondary)',
-  },
-  tokenValue: {
-    color: 'var(--vds-colors-text)',
-    fontFamily: 'var(--vds-typography-font-family-mono)',
-    fontSize: '12px',
-    maxWidth: '60%',
-    textAlign: 'right',
-    wordBreak: 'break-all',
-  },
-};

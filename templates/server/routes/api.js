@@ -3,58 +3,32 @@ const path = require('path');
 const { generateId } = require('../lib/ids');
 const { writeJSON, readJSONArray, readJSONObject, updateJSON } = require('../lib/store');
 const { broadcast } = require('../lib/ws');
-const { nowLocalISO, ensureLocalISO } = require('../lib/time');
 
-const DELIVERY_MODES = ['task_delivery'];
+const DELIVERY_MODES = ['task_delivery', 'alignment'];
 const DELIVERY_STATUSES = ['normal', 'pending_feedback'];
-// Only English has a built-in locale file; all other languages are agent-generated
-const PRESET_LANGUAGES = ['en'];
-
-const VALID_TRIGGER_MODES = ['auto', 'smart', 'manual'];
+const ALIGNMENT_STATES = ['active', 'resolved', 'canceled'];
 
 const DEFAULT_SETTINGS = {
-  language: null,
-  language_explicit: false,
-  trigger_mode: 'smart',
-  port: 3847,
-  remote: false,
   platform: {
-    name: 'Task Delivery Center',
-    slogan: 'Make feedback clear. Let agents work easier.',
-    favicon: '🐂',
+    name: 'Visual Delivery',
+    logo_url: '',
+    slogan: 'Turn work into clear decisions.',
+    visual_style: 'executive-brief',
   },
 };
 
-function ensureValidContent(content) {
+function ensureUiSpecContent(content) {
   if (!content || typeof content !== 'object') return false;
-  if (content.type === 'ui_spec') {
-    return !!content.ui_spec && typeof content.ui_spec === 'object';
-  }
-  if (content.type === 'generated_html') {
-    return typeof content.html === 'string' && content.html.length > 0;
-  }
-  return false;
+  if (content.type !== 'ui_spec') return false;
+  return !!content.ui_spec && typeof content.ui_spec === 'object';
 }
 
-function cleanText(value) {
-  if (typeof value !== 'string') return '';
-  const text = value.trim();
-  if (text === 'Untitled Project' || text === 'Untitled Task') {
-    return '';
-  }
-  return text;
-}
-
-function normalizeMetadata(metadata = {}, fallback = {}) {
-  const projectName = cleanText(metadata.project_name) || cleanText(fallback.project_name);
-  const taskName = cleanText(metadata.task_name) || cleanText(fallback.task_name);
-  const audience = cleanText(metadata.audience) || 'stakeholder';
-
+function normalizeMetadata(metadata = {}) {
   return {
-    project_name: projectName || null,
-    task_name: taskName || null,
-    generated_at: ensureLocalISO(metadata.generated_at, nowLocalISO()),
-    audience,
+    project_name: metadata.project_name || 'Untitled Project',
+    task_name: metadata.task_name || 'Untitled Task',
+    generated_at: metadata.generated_at || new Date().toISOString(),
+    audience: metadata.audience || 'stakeholder',
   };
 }
 
@@ -67,6 +41,8 @@ function mapIndexEntry(delivery) {
     created_at: delivery.created_at,
     updated_at: delivery.updated_at,
     metadata: delivery.metadata,
+    agent_session_id: delivery.agent_session_id,
+    alignment_state: delivery.alignment_state,
   };
 }
 
@@ -76,7 +52,6 @@ function setupRoutes(app, dataDir) {
   const sessionsDir = path.join(dataRoot, 'sessions');
   const indexPath = path.join(dataRoot, 'index.json');
   const settingsPath = path.join(dataRoot, 'settings.json');
-  const projectDirName = cleanText(path.basename(path.resolve(dataDir, '..'))) || 'Project';
 
   fs.mkdirSync(deliveriesDir, { recursive: true });
   fs.mkdirSync(sessionsDir, { recursive: true });
@@ -87,6 +62,18 @@ function setupRoutes(app, dataDir) {
 
   function deliveryFile(deliveryId, fileName) {
     return path.join(deliveryDir(deliveryId), fileName);
+  }
+
+  function sessionAlignmentDir(agentSessionId) {
+    return path.join(sessionsDir, agentSessionId, 'alignment');
+  }
+
+  function activeAlignmentPath(agentSessionId) {
+    return path.join(sessionAlignmentDir(agentSessionId), 'active.json');
+  }
+
+  function alignmentHistoryDir(agentSessionId) {
+    return path.join(sessionAlignmentDir(agentSessionId), 'history');
   }
 
   async function appendIndex(delivery) {
@@ -122,10 +109,6 @@ function setupRoutes(app, dataDir) {
     return readJSONArray(deliveryFile(deliveryId, 'drafts.json'));
   }
 
-  function readDeliveryExecutionEvents(deliveryId) {
-    return readJSONArray(deliveryFile(deliveryId, 'execution-events.json'));
-  }
-
   async function writeDelivery(delivery) {
     await writeJSON(deliveryFile(delivery.id, 'delivery.json'), delivery);
   }
@@ -137,7 +120,7 @@ function setupRoutes(app, dataDir) {
     const feedbackItems = readDeliveryFeedback(deliveryId);
     const hasUnhandled = feedbackItems.some((item) => item.handled === false);
     delivery.status = hasUnhandled ? 'pending_feedback' : 'normal';
-    delivery.updated_at = nowLocalISO();
+    delivery.updated_at = new Date().toISOString();
 
     await writeDelivery(delivery);
     await updateIndex(delivery);
@@ -167,85 +150,71 @@ function setupRoutes(app, dataDir) {
     };
   }
 
-  function truncateText(text, max = 120) {
-    if (typeof text !== 'string') return '';
-    if (text.length <= max) return text;
-    return `${text.slice(0, max - 1)}…`;
+  async function archiveActiveAlignment(agentSessionId, activeRecord, terminalState, reason, endedAt) {
+    if (!activeRecord) return;
+    const historyPath = path.join(
+      alignmentHistoryDir(agentSessionId),
+      `${Date.now()}_${activeRecord.delivery_id}.json`
+    );
+    fs.mkdirSync(path.dirname(historyPath), { recursive: true });
+
+    await writeJSON(historyPath, {
+      ...activeRecord,
+      terminal_state: terminalState,
+      reason,
+      ended_at: endedAt,
+    });
   }
 
-  function summarizeFeedbackPayload(item) {
-    if (!item || !item.payload) return '';
-    const payload = item.payload;
+  async function endActiveAlignment(agentSessionId, threadId, terminalState, reason) {
+    const activePath = activeAlignmentPath(agentSessionId);
+    const activeRecord = readJSONObject(activePath);
 
-    if (typeof payload.text === 'string' && payload.text.trim()) {
-      return truncateText(payload.text.trim());
+    if (!activeRecord) {
+      return { status: 'no_active' };
     }
 
-    if (typeof payload.selected_text === 'string' && payload.selected_text.trim()) {
-      return truncateText(`Selection: ${payload.selected_text.trim()}`);
+    if (threadId && activeRecord.thread_id !== threadId) {
+      return {
+        status: 'error',
+        code: 'THREAD_MISMATCH',
+        message: 'thread_id does not match active alignment',
+      };
     }
 
-    if (payload.action === 'review_decision') {
-      const itemId = payload.item_id || 'unknown';
-      const decision = payload.decision || 'unknown';
-      const notes = typeof payload.notes === 'string' && payload.notes.trim()
-        ? ` (${truncateText(payload.notes.trim(), 60)})`
-        : '';
-      return `Review decision ${itemId}: ${decision}${notes}`;
+    const now = new Date().toISOString();
+    const delivery = readDelivery(activeRecord.delivery_id);
+    if (delivery) {
+      delivery.alignment_state = terminalState;
+      delivery.updated_at = now;
+      await writeDelivery(delivery);
+      await updateIndex(delivery);
+      broadcast('update_delivery', mapIndexEntry(delivery));
     }
 
-    return truncateText(JSON.stringify(payload));
-  }
+    await archiveActiveAlignment(agentSessionId, activeRecord, terminalState, reason, now);
+    try {
+      fs.unlinkSync(activePath);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
 
-  function normalizeExecutionEvent(event, now) {
-    const allowedStages = ['queued', 'in_progress', 'completed', 'failed', 'info'];
-    const stage = allowedStages.includes(event.stage) ? event.stage : 'info';
+    broadcast('alignment_update', {
+      agent_session_id: agentSessionId,
+      delivery_id: activeRecord.delivery_id,
+      alignment_state: terminalState,
+      reason,
+    });
 
     return {
-      id: event.id || generateId('e'),
-      feedback_id: event.feedback_id || null,
-      stage,
-      message: cleanText(event.message) || 'Execution event',
-      actor: cleanText(event.actor) || 'system',
-      meta: event.meta && typeof event.meta === 'object' ? event.meta : {},
-      created_at: event.created_at || now,
+      status: terminalState,
+      delivery_id: activeRecord.delivery_id,
     };
   }
 
-  async function appendExecutionEvents(deliveryId, rawEvents) {
-    const delivery = readDelivery(deliveryId);
-    if (!delivery) return [];
-
-    const now = nowLocalISO();
-    const events = (Array.isArray(rawEvents) ? rawEvents : [rawEvents])
-      .filter((item) => item && typeof item === 'object')
-      .map((event) => normalizeExecutionEvent(event, now));
-
-    if (events.length === 0) return [];
-
-    await updateJSON(
-      deliveryFile(deliveryId, 'execution-events.json'),
-      (existing) => [...existing, ...events],
-      []
-    );
-
-    delivery.updated_at = now;
-    await writeDelivery(delivery);
-    const indexEntry = await updateIndex(delivery);
-
-    broadcast('update_delivery', indexEntry);
-    broadcast('execution_events_updated', {
-      delivery_id: deliveryId,
-      count: events.length,
-      latest_event_id: events[events.length - 1].id,
-    });
-
-    return events;
-  }
-
-  async function createDeliveryRecord({ mode, title, content, metadata }) {
+  async function createDeliveryRecord({ mode, title, content, metadata, agentSessionId, threadId, alignmentState }) {
     const id = generateId('d');
-    const now = nowLocalISO();
+    const now = new Date().toISOString();
 
     fs.mkdirSync(deliveryDir(id), { recursive: true });
 
@@ -255,10 +224,10 @@ function setupRoutes(app, dataDir) {
       status: 'normal',
       title,
       content,
-      metadata: normalizeMetadata(metadata, {
-        project_name: projectDirName,
-        task_name: title,
-      }),
+      metadata: normalizeMetadata(metadata),
+      agent_session_id: agentSessionId || null,
+      thread_id: threadId || null,
+      alignment_state: alignmentState || null,
       created_at: now,
       updated_at: now,
     };
@@ -266,7 +235,6 @@ function setupRoutes(app, dataDir) {
     await writeDelivery(delivery);
     await writeJSON(deliveryFile(id, 'feedback.json'), []);
     await writeJSON(deliveryFile(id, 'drafts.json'), []);
-    await writeJSON(deliveryFile(id, 'execution-events.json'), []);
     await appendIndex(delivery);
 
     broadcast('new_delivery', mapIndexEntry(delivery));
@@ -274,25 +242,55 @@ function setupRoutes(app, dataDir) {
     return delivery;
   }
 
+  async function upsertAlignment({ title, content, metadata, agent_session_id: agentSessionId, thread_id: threadId }) {
+    if (!agentSessionId || !threadId) {
+      return {
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'agent_session_id and thread_id are required for alignment',
+        },
+      };
+    }
+
+    const replaced = await endActiveAlignment(agentSessionId, null, 'canceled', 'replaced_by_new_alignment');
+
+    const delivery = await createDeliveryRecord({
+      mode: 'alignment',
+      title,
+      content,
+      metadata,
+      agentSessionId,
+      threadId,
+      alignmentState: 'active',
+    });
+
+    const now = new Date().toISOString();
+    await writeJSON(activeAlignmentPath(agentSessionId), {
+      agent_session_id: agentSessionId,
+      thread_id: threadId,
+      delivery_id: delivery.id,
+      status: 'active',
+      created_at: now,
+      last_heartbeat_at: now,
+    });
+
+    return {
+      delivery,
+      replaced_delivery_id: replaced.delivery_id || null,
+    };
+  }
+
   function hydrateDelivery(deliveryId) {
     const delivery = readDelivery(deliveryId);
     if (!delivery) return null;
 
-    delivery.metadata = normalizeMetadata(delivery.metadata, {
-      project_name: projectDirName,
-      task_name: delivery.title,
-      audience: delivery.metadata?.audience,
-    });
-
     const feedback = readDeliveryFeedback(deliveryId);
     const drafts = readDeliveryDrafts(deliveryId);
-    const executionEvents = readDeliveryExecutionEvents(deliveryId);
 
     return {
       ...delivery,
       feedback,
       drafts,
-      execution_events: executionEvents,
       pending_feedback_count: feedback.filter((item) => item.handled === false).length,
     };
   }
@@ -301,28 +299,7 @@ function setupRoutes(app, dataDir) {
     const stored = readJSONObject(settingsPath);
     if (!stored) return DEFAULT_SETTINGS;
 
-    const languageExplicit = stored.language_explicit === true;
-    const language = languageExplicit && typeof stored.language === 'string' && stored.language
-      ? stored.language
-      : DEFAULT_SETTINGS.language;
-
-    const triggerMode = VALID_TRIGGER_MODES.includes(stored.trigger_mode)
-      ? stored.trigger_mode
-      : DEFAULT_SETTINGS.trigger_mode;
-
-    const storedPort = parseInt(stored.port);
-    const port = (storedPort >= 1024 && storedPort <= 65535)
-      ? storedPort
-      : DEFAULT_SETTINGS.port;
-
-    const remote = stored.remote === true;
-
     return {
-      language,
-      language_explicit: languageExplicit,
-      trigger_mode: triggerMode,
-      port,
-      remote,
       platform: {
         ...DEFAULT_SETTINGS.platform,
         ...(stored.platform || {}),
@@ -342,7 +319,14 @@ function setupRoutes(app, dataDir) {
   // Create delivery
   app.post('/api/deliveries', async (req, res) => {
     try {
-      const { mode, title, content, metadata } = req.body;
+      const {
+        mode,
+        title,
+        content,
+        metadata,
+        agent_session_id: agentSessionId,
+        thread_id: threadId,
+      } = req.body;
 
       if (!mode || !title || !content) {
         return res.status(400).json({
@@ -359,12 +343,33 @@ function setupRoutes(app, dataDir) {
         });
       }
 
-      if (!ensureValidContent(content)) {
+      if (!ensureUiSpecContent(content)) {
         return res.status(400).json({
           error: {
             code: 'INVALID_REQUEST',
-            message: 'content must be { type: "generated_html", html: "..." } or { type: "ui_spec", ui_spec: {...} }',
+            message: 'content must be { type: "ui_spec", ui_spec: {...} }',
           },
+        });
+      }
+
+      if (mode === 'alignment') {
+        const result = await upsertAlignment({
+          title,
+          content,
+          metadata,
+          agent_session_id: agentSessionId,
+          thread_id: threadId,
+        });
+
+        if (result.error) {
+          return res.status(400).json({ error: result.error });
+        }
+
+        const port = app.get('port') || 3847;
+        return res.status(201).json({
+          id: result.delivery.id,
+          url: `http://localhost:${port}/d/${result.delivery.id}`,
+          replaced_delivery_id: result.replaced_delivery_id,
         });
       }
 
@@ -392,10 +397,11 @@ function setupRoutes(app, dataDir) {
   app.get('/api/deliveries', (req, res) => {
     try {
       let entries = readJSONArray(indexPath);
-      const { mode, status, limit, offset } = req.query;
+      const { mode, status, limit, offset, agent_session_id: agentSessionId } = req.query;
 
       if (mode) entries = entries.filter((item) => item.mode === mode);
       if (status) entries = entries.filter((item) => item.status === status);
+      if (agentSessionId) entries = entries.filter((item) => item.agent_session_id === agentSessionId);
 
       const total = entries.length;
       const off = parseInt(offset, 10) || 0;
@@ -433,95 +439,6 @@ function setupRoutes(app, dataDir) {
     }
   });
 
-  // Get feedback only (lightweight — no delivery content)
-  app.get('/api/deliveries/:id/feedback', (req, res) => {
-    try {
-      const delivery = readDelivery(req.params.id);
-      if (!delivery) {
-        return res.status(404).json({
-          error: { code: 'NOT_FOUND', message: `Delivery ${req.params.id} not found` },
-        });
-      }
-
-      const feedback = readDeliveryFeedback(req.params.id);
-      const pending = feedback.filter((item) => item.handled === false);
-
-      res.json({
-        delivery_id: req.params.id,
-        status: delivery.status,
-        feedback,
-        pending_count: pending.length,
-        pending_feedback: pending,
-      });
-    } catch (err) {
-      console.error('Error getting feedback:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
-    }
-  });
-
-  // List execution events for a delivery
-  app.get('/api/deliveries/:id/execution-events', (req, res) => {
-    try {
-      const delivery = readDelivery(req.params.id);
-      if (!delivery) {
-        return res.status(404).json({
-          error: { code: 'NOT_FOUND', message: `Delivery ${req.params.id} not found` },
-        });
-      }
-
-      const events = readDeliveryExecutionEvents(req.params.id);
-      res.json({
-        delivery_id: req.params.id,
-        events,
-      });
-    } catch (err) {
-      console.error('Error getting execution events:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
-    }
-  });
-
-  // Append execution events for a delivery
-  app.post('/api/deliveries/:id/execution-events', async (req, res) => {
-    try {
-      const deliveryId = req.params.id;
-      const delivery = readDelivery(deliveryId);
-      if (!delivery) {
-        return res.status(404).json({
-          error: { code: 'NOT_FOUND', message: `Delivery ${deliveryId} not found` },
-        });
-      }
-
-      const body = req.body || {};
-      const inputEvents = Array.isArray(body.events)
-        ? body.events
-        : body.event
-          ? [body.event]
-          : [body];
-
-      const appended = await appendExecutionEvents(deliveryId, inputEvents);
-      if (appended.length === 0) {
-        return res.status(400).json({
-          error: { code: 'INVALID_REQUEST', message: 'No valid execution events provided' },
-        });
-      }
-
-      res.status(201).json({
-        delivery_id: deliveryId,
-        event_ids: appended.map((item) => item.id),
-        count: appended.length,
-      });
-    } catch (err) {
-      console.error('Error appending execution events:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
-    }
-  });
-
   // Save draft feedback (sidebar staging)
   app.post('/api/deliveries/:id/feedback/draft', async (req, res) => {
     try {
@@ -539,7 +456,7 @@ function setupRoutes(app, dataDir) {
         });
       }
 
-      const now = nowLocalISO();
+      const now = new Date().toISOString();
       const drafts = items.map((item) => normalizeFeedbackDraftItem(item, now));
       await writeJSON(deliveryFile(req.params.id, 'drafts.json'), drafts);
 
@@ -576,7 +493,7 @@ function setupRoutes(app, dataDir) {
         });
       }
 
-      const now = nowLocalISO();
+      const now = new Date().toISOString();
       const newFeedbackItems = items.map((item) => normalizeFeedbackItem(item, now));
       const feedbackPath = deliveryFile(deliveryId, 'feedback.json');
 
@@ -596,20 +513,6 @@ function setupRoutes(app, dataDir) {
         count: newFeedbackItems.length,
       });
       broadcast('update_delivery', indexEntry);
-
-      await appendExecutionEvents(
-        deliveryId,
-        newFeedbackItems.map((item) => ({
-          feedback_id: item.id,
-          stage: 'queued',
-          actor: 'user',
-          message: `Feedback submitted (${item.kind}): ${summarizeFeedbackPayload(item) || 'No details'}`,
-          meta: {
-            kind: item.kind,
-            target: item.target || null,
-          },
-        }))
-      );
 
       res.status(201).json({
         delivery_id: deliveryId,
@@ -645,9 +548,8 @@ function setupRoutes(app, dataDir) {
         });
       }
 
-      const now = nowLocalISO();
+      const now = new Date().toISOString();
       let resolvedCount = 0;
-      const resolvedItems = [];
 
       const feedbackPath = deliveryFile(deliveryId, 'feedback.json');
       await updateJSON(
@@ -658,7 +560,6 @@ function setupRoutes(app, dataDir) {
           }
 
           resolvedCount += 1;
-          resolvedItems.push(item);
           return {
             ...item,
             handled: true,
@@ -673,21 +574,6 @@ function setupRoutes(app, dataDir) {
       const indexEntry = mapIndexEntry(updatedDelivery);
 
       broadcast('update_delivery', indexEntry);
-
-      if (resolvedItems.length > 0) {
-        await appendExecutionEvents(
-          deliveryId,
-          resolvedItems.map((item) => ({
-            feedback_id: item.id,
-            stage: 'completed',
-            actor: handledBy || 'agent',
-            message: `Feedback resolved (${item.kind}): ${summarizeFeedbackPayload(item) || 'No details'}`,
-            meta: {
-              handled_by: handledBy || 'agent',
-            },
-          }))
-        );
-      }
 
       res.status(200).json({
         delivery_id: deliveryId,
@@ -720,7 +606,7 @@ function setupRoutes(app, dataDir) {
         });
       }
 
-      const now = nowLocalISO();
+      const now = new Date().toISOString();
       const draftItem = normalizeFeedbackDraftItem(
         {
           kind: 'annotation',
@@ -748,6 +634,211 @@ function setupRoutes(app, dataDir) {
     }
   });
 
+  // Upsert active alignment (unique per session)
+  app.post('/api/alignment/upsert', async (req, res) => {
+    try {
+      const { title, content, metadata, agent_session_id: agentSessionId, thread_id: threadId } = req.body;
+
+      if (!title || !content || !ensureUiSpecContent(content)) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'title and content(ui_spec) are required',
+          },
+        });
+      }
+
+      const result = await upsertAlignment({
+        title,
+        content,
+        metadata,
+        agent_session_id: agentSessionId,
+        thread_id: threadId,
+      });
+
+      if (result.error) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      const port = app.get('port') || 3847;
+      res.status(201).json({
+        id: result.delivery.id,
+        url: `http://localhost:${port}/d/${result.delivery.id}`,
+        replaced_delivery_id: result.replaced_delivery_id,
+        thread_id: threadId,
+      });
+    } catch (err) {
+      console.error('Error upserting alignment:', err);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  // Get current active alignment for a session
+  app.get('/api/alignment/active', (req, res) => {
+    try {
+      const agentSessionId = req.query.agent_session_id;
+      if (!agentSessionId) {
+        return res.status(400).json({
+          error: { code: 'INVALID_REQUEST', message: 'agent_session_id is required' },
+        });
+      }
+
+      const activeRecord = readJSONObject(activeAlignmentPath(agentSessionId));
+      if (!activeRecord) {
+        return res.status(200).json({ active: null });
+      }
+
+      const delivery = hydrateDelivery(activeRecord.delivery_id);
+      if (!delivery) {
+        return res.status(200).json({ active: null });
+      }
+
+      const pendingFeedback = delivery.feedback.filter((item) => item.handled === false);
+
+      res.status(200).json({
+        active: {
+          ...delivery,
+          thread_id: activeRecord.thread_id,
+          last_heartbeat_at: activeRecord.last_heartbeat_at,
+        },
+        pending_feedback_count: pendingFeedback.length,
+        pending_feedback: pendingFeedback,
+      });
+    } catch (err) {
+      console.error('Error getting active alignment:', err);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  // Alignment thread heartbeat
+  app.post('/api/alignment/heartbeat', async (req, res) => {
+    try {
+      const { agent_session_id: agentSessionId, thread_id: threadId } = req.body;
+
+      if (!agentSessionId || !threadId) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'agent_session_id and thread_id are required',
+          },
+        });
+      }
+
+      const activePath = activeAlignmentPath(agentSessionId);
+      const activeRecord = readJSONObject(activePath);
+      if (!activeRecord) {
+        return res.status(404).json({
+          error: { code: 'NOT_FOUND', message: 'No active alignment found for session' },
+        });
+      }
+
+      if (activeRecord.thread_id !== threadId) {
+        return res.status(409).json({
+          error: { code: 'THREAD_MISMATCH', message: 'thread_id does not match active alignment' },
+        });
+      }
+
+      const now = new Date().toISOString();
+      activeRecord.last_heartbeat_at = now;
+      await writeJSON(activePath, activeRecord);
+
+      res.status(200).json({ status: 'ok', last_heartbeat_at: now });
+    } catch (err) {
+      console.error('Error in alignment heartbeat:', err);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  // Cancel active alignment (thread close / timeout / interrupt)
+  app.post('/api/alignment/cancel', async (req, res) => {
+    try {
+      const { agent_session_id: agentSessionId, thread_id: threadId, reason } = req.body;
+
+      if (!agentSessionId) {
+        return res.status(400).json({
+          error: { code: 'INVALID_REQUEST', message: 'agent_session_id is required' },
+        });
+      }
+
+      const result = await endActiveAlignment(
+        agentSessionId,
+        threadId || null,
+        'canceled',
+        reason || 'thread_closed'
+      );
+
+      if (result.status === 'error') {
+        return res.status(409).json({
+          error: { code: result.code, message: result.message },
+        });
+      }
+
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('Error canceling alignment:', err);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
+  // Resolve active alignment (agent received user confirmation)
+  app.post('/api/alignment/resolve', async (req, res) => {
+    try {
+      const {
+        agent_session_id: agentSessionId,
+        thread_id: threadId,
+        delivery_id: deliveryId,
+      } = req.body;
+
+      if (!agentSessionId) {
+        return res.status(400).json({
+          error: { code: 'INVALID_REQUEST', message: 'agent_session_id is required' },
+        });
+      }
+
+      const activeRecord = readJSONObject(activeAlignmentPath(agentSessionId));
+      if (!activeRecord) {
+        return res.status(200).json({ status: 'no_active' });
+      }
+
+      if (deliveryId && activeRecord.delivery_id !== deliveryId) {
+        return res.status(409).json({
+          error: {
+            code: 'DELIVERY_MISMATCH',
+            message: 'delivery_id does not match active alignment',
+          },
+        });
+      }
+
+      const result = await endActiveAlignment(
+        agentSessionId,
+        threadId || null,
+        'resolved',
+        'agent_received_feedback'
+      );
+
+      if (result.status === 'error') {
+        return res.status(409).json({
+          error: { code: result.code, message: result.message },
+        });
+      }
+
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('Error resolving alignment:', err);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
   // Settings
   app.get('/api/settings', async (req, res) => {
     try {
@@ -766,34 +857,8 @@ function setupRoutes(app, dataDir) {
     try {
       const current = readSettings();
       const input = req.body || {};
-      const requestedLanguage = input.language;
-      const hasLanguageInput = Object.prototype.hasOwnProperty.call(input, 'language');
-      const language = hasLanguageInput && typeof requestedLanguage === 'string' && requestedLanguage
-        ? requestedLanguage
-        : current.language;
-      const languageExplicit = hasLanguageInput
-        ? (typeof requestedLanguage === 'string' && !!requestedLanguage)
-        : current.language_explicit === true;
-
-      const triggerMode = (input.trigger_mode && VALID_TRIGGER_MODES.includes(input.trigger_mode))
-        ? input.trigger_mode
-        : current.trigger_mode;
-
-      const inputPort = parseInt(input.port);
-      const port = (inputPort >= 1024 && inputPort <= 65535)
-        ? inputPort
-        : current.port;
-
-      const remote = Object.prototype.hasOwnProperty.call(input, 'remote')
-        ? input.remote === true
-        : current.remote;
 
       const next = {
-        language,
-        language_explicit: languageExplicit,
-        trigger_mode: triggerMode,
-        port,
-        remote,
         platform: {
           ...current.platform,
           ...(input.platform || {}),
@@ -801,62 +866,11 @@ function setupRoutes(app, dataDir) {
       };
 
       await writeJSON(settingsPath, next);
-
-      // Update locale.json when language changes
-      const languageChanged = hasLanguageInput && language !== current.language;
-      if (languageChanged) {
-        const localesDir = path.join(dataDir, 'locales');
-        const presetPath = path.join(localesDir, `${language}.json`);
-        const localePath = path.join(dataRoot, 'locale.json');
-        if (fs.existsSync(presetPath)) {
-          const preset = fs.readFileSync(presetPath, 'utf8');
-          fs.writeFileSync(localePath, preset, 'utf8');
-        }
-      }
-
       broadcast('settings_updated', next);
 
-      res.status(200).json({ ...next, locale_changed: languageChanged });
+      res.status(200).json(next);
     } catch (err) {
       console.error('Error updating settings:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
-    }
-  });
-
-  // Get current locale
-  app.get('/api/locale', (req, res) => {
-    try {
-      const localePath = path.join(dataRoot, 'locale.json');
-      const locale = fs.existsSync(localePath)
-        ? JSON.parse(fs.readFileSync(localePath, 'utf8'))
-        : {};
-      res.json(locale);
-    } catch (err) {
-      console.error('Error reading locale:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
-    }
-  });
-
-  // Update locale (agent writes translated UI strings)
-  app.put('/api/locale', async (req, res) => {
-    try {
-      const locale = req.body;
-      if (!locale || typeof locale !== 'object' || Array.isArray(locale)) {
-        return res.status(400).json({
-          error: { code: 'INVALID_REQUEST', message: 'Body must be a JSON object of locale strings' },
-        });
-      }
-
-      const localePath = path.join(dataRoot, 'locale.json');
-      await writeJSON(localePath, locale);
-
-      res.status(200).json({ status: 'ok', keys: Object.keys(locale).length });
-    } catch (err) {
-      console.error('Error updating locale:', err);
       res.status(500).json({
         error: { code: 'INTERNAL_ERROR', message: err.message },
       });
@@ -877,161 +891,379 @@ function setupRoutes(app, dataDir) {
     }
   });
 
-  // Serve local files (read-only, restricted to CWD parent)
-  app.get('/api/files/view', (req, res) => {
+  // ═══════════════════════════════════════════════════════
+  // V3: Project-level APIs
+  // ═══════════════════════════════════════════════════════
+
+  const projectConfigPath = path.join(dataRoot, 'project.json');
+  const projectLogsPath = path.join(dataRoot, 'logs.json');
+  const projectFeedbackPath = path.join(dataRoot, 'feedback.json');
+  const projectReportsPath = path.join(dataRoot, 'reports');
+
+  // Ensure V3 data dirs/files exist
+  fs.mkdirSync(projectReportsPath, { recursive: true });
+  if (!fs.existsSync(projectLogsPath)) { fs.writeFileSync(projectLogsPath, '[]', 'utf8'); }
+  if (!fs.existsSync(projectFeedbackPath)) { fs.writeFileSync(projectFeedbackPath, '[]', 'utf8'); }
+
+  const DEFAULT_PROJECT = {
+    name: '未命名项目',
+    description: '',
+    stage: 'dev',
+    initial: 'P',
+    theme: 'system',
+    accent: 'blue',
+    density: 'comfortable',
+    host_mode: 'local',
+  };
+
+  function readProjectConfig() {
+    const stored = readJSONObject(projectConfigPath);
+    return stored ? { ...DEFAULT_PROJECT, ...stored } : { ...DEFAULT_PROJECT };
+  }
+
+  // Project config
+  app.get('/api/project', (req, res) => {
     try {
-      const filePath = req.query.path;
-      if (!filePath) {
-        return res.status(400).json({
-          error: { code: 'INVALID_REQUEST', message: 'path query parameter is required' },
-        });
-      }
+      res.json(readProjectConfig());
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
-      const resolved = path.resolve(filePath);
-      const cwd = path.resolve(dataDir, '..');
-      if (!resolved.startsWith(cwd)) {
-        return res.status(403).json({
-          error: { code: 'FORBIDDEN', message: 'Access restricted to project directory' },
-        });
-      }
+  app.put('/api/project', async (req, res) => {
+    try {
+      const current = readProjectConfig();
+      const next = { ...current, ...req.body };
+      await writeJSON(projectConfigPath, next);
+      broadcast('project_updated', next);
+      res.json(next);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
-      if (!fs.existsSync(resolved)) {
-        return res.status(404).json({
-          error: { code: 'NOT_FOUND', message: 'File not found' },
-        });
-      }
+  // V3: Project-level feedback pool
+  app.get('/api/feedback', (req, res) => {
+    try {
+      const items = readJSONArray(projectFeedbackPath);
+      const { status } = req.query;
+      const filtered = status ? items.filter((f) => f.status === status) : items;
+      res.json({ feedbacks: filtered, total: items.length });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
-      const stat = fs.statSync(resolved);
-      if (!stat.isFile()) {
-        return res.status(400).json({
-          error: { code: 'INVALID_REQUEST', message: 'Path is not a file' },
-        });
+  app.post('/api/feedback', async (req, res) => {
+    try {
+      const { content, source, author } = req.body;
+      if (!content) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'content is required' } });
       }
+      const now = new Date().toISOString();
+      const feedback = {
+        id: generateId('fb'),
+        status: 'tracked',
+        source: source || {},
+        content,
+        author: author || 'user',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await updateJSON(projectFeedbackPath, (items) => [...items, feedback], []);
+      broadcast('feedback_updated', { action: 'created', feedback });
+      res.status(201).json(feedback);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
-      const ext = path.extname(resolved).toLowerCase();
-      const mimeTypes = {
-        '.pdf': 'application/pdf',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif': 'image/gif',
-        '.svg': 'image/svg+xml',
-        '.webp': 'image/webp',
-        '.txt': 'text/plain',
-        '.json': 'application/json',
-        '.md': 'text/markdown',
-        '.html': 'text/html',
-        '.css': 'text/css',
-        '.js': 'text/javascript',
-        '.ts': 'text/typescript',
-        '.py': 'text/x-python',
-        '.csv': 'text/csv',
+  app.post('/api/feedback/:id/resolve', async (req, res) => {
+    try {
+      const { changeRecord } = req.body || {};
+      const now = new Date().toISOString();
+      let resolved = null;
+      await updateJSON(projectFeedbackPath, (items) => items.map((f) => {
+        if (f.id === req.params.id) {
+          resolved = { ...f, status: 'addressed', changeRecord: changeRecord || f.changeRecord, updatedAt: now };
+          return resolved;
+        }
+        return f;
+      }), []);
+      if (!resolved) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
+      }
+      broadcast('feedback_updated', { action: 'resolved', feedback: resolved });
+      res.json(resolved);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/feedback/:id/confirm', async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      let confirmed = null;
+      await updateJSON(projectFeedbackPath, (items) => items.map((f) => {
+        if (f.id === req.params.id) {
+          confirmed = {
+            ...f,
+            status: 'confirmed',
+            changeRecord: { ...(f.changeRecord || {}), confirmedAt: now },
+            updatedAt: now,
+          };
+          return confirmed;
+        }
+        return f;
+      }), []);
+      if (!confirmed) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
+      }
+      broadcast('feedback_updated', { action: 'confirmed', feedback: confirmed });
+      res.json(confirmed);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // V3: Project logs
+  app.get('/api/logs', (req, res) => {
+    try {
+      let logs = readJSONArray(projectLogsPath);
+      const { type, search, limit, offset } = req.query;
+      if (type) logs = logs.filter((l) => l.type === type);
+      if (search) {
+        const q = search.toLowerCase();
+        logs = logs.filter((l) => l.title.toLowerCase().includes(q));
+      }
+      logs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const total = logs.length;
+      const off = parseInt(offset, 10) || 0;
+      const lim = parseInt(limit, 10) || 50;
+      res.json({ logs: logs.slice(off, off + lim), total });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/logs', async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      const log = {
+        id: generateId('log'),
+        type: req.body.type || 'manual',
+        title: req.body.title || '',
+        event: req.body.event || null,
+        reportId: req.body.reportId || null,
+        tags: req.body.tags || [],
+        createdAt: now,
+      };
+      await updateJSON(projectLogsPath, (items) => [...items, log], []);
+      broadcast('log_created', log);
+      res.status(201).json(log);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // V3: Reports (structured reports with sections)
+  app.get('/api/reports', (req, res) => {
+    try {
+      // For now, map deliveries as reports
+      let entries = readJSONArray(indexPath);
+      // Enrich with V3 report fields (mock for existing entries)
+      const reports = entries
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .map((e) => ({
+          ...e,
+          structure: e.mode === 'task_delivery' ? 'standard' : 'complex-review',
+          presentation: 'document',
+          sections: e.metadata?.sections || 1,
+          completedSections: e.status === 'submitted' ? (e.metadata?.sections || 1) : 0,
+        }));
+      res.json({ reports, total: reports.length });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.get('/api/reports/:id', (req, res) => {
+    try {
+      const delivery = hydrateDelivery(req.params.id);
+      if (!delivery) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      // Enrich with V3 report structure
+      res.json({
+        ...delivery,
+        structure: 'complex-review',
+        sections: [
+          { id: 'sec-1', title: '背景与目标', status: 'completed', narrative: delivery.content?.ui_spec?.description || '', presentation: 'document' },
+          { id: 'sec-2', title: '关键发现', status: 'progress', narrative: '', presentation: 'document' },
+        ],
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/reports', async (req, res) => {
+    try {
+      const { title, structure, presentation, feedbackIds } = req.body;
+      if (!title) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'title is required' } });
+      }
+      const now = new Date().toISOString();
+      const report = {
+        id: generateId('r'),
+        title,
+        structure: structure || 'standard',
+        presentation: presentation || 'document',
+        status: 'draft',
+        feedbackIds: feedbackIds || [],
+        sections: structure === 'complex-review' ? [
+          { id: `${generateId('sec')}`, title: '背景', status: 'pending', narrative: '', presentation: presentation || 'document' },
+          { id: `${generateId('sec')}`, title: '分析', status: 'pending', narrative: '', presentation: presentation || 'document' },
+          { id: `${generateId('sec')}`, title: '结论', status: 'pending', narrative: '', presentation: presentation || 'document' },
+        ] : [
+          { id: `${generateId('sec')}`, title: '汇报内容', status: 'pending', narrative: '', presentation: presentation || 'document' },
+        ],
+        createdAt: now,
+        updatedAt: now,
       };
 
-      const contentType = mimeTypes[ext] || 'application/octet-stream';
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${path.basename(resolved)}"`);
-      fs.createReadStream(resolved).pipe(res);
+      // Create report directory and feedback file
+      const reportDirPath = path.join(projectReportsPath, report.id);
+      fs.mkdirSync(reportDirPath, { recursive: true });
+      await writeJSON(path.join(reportDirPath, 'feedback.json'), []);
+
+      const reportFilePath = path.join(projectReportsPath, `${report.id}.json`);
+      await writeJSON(reportFilePath, report);
+
+      // Auto-create log entry
+      const logEntry = {
+        id: generateId('log'),
+        type: 'auto',
+        event: 'report_created',
+        title: `创建汇报草稿：${title}`,
+        reportId: report.id,
+        createdAt: now,
+      };
+      await updateJSON(projectLogsPath, (items) => [...items, logEntry], []);
+      broadcast('log_created', logEntry);
+      broadcast('report_created', report);
+
+      res.status(201).json(report);
     } catch (err) {
-      console.error('Error serving file:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
 
-  // Revoke committed feedback entries (undo)
-  app.post('/api/deliveries/:id/feedback/revoke', async (req, res) => {
+  // ═══════════════════════════════════════════════════════
+  // V3: Report-level feedback
+  // ═══════════════════════════════════════════════════════
+
+  // Helper: read report-level feedback file
+  function reportFeedbackPath(reportId) {
+    return path.join(projectReportsPath, reportId, 'feedback.json');
+  }
+
+  function readReportFeedback(reportId) {
+    return readJSONArray(reportFeedbackPath(reportId));
+  }
+
+  // GET /api/reports/:id/feedback — Get all feedback for a report
+  app.get('/api/reports/:id/feedback', (req, res) => {
     try {
-      const deliveryId = req.params.id;
-      const delivery = readDelivery(deliveryId);
-      if (!delivery) {
-        return res.status(404).json({
-          error: { code: 'NOT_FOUND', message: `Delivery ${deliveryId} not found` },
-        });
-      }
-
-      const { feedback_ids: feedbackIds } = req.body;
-      if (!Array.isArray(feedbackIds) || feedbackIds.length === 0) {
-        return res.status(400).json({
-          error: { code: 'INVALID_REQUEST', message: 'feedback_ids must be a non-empty array' },
-        });
-      }
-
-      const feedbackPath = deliveryFile(deliveryId, 'feedback.json');
-      let revokedCount = 0;
-
-      await updateJSON(
-        feedbackPath,
-        (items) => items.filter((item) => {
-          if (feedbackIds.includes(item.id) && item.handled === false) {
-            revokedCount += 1;
-            return false; // remove from list
-          }
-          return true;
-        }),
-        []
-      );
-
-      const updatedDelivery = await recalcDeliveryStatus(deliveryId);
-      broadcast('update_delivery', mapIndexEntry(updatedDelivery));
-      broadcast('feedback_received', { delivery_id: deliveryId });
-
-      res.status(200).json({
-        delivery_id: deliveryId,
-        revoked_count: revokedCount,
-        status: updatedDelivery.status,
-      });
+      const feedbacks = readReportFeedback(req.params.id);
+      res.json({ feedbacks, total: feedbacks.length });
     } catch (err) {
-      console.error('Error revoking feedback:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
+      console.error('Error reading report feedback:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
 
-  // Update delivery content
-  app.put('/api/deliveries/:id/content', async (req, res) => {
+  // POST /api/reports/:id/feedback — Submit new feedback for a report
+  app.post('/api/reports/:id/feedback', async (req, res) => {
     try {
-      const deliveryId = req.params.id;
-      const delivery = readDelivery(deliveryId);
-      if (!delivery) {
-        return res.status(404).json({
-          error: { code: 'NOT_FOUND', message: `Delivery ${deliveryId} not found` },
-        });
+      const { content, author } = req.body;
+      if (!content) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'content is required' } });
       }
-
-      const { content, title } = req.body;
-      if (!content || !ensureValidContent(content)) {
-        return res.status(400).json({
-          error: {
-            code: 'INVALID_REQUEST',
-            message: 'content must be { type: "generated_html", html: "..." } or { type: "ui_spec", ui_spec: {...} }',
-          },
-        });
-      }
-
-      delivery.content = content;
-      if (title) delivery.title = title;
-      delivery.updated_at = nowLocalISO();
-
-      await writeDelivery(delivery);
-      await updateIndex(delivery);
-      broadcast('update_delivery', mapIndexEntry(delivery));
-
-      res.status(200).json({
-        id: deliveryId,
-        status: delivery.status,
-        updated_at: delivery.updated_at,
-      });
+      const now = new Date().toISOString();
+      const feedback = {
+        id: generateId('fb'),
+        status: 'tracked',
+        content,
+        author: author || 'user',
+        createdAt: now,
+        updatedAt: now,
+      };
+      await updateJSON(reportFeedbackPath(req.params.id), (items) => [...items, feedback], []);
+      broadcast('feedback_updated', { action: 'created', reportId: req.params.id, feedback });
+      res.status(201).json(feedback);
     } catch (err) {
-      console.error('Error updating delivery content:', err);
-      res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message },
-      });
+      console.error('Error creating report feedback:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
 
+  // POST /api/reports/:id/feedback/:feedbackId/resolve — Agent addresses feedback
+  app.post('/api/reports/:id/feedback/:feedbackId/resolve', async (req, res) => {
+    try {
+      const { changeRecord } = req.body || {};
+      const now = new Date().toISOString();
+      let resolved = null;
+      await updateJSON(reportFeedbackPath(req.params.id), (items) => items.map((f) => {
+        if (f.id === req.params.feedbackId) {
+          resolved = { ...f, status: 'addressed', changeRecord: changeRecord || f.changeRecord, updatedAt: now };
+          return resolved;
+        }
+        return f;
+      }), []);
+      if (!resolved) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
+      }
+      broadcast('feedback_updated', { action: 'resolved', reportId: req.params.id, feedback: resolved });
+      res.json(resolved);
+    } catch (err) {
+      console.error('Error resolving report feedback:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // POST /api/reports/:id/feedback/:feedbackId/confirm — User confirms resolved feedback
+  app.post('/api/reports/:id/feedback/:feedbackId/confirm', async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      let confirmed = null;
+      await updateJSON(reportFeedbackPath(req.params.id), (items) => items.map((f) => {
+        if (f.id === req.params.feedbackId) {
+          confirmed = {
+            ...f,
+            status: 'confirmed',
+            changeRecord: { ...(f.changeRecord || {}), confirmedAt: now },
+            updatedAt: now,
+          };
+          return confirmed;
+        }
+        return f;
+      }), []);
+      if (!confirmed) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
+      }
+      broadcast('feedback_updated', { action: 'confirmed', reportId: req.params.id, feedback: confirmed });
+      res.json(confirmed);
+    } catch (err) {
+      console.error('Error confirming report feedback:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // Validate constants at startup (defensive)
+  if (!DELIVERY_STATUSES.includes('normal') || !ALIGNMENT_STATES.includes('active')) {
+    throw new Error('Invalid status configuration');
+  }
 }
 
 module.exports = { setupRoutes };

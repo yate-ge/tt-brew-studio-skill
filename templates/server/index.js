@@ -27,6 +27,7 @@ const uiDir = args['ui-dir'] || path.join(dataDir, 'ui', 'dist');
 
 fs.mkdirSync(path.join(dataDir, 'data', 'deliveries'), { recursive: true });
 fs.mkdirSync(path.join(dataDir, 'data', 'sessions'), { recursive: true });
+fs.mkdirSync(path.join(dataDir, 'data', 'reports'), { recursive: true });
 fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
 
 const indexPath = path.join(dataDir, 'data', 'index.json');

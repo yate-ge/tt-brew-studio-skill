@@ -1,28 +1,27 @@
 import { Routes, Route } from 'react-router-dom';
-import { useWebSocket } from './hooks/useWebSocket';
-import { useDesignTokens } from './hooks/useDesignTokens';
-import { SettingsProvider } from './hooks/useSettings';
-import Dashboard from './pages/Dashboard';
-import DeliveryPage from './pages/DeliveryPage';
+import { useEffect } from 'react';
+import AppLayout from './components/layout/AppLayout';
+import ProjectHome from './pages/ProjectHome';
+import Reports from './pages/Reports';
+import ReportNew from './pages/ReportNew';
+import ReportDetail from './pages/ReportDetail';
+import Logs from './pages/Logs';
 import Settings from './pages/Settings';
-import Footer from './components/Footer';
+import { initTheme } from './lib/theme';
 
 export default function App() {
-  useWebSocket();
-  useDesignTokens();
+  useEffect(() => { initTheme(); }, []);
 
   return (
-    <SettingsProvider>
-      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-        <div style={{ flex: 1 }}>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/d/:id" element={<DeliveryPage />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
-        </div>
-        <Footer />
-      </div>
-    </SettingsProvider>
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route path="/" element={<ProjectHome />} />
+        <Route path="/logs" element={<Logs />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/reports/new" element={<ReportNew />} />
+        <Route path="/reports/:reportId" element={<ReportDetail />} />
+        <Route path="/settings" element={<Settings />} />
+      </Route>
+    </Routes>
   );
 }

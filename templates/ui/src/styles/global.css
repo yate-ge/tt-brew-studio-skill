@@ -1,8 +1,7 @@
 @import './variables.css';
-
-/* highlight.js github theme */
 @import 'highlight.js/styles/github.css';
 
+/* ── Reset ── */
 *,
 *::before,
 *::after {
@@ -11,45 +10,74 @@
   padding: 0;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  font-family: var(--vds-typography-font-family);
-  font-size: var(--vds-typography-font-size-base);
-  line-height: var(--vds-typography-line-height);
-  color: var(--vds-colors-text);
-  background: var(--vds-colors-background);
+  font-family: var(--vd-font-family);
+  font-size: var(--vd-font-size-base);
+  line-height: var(--vd-line-height-relaxed);
+  color: var(--vd-text-primary);
+  background: var(--vd-page-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  height: 100dvh;
 }
 
+#root {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* ── Links ── */
 a {
-  color: var(--vds-colors-primary);
+  color: var(--vd-primary);
   text-decoration: none;
+  transition: color var(--vd-transition-fast);
 }
-
 a:hover {
-  color: var(--vds-colors-primary-hover);
+  color: var(--vd-primary-hover);
 }
 
+/* ── Code ── */
 code {
-  font-family: var(--vds-typography-font-family-mono);
+  font-family: var(--vd-font-mono);
+  font-size: 0.9em;
 }
 
-/* Scrollbar styling */
+/* ── Scrollbar ── */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
-
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--vd-scrollbar-track);
 }
-
 ::-webkit-scrollbar-thumb {
-  background: var(--vds-colors-border);
+  background: var(--vd-scrollbar-thumb);
   border-radius: 3px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--vds-colors-text-secondary);
+  background: var(--vd-text-tertiary);
+}
+
+/* ── Focus visible ── */
+:focus-visible {
+  outline: 2px solid var(--vd-primary);
+  outline-offset: 2px;
+}
+
+/* ── Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Delivery card hover */

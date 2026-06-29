@@ -1,26 +1,178 @@
+/* ============================================================
+   V3 Design Token System — Light & Dark Theme
+   ============================================================ */
+
+/* ── Light Theme (default) ── */
+:root,
+[data-theme="light"] {
+  /* Page & Surface */
+  --vd-page-bg: #F8FAFC;
+  --vd-surface-bg: #FFFFFF;
+  --vd-surface-elevated: #FFFFFF;
+  --vd-surface-hover: #F1F5F9;
+
+  /* Text */
+  --vd-text-primary: #1E293B;
+  --vd-text-secondary: #64748B;
+  --vd-text-tertiary: #94A3B8;
+  --vd-text-inverse: #FFFFFF;
+
+  /* Borders */
+  --vd-border-default: #E2E8F0;
+  --vd-border-strong: #CBD5E1;
+  --vd-border-subtle: #F1F5F9;
+
+  /* Semantic Colors */
+  --vd-primary: #2563EB;
+  --vd-primary-hover: #1D4ED8;
+  --vd-primary-bg: #EFF6FF;
+  --vd-primary-border: #BFDBFE;
+
+  --vd-success: #16A34A;
+  --vd-success-bg: #F0FDF4;
+  --vd-success-border: #BBF7D0;
+
+  --vd-warning: #F59E0B;
+  --vd-warning-bg: #FFFBEB;
+  --vd-warning-border: #FDE68A;
+
+  --vd-danger: #DC2626;
+  --vd-danger-bg: #FEF2F2;
+  --vd-danger-border: #FECACA;
+
+  --vd-info: #2563EB;
+  --vd-info-bg: #EFF6FF;
+  --vd-info-border: #BFDBFE;
+
+  /* Shadows */
+  --vd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --vd-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --vd-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+
+  /* Overlay */
+  --vd-overlay: rgba(15, 23, 42, 0.4);
+
+  /* Scrollbar */
+  --vd-scrollbar-thumb: #CBD5E1;
+  --vd-scrollbar-track: transparent;
+}
+
+/* ── Dark Theme ── */
+[data-theme="dark"] {
+  --vd-page-bg: #0F172A;
+  --vd-surface-bg: #1E293B;
+  --vd-surface-elevated: #334155;
+  --vd-surface-hover: #273548;
+
+  --vd-text-primary: #F8FAFC;
+  --vd-text-secondary: #94A3B8;
+  --vd-text-tertiary: #64748B;
+  --vd-text-inverse: #0F172A;
+
+  --vd-border-default: #334155;
+  --vd-border-strong: #475569;
+  --vd-border-subtle: #1E293B;
+
+  --vd-primary: #60A5FA;
+  --vd-primary-hover: #3B82F6;
+  --vd-primary-bg: #1E3A5F;
+  --vd-primary-border: #1D4ED8;
+
+  --vd-success: #4ADE80;
+  --vd-success-bg: #14532D;
+  --vd-success-border: #166534;
+
+  --vd-warning: #FBBF24;
+  --vd-warning-bg: #451A03;
+  --vd-warning-border: #78350F;
+
+  --vd-danger: #F87171;
+  --vd-danger-bg: #450A0A;
+  --vd-danger-border: #7F1D1D;
+
+  --vd-info: #60A5FA;
+  --vd-info-bg: #1E3A5F;
+  --vd-info-border: #1D4ED8;
+
+  --vd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --vd-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --vd-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+
+  --vd-overlay: rgba(0, 0, 0, 0.6);
+  --vd-scrollbar-thumb: #475569;
+  --vd-scrollbar-track: transparent;
+}
+
+/* ── Spacing Scale (4px base) ── */
 :root {
-  /* Fallback defaults — overridden by design tokens on load */
-  --vds-colors-primary: #2563EB;
-  --vds-colors-primary-hover: #1D4ED8;
-  --vds-colors-background: #FFFFFF;
-  --vds-colors-surface: #F8FAFC;
-  --vds-colors-text: #1E293B;
-  --vds-colors-text-secondary: #64748B;
-  --vds-colors-border: #E2E8F0;
-  --vds-colors-success: #16A34A;
-  --vds-colors-warning: #F59E0B;
-  --vds-colors-danger: #DC2626;
-  --vds-colors-blocking-bg: #FEF2F2;
-  --vds-colors-blocking-border: #FCA5A5;
-  --vds-colors-interactive-bg: #FFF7ED;
-  --vds-colors-interactive-border: #FDBA74;
+  --vd-space-1: 4px;
+  --vd-space-2: 8px;
+  --vd-space-3: 12px;
+  --vd-space-4: 16px;
+  --vd-space-6: 24px;
+  --vd-space-8: 32px;
+  --vd-space-12: 48px;
+  --vd-space-16: 64px;
 
-  --vds-typography-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --vds-typography-font-family-mono: 'SF Mono', 'Fira Code', monospace;
-  --vds-typography-font-size-base: 16px;
-  --vds-typography-line-height: 1.6;
+  /* Radius */
+  --vd-radius-sm: 4px;
+  --vd-radius-md: 8px;
+  --vd-radius-lg: 12px;
+  --vd-radius-xl: 16px;
 
-  --vds-spacing-page-padding: 24px;
-  --vds-spacing-card-padding: 16px;
-  --vds-spacing-border-radius: 8px;
+  /* Typography */
+  --vd-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  --vd-font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --vd-font-size-xs: 12px;
+  --vd-font-size-sm: 13px;
+  --vd-font-size-base: 15px;
+  --vd-font-size-lg: 18px;
+  --vd-font-size-xl: 20px;
+  --vd-font-size-2xl: 24px;
+  --vd-font-size-3xl: 30px;
+
+  --vd-font-weight-normal: 400;
+  --vd-font-weight-medium: 500;
+  --vd-font-weight-semibold: 600;
+  --vd-font-weight-bold: 700;
+
+  --vd-line-height-tight: 1.25;
+  --vd-line-height-normal: 1.5;
+  --vd-line-height-relaxed: 1.65;
+
+  /* Layout */
+  --vd-sidebar-width: 200px;
+  --vd-topbar-height: 56px;
+  --vd-feedback-width: 320px;
+  --vd-feedback-collapsed: 48px;
+  --vd-content-max: 1200px;
+
+  /* Transitions */
+  --vd-transition-fast: 150ms ease;
+  --vd-transition-normal: 200ms ease;
+  --vd-transition-slow: 300ms ease;
+}
+
+/* ── Backward compat aliases ── */
+:root {
+  --vds-colors-primary: var(--vd-primary);
+  --vds-colors-primary-hover: var(--vd-primary-hover);
+  --vds-colors-background: var(--vd-page-bg);
+  --vds-colors-surface: var(--vd-surface-bg);
+  --vds-colors-text: var(--vd-text-primary);
+  --vds-colors-text-secondary: var(--vd-text-secondary);
+  --vds-colors-border: var(--vd-border-default);
+  --vds-colors-success: var(--vd-success);
+  --vds-colors-warning: var(--vd-warning);
+  --vds-colors-danger: var(--vd-danger);
+
+  --vds-typography-font-family: var(--vd-font-family);
+  --vds-typography-font-family-mono: var(--vd-font-mono);
+  --vds-typography-font-size-base: var(--vd-font-size-base);
+  --vds-typography-line-height: var(--vd-line-height-relaxed);
+
+  --vds-spacing-page-padding: var(--vd-space-6);
+  --vds-spacing-card-padding: var(--vd-space-4);
+  --vds-spacing-border-radius: var(--vd-radius-md);
 }
