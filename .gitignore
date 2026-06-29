@@ -18,8 +18,8 @@ node_modules/
 build/
 dist/
 
-# Visual Delivery work directory
-.visual-delivery/
+# Visual Delivery work directories
+.visual-delivery*/
 
 # Playwright MCP
 .playwright-mcp/

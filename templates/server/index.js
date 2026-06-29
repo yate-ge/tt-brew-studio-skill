@@ -24,6 +24,7 @@ const dataDir = args['data-dir'] || path.join(process.cwd(), '.visual-delivery')
 const port = parseInt(args.port, 10) || 3847;
 const host = args.host || '127.0.0.1';
 const uiDir = args['ui-dir'] || path.join(dataDir, 'ui', 'dist');
+const projectDir = path.resolve(args['project-dir'] || path.dirname(dataDir));
 
 fs.mkdirSync(path.join(dataDir, 'data', 'deliveries'), { recursive: true });
 fs.mkdirSync(path.join(dataDir, 'data', 'sessions'), { recursive: true });
@@ -39,7 +40,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.set('port', port);
 
-setupRoutes(app, dataDir);
+setupRoutes(app, dataDir, { projectDir });
 
 if (fs.existsSync(uiDir)) {
   // Serve static assets but NOT index.html (we inject locale into it)

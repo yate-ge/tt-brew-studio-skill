@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useDeliveries } from '../hooks/useDeliveries';
-import { useSettings } from '../hooks/useSettings';
+import { fetchProjectConfig } from '../lib/api';
 import { t } from '../lib/i18n';
 
 function formatTime(dateStr) {
@@ -18,8 +18,20 @@ function displayTime(delivery) {
 }
 
 export default function Dashboard() {
-  const { platform } = useSettings();
+  const [projectName, setProjectName] = useState('');
   const { deliveries, loading, error } = useDeliveries();
+
+  useEffect(() => {
+    let canceled = false;
+    fetchProjectConfig()
+      .then((project) => {
+        if (!canceled) setProjectName(project?.name || '');
+      })
+      .catch(() => {
+        if (!canceled) setProjectName('');
+      });
+    return () => { canceled = true; };
+  }, []);
 
   const filtered = useMemo(() => {
     return [...deliveries].sort((a, b) => {
@@ -33,7 +45,7 @@ export default function Dashboard() {
     <div style={styles.container}>
       <header style={styles.header}>
         <div>
-          <h1 style={styles.title}>{platform.name || t('appTitle')}</h1>
+          <h1 style={styles.title}>{projectName || t('appTitle')}</h1>
           <div style={styles.accent} />
         </div>
         <Link to="/settings" style={styles.settingsLink}>

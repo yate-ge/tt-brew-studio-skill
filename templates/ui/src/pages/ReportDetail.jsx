@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { fetchReport, fetchReportFeedback, addReportFeedback, confirmReportFeedback } from '../lib/api';
+import { useDesignTokens } from '../hooks/useDesignTokens';
+import ContentRenderer from '../components/ContentRenderer';
 
 const STATUS_BADGES = {
   completed: { label: '已完成', bg: 'var(--vd-success-bg)', color: 'var(--vd-success)' },
@@ -69,17 +71,35 @@ const STYLES = {
     color: STATUS_BADGES[color]?.color,
   }),
   body: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: '320px minmax(0, 1fr)',
     gap: 'var(--vd-space-6)',
     flex: 1,
     minHeight: 0,
   },
   sectionNav: {
-    width: 180,
-    flexShrink: 0,
+    minWidth: 0,
+    height: 'calc(100dvh - 160px)',
+    position: 'sticky',
+    top: 'var(--vd-space-4)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 2,
+    gap: 'var(--vd-space-4)',
+    paddingRight: 'var(--vd-space-4)',
+    borderRight: '1px solid var(--vd-border-default)',
+    overflowY: 'auto',
+  },
+  navGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--vd-space-2)',
+  },
+  navGroupTitle: {
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+    color: 'var(--vd-text-tertiary)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
   },
   sectionNavItem: (active) => ({
     padding: 'var(--vd-space-2) var(--vd-space-3)',
@@ -179,14 +199,14 @@ const STYLES = {
 
   /* ── Feedback Sidebar ── */
   feedbackSidebar: {
-    width: 280,
-    flexShrink: 0,
+    width: '100%',
     background: 'var(--vd-surface-bg)',
-    borderLeft: '1px solid var(--vd-border-default)',
+    border: '1px solid var(--vd-border-default)',
     borderRadius: 'var(--vd-radius-lg)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+    minHeight: 280,
   },
   feedbackHeader: {
     padding: 'var(--vd-space-3) var(--vd-space-4)',
@@ -329,8 +349,13 @@ function formatFeedbackTime(iso) {
   }
 }
 
+function isRenderableReportContent(content) {
+  return ['generated_html', 'html', 'markdown'].includes(content?.type);
+}
+
 export default function ReportDetail() {
   const { reportId } = useParams();
+  const tokens = useDesignTokens();
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState(0);
@@ -421,23 +446,148 @@ export default function ReportDetail() {
         </div>
       </div>
 
-      {/* Section Navigation + Content + Feedback Sidebar */}
+      {/* Left navigation + content */}
       <div style={STYLES.body}>
-        {/* Left: Section Nav */}
-        {report.sections && report.sections.length > 0 && (
-          <nav style={STYLES.sectionNav}>
-            {report.sections.map((s, i) => (
-              <button
-                key={s.id}
-                style={STYLES.sectionNavItem(i === activeSection)}
-                onClick={() => setActiveSection(i)}
-              >
-                <span style={STYLES.statusDot(s.status)} />
-                <span>{i + 1}. {s.title}</span>
-              </button>
-            ))}
-          </nav>
-        )}
+        <aside style={STYLES.sectionNav}>
+          {report.sections && report.sections.length > 0 && (
+            <nav style={STYLES.navGroup}>
+              <div style={STYLES.navGroupTitle}>Sections</div>
+              {report.sections.map((s, i) => (
+                <button
+                  key={s.id}
+                  style={STYLES.sectionNavItem(i === activeSection)}
+                  onClick={() => setActiveSection(i)}
+                >
+                  <span style={STYLES.statusDot(s.status)} />
+                  <span>{i + 1}. {s.title}</span>
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {feedbackOpen && (
+            <aside style={STYLES.feedbackSidebar}>
+              <div style={STYLES.feedbackHeader}>
+                <span style={STYLES.feedbackHeaderTitle}>汇报反馈</span>
+                <span style={STYLES.feedbackHeaderCount}>{feedbacks.length} 条</span>
+              </div>
+
+              <div style={STYLES.feedbackInputArea}>
+                <textarea
+                  style={STYLES.feedbackInput}
+                  placeholder="输入反馈内容..."
+                  value={newFeedback}
+                  onChange={(e) => setNewFeedback(e.target.value)}
+                  rows={3}
+                />
+                <button
+                  style={{ ...STYLES.feedbackSubmitBtn, opacity: newFeedback.trim() ? 1 : 0.5 }}
+                  onClick={handleAddFeedback}
+                  disabled={!newFeedback.trim()}
+                >
+                  提交反馈
+                </button>
+              </div>
+
+              <div style={STYLES.feedbackList}>
+                {feedbacks.length === 0 ? (
+                  <div style={STYLES.feedbackEmptyState}>
+                    暂无反馈，点击上方提交第一条反馈
+                  </div>
+                ) : (
+                  <>
+                    {trackedFbs.length > 0 && (
+                      <>
+                        <div style={STYLES.feedbackGroupTitle}>待处理 ({trackedFbs.length})</div>
+                        {trackedFbs.map((fb) => (
+                          <div key={fb.id} style={STYLES.feedbackItem}>
+                            <div style={STYLES.feedbackItemMeta}>
+                              <span style={{
+                                ...STYLES.feedbackBadge,
+                                background: FB_STATUS_COLORS.tracked.bg,
+                                color: FB_STATUS_COLORS.tracked.color,
+                                border: `1px solid ${FB_STATUS_COLORS.tracked.border}`,
+                              }}>
+                                {FB_STATUS_LABELS.tracked}
+                              </span>
+                              <span style={STYLES.feedbackItemTime}>{formatFeedbackTime(fb.createdAt)}</span>
+                            </div>
+                            <div style={STYLES.feedbackItemContent}>{fb.content}</div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+
+                    {addressedFbs.length > 0 && (
+                      <>
+                        <div style={STYLES.feedbackGroupTitle}>已处理 ({addressedFbs.length})</div>
+                        {addressedFbs.map((fb) => (
+                          <div key={fb.id} style={STYLES.feedbackItem}>
+                            <div style={STYLES.feedbackItemMeta}>
+                              <span style={{
+                                ...STYLES.feedbackBadge,
+                                background: FB_STATUS_COLORS.addressed.bg,
+                                color: FB_STATUS_COLORS.addressed.color,
+                                border: `1px solid ${FB_STATUS_COLORS.addressed.border}`,
+                              }}>
+                                {FB_STATUS_LABELS.addressed}
+                              </span>
+                              <span style={STYLES.feedbackItemTime}>{formatFeedbackTime(fb.createdAt)}</span>
+                            </div>
+                            <div style={STYLES.feedbackItemContent}>{fb.content}</div>
+
+                            {fb.changeRecord && (
+                              <div style={STYLES.feedbackChangeRecord}>
+                                <div style={STYLES.feedbackChangeRecordLabel}>变更记录</div>
+                                {fb.changeRecord.summary}
+                              </div>
+                            )}
+
+                            <button
+                              style={STYLES.feedbackConfirmBtn}
+                              onClick={() => handleConfirmFeedback(fb.id)}
+                            >
+                              确认已解决
+                            </button>
+                          </div>
+                        ))}
+                      </>
+                    )}
+
+                    {confirmedFbs.length > 0 && (
+                      <>
+                        <div style={STYLES.feedbackGroupTitle}>已确认 ({confirmedFbs.length})</div>
+                        {confirmedFbs.map((fb) => (
+                          <div key={fb.id} style={STYLES.feedbackItem}>
+                            <div style={STYLES.feedbackItemMeta}>
+                              <span style={{
+                                ...STYLES.feedbackBadge,
+                                background: FB_STATUS_COLORS.confirmed.bg,
+                                color: FB_STATUS_COLORS.confirmed.color,
+                                border: `1px solid ${FB_STATUS_COLORS.confirmed.border}`,
+                              }}>
+                                {FB_STATUS_LABELS.confirmed}
+                              </span>
+                              <span style={STYLES.feedbackItemTime}>{formatFeedbackTime(fb.createdAt)}</span>
+                            </div>
+                            <div style={STYLES.feedbackItemContent}>{fb.content}</div>
+
+                            {fb.changeRecord && (
+                              <div style={STYLES.feedbackChangeRecord}>
+                                <div style={STYLES.feedbackChangeRecordLabel}>变更记录</div>
+                                {fb.changeRecord.summary}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </aside>
+          )}
+        </aside>
 
         {/* Center: Section Content */}
         {section ? (
@@ -448,40 +598,44 @@ export default function ReportDetail() {
               <span style={STYLES.presentationTag}>{section.presentation}</span>
             </div>
 
-            {/* Narrative */}
-            {section.narrative ? (
-              <div style={STYLES.narrative}>
-                <div style={{ fontSize: 'var(--vd-font-size-xs)', fontWeight: 600, color: 'var(--vd-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 'var(--vd-space-2)' }}>
-                  叙事摘要
-                </div>
-                {section.narrative}
-              </div>
+            {isRenderableReportContent(report.content) ? (
+              <ContentRenderer content={report.content} tokens={tokens} />
             ) : (
-              <div style={STYLES.artifactPlaceholder}>
-                此 section 尚未填充内容
-              </div>
-            )}
+              <>
+                {section.narrative ? (
+                  <div style={STYLES.narrative}>
+                    <div style={{ fontSize: 'var(--vd-font-size-xs)', fontWeight: 600, color: 'var(--vd-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 'var(--vd-space-2)' }}>
+                      叙事摘要
+                    </div>
+                    {section.narrative}
+                  </div>
+                ) : (
+                  <div style={STYLES.artifactPlaceholder}>
+                    此 section 尚未填充内容
+                  </div>
+                )}
 
-            {/* Artifact placeholder */}
-            {section.narrative && (
-              <div>
-                <div style={{
-                  fontSize: 'var(--vd-font-size-xs)',
-                  fontWeight: 600,
-                  color: 'var(--vd-text-tertiary)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
-                  marginBottom: 'var(--vd-space-3)',
-                }}>
-                  Artifact · {section.presentation}
-                </div>
-                <div style={STYLES.artifactPlaceholder}>
-                  {section.presentation === 'document' && '📄 文档内容将在此渲染'}
-                  {section.presentation === 'table' && '📊 表格内容将在此渲染'}
-                  {section.presentation === 'canvas' && '🎨 画布内容将在此渲染'}
-                  {section.presentation === 'slides' && '🖥 Slides 将在此渲染'}
-                </div>
-              </div>
+                {section.narrative && (
+                  <div>
+                    <div style={{
+                      fontSize: 'var(--vd-font-size-xs)',
+                      fontWeight: 600,
+                      color: 'var(--vd-text-tertiary)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      marginBottom: 'var(--vd-space-3)',
+                    }}>
+                      Artifact · {section.presentation}
+                    </div>
+                    <div style={STYLES.artifactPlaceholder}>
+                      {section.presentation === 'document' && '文档内容将在此渲染'}
+                      {section.presentation === 'table' && '表格内容将在此渲染'}
+                      {section.presentation === 'canvas' && '画布内容将在此渲染'}
+                      {section.presentation === 'slides' && 'Slides 将在此渲染'}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Footer Navigation */}
@@ -523,137 +677,6 @@ export default function ReportDetail() {
           </div>
         )}
 
-        {/* Right: Feedback Sidebar */}
-        {feedbackOpen && (
-          <aside style={STYLES.feedbackSidebar}>
-            <div style={STYLES.feedbackHeader}>
-              <span style={STYLES.feedbackHeaderTitle}>汇报反馈</span>
-              <span style={STYLES.feedbackHeaderCount}>{feedbacks.length} 条</span>
-            </div>
-
-            {/* New feedback input */}
-            <div style={STYLES.feedbackInputArea}>
-              <textarea
-                style={STYLES.feedbackInput}
-                placeholder="输入反馈内容..."
-                value={newFeedback}
-                onChange={(e) => setNewFeedback(e.target.value)}
-                rows={3}
-              />
-              <button
-                style={{ ...STYLES.feedbackSubmitBtn, opacity: newFeedback.trim() ? 1 : 0.5 }}
-                onClick={handleAddFeedback}
-                disabled={!newFeedback.trim()}
-              >
-                提交反馈
-              </button>
-            </div>
-
-            {/* Feedback list grouped by status */}
-            <div style={STYLES.feedbackList}>
-              {feedbacks.length === 0 ? (
-                <div style={STYLES.feedbackEmptyState}>
-                  暂无反馈，点击上方提交第一条反馈
-                </div>
-              ) : (
-                <>
-                  {/* Tracked feedbacks */}
-                  {trackedFbs.length > 0 && (
-                    <>
-                      <div style={STYLES.feedbackGroupTitle}>待处理 ({trackedFbs.length})</div>
-                      {trackedFbs.map((fb) => (
-                        <div key={fb.id} style={STYLES.feedbackItem}>
-                          <div style={STYLES.feedbackItemMeta}>
-                            <span style={{
-                              ...STYLES.feedbackBadge,
-                              background: FB_STATUS_COLORS.tracked.bg,
-                              color: FB_STATUS_COLORS.tracked.color,
-                              border: `1px solid ${FB_STATUS_COLORS.tracked.border}`,
-                            }}>
-                              {FB_STATUS_LABELS.tracked}
-                            </span>
-                            <span style={STYLES.feedbackItemTime}>{formatFeedbackTime(fb.createdAt)}</span>
-                          </div>
-                          <div style={STYLES.feedbackItemContent}>{fb.content}</div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-
-                  {/* Addressed feedbacks */}
-                  {addressedFbs.length > 0 && (
-                    <>
-                      <div style={STYLES.feedbackGroupTitle}>已处理 ({addressedFbs.length})</div>
-                      {addressedFbs.map((fb) => (
-                        <div key={fb.id} style={STYLES.feedbackItem}>
-                          <div style={STYLES.feedbackItemMeta}>
-                            <span style={{
-                              ...STYLES.feedbackBadge,
-                              background: FB_STATUS_COLORS.addressed.bg,
-                              color: FB_STATUS_COLORS.addressed.color,
-                              border: `1px solid ${FB_STATUS_COLORS.addressed.border}`,
-                            }}>
-                              {FB_STATUS_LABELS.addressed}
-                            </span>
-                            <span style={STYLES.feedbackItemTime}>{formatFeedbackTime(fb.createdAt)}</span>
-                          </div>
-                          <div style={STYLES.feedbackItemContent}>{fb.content}</div>
-
-                          {/* Change record */}
-                          {fb.changeRecord && (
-                            <div style={STYLES.feedbackChangeRecord}>
-                              <div style={STYLES.feedbackChangeRecordLabel}>变更记录</div>
-                              {fb.changeRecord.summary}
-                            </div>
-                          )}
-
-                          {/* Confirm button */}
-                          <button
-                            style={STYLES.feedbackConfirmBtn}
-                            onClick={() => handleConfirmFeedback(fb.id)}
-                          >
-                            确认已解决
-                          </button>
-                        </div>
-                      ))}
-                    </>
-                  )}
-
-                  {/* Confirmed feedbacks */}
-                  {confirmedFbs.length > 0 && (
-                    <>
-                      <div style={STYLES.feedbackGroupTitle}>已确认 ({confirmedFbs.length})</div>
-                      {confirmedFbs.map((fb) => (
-                        <div key={fb.id} style={STYLES.feedbackItem}>
-                          <div style={STYLES.feedbackItemMeta}>
-                            <span style={{
-                              ...STYLES.feedbackBadge,
-                              background: FB_STATUS_COLORS.confirmed.bg,
-                              color: FB_STATUS_COLORS.confirmed.color,
-                              border: `1px solid ${FB_STATUS_COLORS.confirmed.border}`,
-                            }}>
-                              {FB_STATUS_LABELS.confirmed}
-                            </span>
-                            <span style={STYLES.feedbackItemTime}>{formatFeedbackTime(fb.createdAt)}</span>
-                          </div>
-                          <div style={STYLES.feedbackItemContent}>{fb.content}</div>
-
-                          {/* Change record */}
-                          {fb.changeRecord && (
-                            <div style={STYLES.feedbackChangeRecord}>
-                              <div style={STYLES.feedbackChangeRecordLabel}>变更记录</div>
-                              {fb.changeRecord.summary}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-          </aside>
-        )}
       </div>
     </div>
   );

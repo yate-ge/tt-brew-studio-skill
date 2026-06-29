@@ -64,6 +64,22 @@ export function initTheme() {
   document.documentElement.setAttribute('data-theme', theme);
 }
 
+function flattenTokens(tokens, prefix = []) {
+  return Object.entries(tokens || {}).reduce((acc, [key, value]) => {
+    const nextPrefix = [...prefix, key];
+
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { ...acc, ...flattenTokens(value, nextPrefix) };
+    }
+
+    if (typeof value === 'string' || typeof value === 'number') {
+      acc[nextPrefix.join('-')] = value;
+    }
+
+    return acc;
+  }, {});
+}
+
 export function tokensToCSS(tokens) {
   if (!tokens) return '';
   const flat = flattenTokens(tokens);

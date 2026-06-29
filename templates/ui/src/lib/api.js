@@ -56,6 +56,16 @@ export async function resolveFeedback(deliveryId, feedbackIds, handledBy = 'agen
   return res.json();
 }
 
+export async function revokeFeedback(deliveryId, feedbackIds) {
+  const res = await fetch(`${BASE}/api/deliveries/${deliveryId}/feedback/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedback_ids: feedbackIds }),
+  });
+  await ensureOk(res, 'Failed to revoke feedback');
+  return res.json();
+}
+
 export async function addAnnotation(deliveryId, annotation) {
   const res = await fetch(`${BASE}/api/deliveries/${deliveryId}/annotate`, {
     method: 'POST',
@@ -167,6 +177,34 @@ export async function createLog(logData) {
     body: JSON.stringify(logData),
   });
   await ensureOk(res, 'Failed to create log');
+  return res.json();
+}
+
+// ── V4 Harness / Documents APIs ──
+
+export async function fetchHarness() {
+  const res = await fetch(`${BASE}/api/harness`);
+  await ensureOk(res, 'Failed to fetch harness');
+  return res.json();
+}
+
+export async function rescanHarness() {
+  const res = await fetch(`${BASE}/api/harness/rescan`, { method: 'POST' });
+  await ensureOk(res, 'Failed to rescan harness');
+  return res.json();
+}
+
+export async function fetchDocuments(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const url = query ? `${BASE}/api/documents?${query}` : `${BASE}/api/documents`;
+  const res = await fetch(url);
+  await ensureOk(res, 'Failed to fetch documents');
+  return res.json();
+}
+
+export async function fetchDocument(id) {
+  const res = await fetch(`${BASE}/api/documents/${id}`);
+  await ensureOk(res, `Failed to fetch document ${id}`);
   return res.json();
 }
 

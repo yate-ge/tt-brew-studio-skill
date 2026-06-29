@@ -7,6 +7,7 @@ import ReportNew from './pages/ReportNew';
 import ReportDetail from './pages/ReportDetail';
 import Logs from './pages/Logs';
 import Settings from './pages/Settings';
+import DeliveryPage from './pages/DeliveryPage';
 import { initTheme } from './lib/theme';
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/reports/new" element={<ReportNew />} />
         <Route path="/reports/:reportId" element={<ReportDetail />} />
+        <Route path="/d/:id" element={<DeliveryPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>

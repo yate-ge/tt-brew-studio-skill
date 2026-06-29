@@ -7,6 +7,8 @@
 - [Delivery APIs](#delivery-apis)
 - [Feedback APIs](#feedback-apis)
 - [Settings APIs](#settings-apis)
+- [Harness and Documents APIs](#harness-and-documents-apis)
+- [File View](#file-view)
 - [Design Tokens](#design-tokens)
 - [WebSocket Events](#websocket-events)
 - [Error Format](#error-format)
@@ -301,6 +303,97 @@ Returns platform configuration:
     "name": "My Delivery Hub",
     "slogan": "..."
   }
+}
+```
+
+## Harness and Documents APIs
+
+These APIs connect the platform to the project workspace itself. External project
+documents are indexed in `.visual-delivery/data/document-index.json`; they are
+not copied into the runtime directory.
+
+### `GET /api/harness`
+
+Returns the discovered project harness and document-index summary.
+
+```json
+{
+  "harness": {
+    "version": 1,
+    "project_root": "/path/to/project",
+    "strategy": "external-first",
+    "managed_fallback": {
+      "logs_path": ".visual-delivery/data/logs",
+      "documents_path": ".visual-delivery/data/documents"
+    },
+    "sources": [
+      {
+        "id": "src_...",
+        "path": "docs",
+        "kind": "project_documentation",
+        "source": "external",
+        "writable": true,
+        "document_count": 3
+      }
+    ],
+    "discovered_at": "ISO datetime",
+    "updated_at": "ISO datetime"
+  },
+  "document_index": {
+    "project_root": "/path/to/project",
+    "scanned_at": "ISO datetime",
+    "total": 5
+  }
+}
+```
+
+### `POST /api/harness/rescan`
+
+Rescans the project root for external documents and rewrites
+`harness.json` / `document-index.json`.
+
+### `GET /api/documents`
+
+Query params:
+
+- `kind`
+- `search`
+- `limit` (default 100)
+- `offset` (default 0)
+
+Response:
+
+```json
+{
+  "documents": [
+    {
+      "id": "doc_...",
+      "source": "external",
+      "kind": "agent_instructions",
+      "path": "AGENTS.md",
+      "title": "AGENTS.md",
+      "writable": true,
+      "size": 3200,
+      "updated_at": "ISO datetime",
+      "last_seen_at": "ISO datetime",
+      "last_indexed_at": "ISO datetime"
+    }
+  ],
+  "total": 1,
+  "scanned_at": "ISO datetime"
+}
+```
+
+### `GET /api/documents/:id`
+
+Returns indexed document content for text-sized files. Large files remain
+indexed but are not loaded into the browser.
+
+```json
+{
+  "document": { "id": "doc_...", "path": "AGENTS.md" },
+  "content": "# AGENTS.md\n...",
+  "truncated": false
 }
 ```
 

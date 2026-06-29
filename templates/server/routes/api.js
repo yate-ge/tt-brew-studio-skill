@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { generateId } = require('../lib/ids');
 const { writeJSON, readJSONArray, readJSONObject, updateJSON } = require('../lib/store');
 const { broadcast } = require('../lib/ws');
@@ -17,10 +18,19 @@ const DEFAULT_SETTINGS = {
   },
 };
 
-function ensureUiSpecContent(content) {
+function ensureDeliveryContent(content) {
   if (!content || typeof content !== 'object') return false;
-  if (content.type !== 'ui_spec') return false;
-  return !!content.ui_spec && typeof content.ui_spec === 'object';
+
+  if (content.type === 'ui_spec') {
+    return !!content.ui_spec && typeof content.ui_spec === 'object';
+  }
+  if (content.type === 'generated_html') {
+    return typeof content.html === 'string' && content.html.trim().length > 0;
+  }
+  if (content.type === 'html' || content.type === 'markdown') {
+    return typeof content.body === 'string';
+  }
+  return false;
 }
 
 function normalizeMetadata(metadata = {}) {
@@ -46,8 +56,9 @@ function mapIndexEntry(delivery) {
   };
 }
 
-function setupRoutes(app, dataDir) {
+function setupRoutes(app, dataDir, options = {}) {
   const dataRoot = path.join(dataDir, 'data');
+  const projectRoot = path.resolve(options.projectDir || path.dirname(dataDir));
   const deliveriesDir = path.join(dataRoot, 'deliveries');
   const sessionsDir = path.join(dataRoot, 'sessions');
   const indexPath = path.join(dataRoot, 'index.json');
@@ -343,11 +354,11 @@ function setupRoutes(app, dataDir) {
         });
       }
 
-      if (!ensureUiSpecContent(content)) {
+      if (!ensureDeliveryContent(content)) {
         return res.status(400).json({
           error: {
             code: 'INVALID_REQUEST',
-            message: 'content must be { type: "ui_spec", ui_spec: {...} }',
+            message: 'content must be a supported delivery content object',
           },
         });
       }
@@ -588,6 +599,61 @@ function setupRoutes(app, dataDir) {
     }
   });
 
+  // Revoke unhandled committed feedback entries
+  app.post('/api/deliveries/:id/feedback/revoke', async (req, res) => {
+    try {
+      const deliveryId = req.params.id;
+      const delivery = readDelivery(deliveryId);
+      if (!delivery) {
+        return res.status(404).json({
+          error: { code: 'NOT_FOUND', message: `Delivery ${deliveryId} not found` },
+        });
+      }
+
+      const { feedback_ids: feedbackIds } = req.body;
+      if (!Array.isArray(feedbackIds) || feedbackIds.length === 0) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'feedback_ids must be a non-empty array',
+          },
+        });
+      }
+
+      let revokedCount = 0;
+      const feedbackPath = deliveryFile(deliveryId, 'feedback.json');
+      await updateJSON(
+        feedbackPath,
+        (items) => items.filter((item) => {
+          const shouldRevoke = feedbackIds.includes(item.id) && item.handled === false;
+          if (shouldRevoke) revokedCount += 1;
+          return !shouldRevoke;
+        }),
+        []
+      );
+
+      const updatedDelivery = await recalcDeliveryStatus(deliveryId);
+      const indexEntry = mapIndexEntry(updatedDelivery);
+
+      broadcast('feedback_revoked', {
+        delivery_id: deliveryId,
+        revoked_count: revokedCount,
+      });
+      broadcast('update_delivery', indexEntry);
+
+      res.status(200).json({
+        delivery_id: deliveryId,
+        revoked_count: revokedCount,
+        status: updatedDelivery.status,
+      });
+    } catch (err) {
+      console.error('Error revoking feedback:', err);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
+      });
+    }
+  });
+
   // Backward-agnostic annotation endpoint (stored as draft annotation item)
   app.post('/api/deliveries/:id/annotate', async (req, res) => {
     try {
@@ -639,11 +705,11 @@ function setupRoutes(app, dataDir) {
     try {
       const { title, content, metadata, agent_session_id: agentSessionId, thread_id: threadId } = req.body;
 
-      if (!title || !content || !ensureUiSpecContent(content)) {
+      if (!title || !content || !ensureDeliveryContent(content)) {
         return res.status(400).json({
           error: {
             code: 'INVALID_REQUEST',
-            message: 'title and content(ui_spec) are required',
+            message: 'title and supported content are required',
           },
         });
       }
@@ -896,12 +962,63 @@ function setupRoutes(app, dataDir) {
   // ═══════════════════════════════════════════════════════
 
   const projectConfigPath = path.join(dataRoot, 'project.json');
+  const projectHarnessPath = path.join(dataRoot, 'harness.json');
+  const projectDocumentIndexPath = path.join(dataRoot, 'document-index.json');
   const projectLogsPath = path.join(dataRoot, 'logs.json');
   const projectFeedbackPath = path.join(dataRoot, 'feedback.json');
   const projectReportsPath = path.join(dataRoot, 'reports');
+  const skillManagedLogsPath = path.join(dataRoot, 'logs');
+  const skillManagedDocumentsPath = path.join(dataRoot, 'documents');
+
+  const DOCUMENT_EXTENSIONS = new Set([
+    '.md',
+    '.mdx',
+    '.txt',
+    '.json',
+    '.jsonc',
+    '.yaml',
+    '.yml',
+    '.toml',
+  ]);
+  const DOCUMENT_DIR_NAMES = new Set([
+    'docs',
+    'doc',
+    'documentation',
+    'references',
+    'reference',
+    'notes',
+    'note',
+    'memory',
+    'memories',
+    'logs',
+    'log',
+    'journal',
+    'journals',
+    'agents',
+    '.claude',
+    '.codex',
+  ]);
+  const SKIP_DIR_NAMES = new Set([
+    '.git',
+    'node_modules',
+    'dist',
+    'build',
+    '.next',
+    '.nuxt',
+    '.vite',
+    'coverage',
+    '.cache',
+    'tmp',
+    'temp',
+    'vendor',
+  ]);
+  const MAX_DISCOVERY_DEPTH = 4;
+  const MAX_DOCUMENT_BYTES = 512 * 1024;
 
   // Ensure V3 data dirs/files exist
   fs.mkdirSync(projectReportsPath, { recursive: true });
+  fs.mkdirSync(skillManagedLogsPath, { recursive: true });
+  fs.mkdirSync(skillManagedDocumentsPath, { recursive: true });
   if (!fs.existsSync(projectLogsPath)) { fs.writeFileSync(projectLogsPath, '[]', 'utf8'); }
   if (!fs.existsSync(projectFeedbackPath)) { fs.writeFileSync(projectFeedbackPath, '[]', 'utf8'); }
 
@@ -921,6 +1038,264 @@ function setupRoutes(app, dataDir) {
     return stored ? { ...DEFAULT_PROJECT, ...stored } : { ...DEFAULT_PROJECT };
   }
 
+  function toPosixPath(value) {
+    return value.split(path.sep).join('/');
+  }
+
+  function stableId(prefix, value) {
+    const hash = crypto.createHash('sha1').update(value).digest('hex').slice(0, 12);
+    return `${prefix}_${hash}`;
+  }
+
+  function safeReadDir(dirPath) {
+    try {
+      return fs.readdirSync(dirPath, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+  }
+
+  function isIgnoredDirectory(name) {
+    const lower = name.toLowerCase();
+    return SKIP_DIR_NAMES.has(lower) || lower.startsWith('.visual-delivery');
+  }
+
+  function isDocumentFileName(fileName) {
+    const lower = fileName.toLowerCase();
+    return DOCUMENT_EXTENSIONS.has(path.extname(lower)) || lower === '.cursorrules';
+  }
+
+  function isRootDocumentCandidate(fileName) {
+    const lower = fileName.toLowerCase();
+    return /^readme(\..*)?\.md$/.test(lower)
+      || /^(agents|claude|codex|gemini|cursor)(\..*)?\.md$/.test(lower)
+      || lower === '.cursorrules'
+      || /^(overview|project|spec|context|memory|journal|log|harness)(\..*)?\.(md|txt|json|yaml|yml)$/.test(lower);
+  }
+
+  function classifyDocument(relPath) {
+    const normalized = toPosixPath(relPath).toLowerCase();
+    const base = path.basename(normalized);
+
+    if (/^(agents|claude|codex|gemini|cursor)(\..*)?\.md$/.test(base) || base === '.cursorrules') {
+      return 'agent_instructions';
+    }
+    if (base.startsWith('readme') || base === 'overview.md') {
+      return 'project_overview';
+    }
+    if (normalized.includes('memory') || normalized.includes('context')) {
+      return 'project_memory';
+    }
+    if (normalized.includes('journal') || normalized.includes('log')) {
+      return 'work_log';
+    }
+    if (normalized.startsWith('docs/') || normalized.startsWith('doc/') || normalized.startsWith('documentation/')) {
+      return 'project_documentation';
+    }
+    if (normalized.startsWith('references/') || normalized.startsWith('reference/')) {
+      return 'reference';
+    }
+    if (normalized.startsWith('notes/') || normalized.startsWith('note/')) {
+      return 'note';
+    }
+    if (normalized.startsWith('agents/') || normalized.startsWith('.claude/') || normalized.startsWith('.codex/')) {
+      return 'agent_harness';
+    }
+    return 'project_document';
+  }
+
+  function readFirstHeading(filePath) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      const heading = raw.split(/\r?\n/).find((line) => /^#\s+/.test(line));
+      return heading ? heading.replace(/^#\s+/, '').trim() : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function titleFromPath(absPath, relPath) {
+    const heading = path.extname(relPath).toLowerCase().startsWith('.md')
+      ? readFirstHeading(absPath)
+      : '';
+    if (heading) return heading;
+    return path.basename(relPath).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+  }
+
+  function hasWriteAccess(filePath) {
+    try {
+      fs.accessSync(filePath, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function isPathInside(parent, target) {
+    const relative = path.relative(parent, target);
+    return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+  }
+
+  function addDocument(documents, absPath, now) {
+    const resolved = path.resolve(absPath);
+    if (!isPathInside(projectRoot, resolved)) return;
+
+    let stat = null;
+    try {
+      stat = fs.statSync(resolved);
+    } catch {
+      return;
+    }
+    if (!stat.isFile()) return;
+
+    const relPath = toPosixPath(path.relative(projectRoot, resolved));
+    if (!relPath || documents.has(relPath)) return;
+
+    documents.set(relPath, {
+      id: stableId('doc', relPath),
+      source: 'external',
+      kind: classifyDocument(relPath),
+      path: relPath,
+      title: titleFromPath(resolved, relPath),
+      writable: hasWriteAccess(resolved),
+      size: stat.size,
+      updated_at: stat.mtime.toISOString(),
+      last_seen_at: now,
+      last_indexed_at: now,
+    });
+  }
+
+  function walkDocumentDirectory(dirPath, relDir, depth, documents, now) {
+    if (depth > MAX_DISCOVERY_DEPTH) return;
+
+    for (const entry of safeReadDir(dirPath)) {
+      const absPath = path.join(dirPath, entry.name);
+      const relPath = path.join(relDir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (!isIgnoredDirectory(entry.name)) {
+          walkDocumentDirectory(absPath, relPath, depth + 1, documents, now);
+        }
+        continue;
+      }
+
+      if (entry.isFile() && isDocumentFileName(entry.name)) {
+        addDocument(documents, absPath, now);
+      }
+    }
+  }
+
+  function discoverProjectDocuments(now) {
+    const documents = new Map();
+
+    for (const entry of safeReadDir(projectRoot)) {
+      const absPath = path.join(projectRoot, entry.name);
+      const lowerName = entry.name.toLowerCase();
+
+      if (entry.isFile()) {
+        if (isRootDocumentCandidate(entry.name)) {
+          addDocument(documents, absPath, now);
+        }
+        continue;
+      }
+
+      if (entry.isDirectory() && DOCUMENT_DIR_NAMES.has(lowerName) && !isIgnoredDirectory(entry.name)) {
+        walkDocumentDirectory(absPath, entry.name, 1, documents, now);
+      }
+    }
+
+    return Array.from(documents.values()).sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+      return a.path.localeCompare(b.path);
+    });
+  }
+
+  function sourceKindForPath(sourcePath) {
+    if (sourcePath === '.') return 'root_files';
+    const lower = sourcePath.toLowerCase();
+    if (lower.includes('memory') || lower.includes('context')) return 'project_memory';
+    if (lower.includes('journal') || lower.includes('log')) return 'work_log';
+    if (lower.includes('agent') || lower === '.claude' || lower === '.codex') return 'agent_harness';
+    if (lower.includes('reference')) return 'reference';
+    if (lower.includes('note')) return 'note';
+    return 'project_documentation';
+  }
+
+  function buildHarness(documents, previousHarness, now) {
+    const sourcesByPath = new Map();
+    for (const doc of documents) {
+      const firstSegment = doc.path.includes('/') ? doc.path.split('/')[0] : '.';
+      const source = sourcesByPath.get(firstSegment) || {
+        id: stableId('src', firstSegment),
+        path: firstSegment,
+        kind: sourceKindForPath(firstSegment),
+        source: 'external',
+        writable: false,
+        document_count: 0,
+      };
+      source.writable = source.writable || doc.writable;
+      source.document_count += 1;
+      sourcesByPath.set(firstSegment, source);
+    }
+
+    return {
+      version: 1,
+      project_root: projectRoot,
+      strategy: 'external-first',
+      managed_fallback: {
+        logs_path: toPosixPath(path.relative(projectRoot, skillManagedLogsPath)),
+        documents_path: toPosixPath(path.relative(projectRoot, skillManagedDocumentsPath)),
+      },
+      sources: Array.from(sourcesByPath.values()).sort((a, b) => a.path.localeCompare(b.path)),
+      discovered_at: previousHarness?.discovered_at || now,
+      updated_at: now,
+    };
+  }
+
+  async function rescanHarness() {
+    const now = new Date().toISOString();
+    const previousHarness = readJSONObject(projectHarnessPath) || {};
+    const documents = discoverProjectDocuments(now);
+    const harness = buildHarness(documents, previousHarness, now);
+    const documentIndex = {
+      version: 1,
+      project_root: projectRoot,
+      scanned_at: now,
+      documents,
+    };
+
+    await writeJSON(projectHarnessPath, harness);
+    await writeJSON(projectDocumentIndexPath, documentIndex);
+
+    return { harness, documentIndex };
+  }
+
+  async function ensureHarnessState() {
+    const harness = readJSONObject(projectHarnessPath);
+    const documentIndex = readJSONObject(projectDocumentIndexPath);
+    if (harness && documentIndex && Array.isArray(documentIndex.documents)) {
+      return { harness, documentIndex };
+    }
+    return rescanHarness();
+  }
+
+  function readDocumentIndex() {
+    const documentIndex = readJSONObject(projectDocumentIndexPath);
+    if (!documentIndex || !Array.isArray(documentIndex.documents)) {
+      return {
+        version: 1,
+        project_root: projectRoot,
+        scanned_at: null,
+        documents: [],
+      };
+    }
+    return documentIndex;
+  }
+
+  ensureHarnessState().catch((err) => {
+    console.error('Error initializing project harness:', err.message);
+  });
+
   // Project config
   app.get('/api/project', (req, res) => {
     try {
@@ -938,6 +1313,119 @@ function setupRoutes(app, dataDir) {
       broadcast('project_updated', next);
       res.json(next);
     } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // V4: Project harness and external document discovery
+  app.get('/api/harness', async (req, res) => {
+    try {
+      const { harness, documentIndex } = await ensureHarnessState();
+      res.json({
+        harness,
+        document_index: {
+          project_root: documentIndex.project_root,
+          scanned_at: documentIndex.scanned_at,
+          total: documentIndex.documents.length,
+        },
+      });
+    } catch (err) {
+      console.error('Error reading harness:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/harness/rescan', async (req, res) => {
+    try {
+      const { harness, documentIndex } = await rescanHarness();
+      broadcast('harness_rescanned', {
+        total: documentIndex.documents.length,
+        scanned_at: documentIndex.scanned_at,
+      });
+      res.json({
+        harness,
+        document_index: {
+          project_root: documentIndex.project_root,
+          scanned_at: documentIndex.scanned_at,
+          total: documentIndex.documents.length,
+        },
+      });
+    } catch (err) {
+      console.error('Error rescanning harness:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.get('/api/documents', async (req, res) => {
+    try {
+      await ensureHarnessState();
+      let { documents, scanned_at: scannedAt } = readDocumentIndex();
+      const { kind, search, limit, offset } = req.query;
+
+      if (kind) documents = documents.filter((doc) => doc.kind === kind);
+      if (search) {
+        const q = String(search).toLowerCase();
+        documents = documents.filter((doc) => (
+          doc.title.toLowerCase().includes(q)
+          || doc.path.toLowerCase().includes(q)
+          || doc.kind.toLowerCase().includes(q)
+        ));
+      }
+
+      const total = documents.length;
+      const off = parseInt(offset, 10) || 0;
+      const lim = parseInt(limit, 10) || 100;
+
+      res.json({
+        documents: documents.slice(off, off + lim),
+        total,
+        scanned_at: scannedAt,
+      });
+    } catch (err) {
+      console.error('Error listing documents:', err);
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.get('/api/documents/:id', async (req, res) => {
+    try {
+      await ensureHarnessState();
+      const { documents } = readDocumentIndex();
+      const document = documents.find((doc) => doc.id === req.params.id);
+
+      if (!document) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Document not found' } });
+      }
+
+      const absPath = path.resolve(projectRoot, document.path);
+      if (!isPathInside(projectRoot, absPath)) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Document path is outside project root' } });
+      }
+
+      const stat = fs.statSync(absPath);
+      const freshDocument = {
+        ...document,
+        size: stat.size,
+        updated_at: stat.mtime.toISOString(),
+        writable: hasWriteAccess(absPath),
+      };
+
+      if (stat.size > MAX_DOCUMENT_BYTES) {
+        return res.json({
+          document: freshDocument,
+          content: '',
+          truncated: true,
+          message: `Document exceeds ${MAX_DOCUMENT_BYTES} bytes and was not loaded.`,
+        });
+      }
+
+      res.json({
+        document: freshDocument,
+        content: fs.readFileSync(absPath, 'utf8'),
+        truncated: false,
+      });
+    } catch (err) {
+      console.error('Error reading document:', err);
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
