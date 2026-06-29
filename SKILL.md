@@ -1,386 +1,440 @@
 ---
 name: visual-delivery
 description: >
-  Delivers task outcomes through a generative UI web interface. Creates visual
-  result presentations with structured feedback collection. Use when the agent
-  should communicate work visually or collect structured feedback.
-  Skip for simple inline text answers.
+  Delivers task outcomes through a project-scoped visual workspace. Creates
+  structured reports, review pages, canvas/table/document/slides templates, logs,
+  and feedback loops for agent-user collaboration. Use when the agent should
+  communicate work visually or collect structured feedback. Skip for simple
+  inline text answers.
 ---
 
 ## Visual Delivery
 
-Deliver results through local generative UI pages.
+Visual Delivery is a project-level visual communication workspace for AI employee
+mode. A single runtime serves the current project through `{CWD}/.visual-delivery`.
+
+The core loop is:
+
+```text
+Report created -> log recorded -> user gives feedback
+-> feedback enters project pool -> agent handles feedback
+-> next report shows what changed
+```
 
 ### Paths
 
-```
+```text
 SKILL_DIR = {directory containing this SKILL.md}
 DATA_DIR  = {CWD}/.visual-delivery
 ```
 
-### Activation (CRITICAL)
+### Activation Rules
 
-When this skill is invoked, IMMEDIATELY execute Step 1 below. Do NOT:
-- Output a description or summary of the skill's capabilities
-- Paraphrase the skill description from the frontmatter
-- Ask "What would you like me to help you with?" or similar open-ended questions
+When this skill is invoked, immediately run Step 1. Do not describe the skill,
+print a capability menu, or ask an open-ended startup question.
 
-Instead, go directly to Step 1: start the service, show the URL, and ask the remote access question.
+Use this skill when:
 
-### User-facing output rules
+- the result benefits from visual review, comparison, or structured decisions
+- the task is part of an ongoing project
+- the user asks for a report, review page, visual delivery, design canvas, log,
+  or structured feedback collection
 
-- Keep startup responses concise and task-oriented.
-- Language MUST align with the user's current turn language.
-- If user writes Chinese, all skill output and generated UI text must be Chinese.
-- If user writes English, all skill output and generated UI text must be English.
-- Do NOT output capability menus like "你现在可以 1/2/3" after startup.
-- Do NOT ask open-ended questions like "你想做什么？" after startup.
-- Do NOT append onboarding checklists or "next step menus" unless user explicitly asks for options.
-- After startup, only report readiness + path info (if first run) + remote access choice.
+Skip visual delivery for short confirmations, tiny factual answers, or simple
+one-off replies unless the user explicitly asks for visual delivery.
 
-### Language model (required)
+### Language Model
 
-- Define `conversation_lang`: follows the user's current input language every turn.
-- Define `platform_lang`: language used by the Visual Delivery web UI.
-- On first initialization, set `platform_lang = conversation_lang` and persist it in `.visual-delivery/data/settings.json`.
-- For later turns, do NOT auto-switch `platform_lang` with conversation language.
-- `platform_lang` can only change when:
-  1) user changes it in Settings page, or
-  2) user explicitly asks to change platform language (then call `PUT /api/settings`).
-- Agent chat replies use `conversation_lang`; generated delivery page text uses `platform_lang`.
+- `conversation_lang`: follows the user's current message every turn.
+- `platform_lang`: language used by the Visual Delivery web UI.
+- On first initialization, set `platform_lang = conversation_lang`.
+- Later turns do not auto-switch `platform_lang`; change it only when the user
+  explicitly asks or changes Settings.
+- Agent chat replies use `conversation_lang`.
+- Report content and UI text use `platform_lang`.
 
-#### Locale system
+### Step 1: Ensure Service Is Running
 
-UI strings are stored in `{DATA_DIR}/data/locale.json`. The server injects this into every HTML response as `window.__VD_LOCALE__` — zero flash, immediate rendering in the correct language.
+Detect interaction language first:
 
-Only English has a built-in preset (`templates/locales/en.json`). For ALL other languages, the agent generates the locale at init time (Step 1b).
+- Chinese -> `zh`
+- English -> `en`
+- Japanese -> `ja`
+- Korean -> `ko`
+- otherwise use the closest appropriate language code
 
-### Step 1: Ensure service is running
+Tell the user briefly:
 
-Detect interaction language first — use the **actual language**, not just zh/en:
-- Chinese → `lang = zh`
-- English → `lang = en`
-- Japanese → `lang = ja`
-- Korean → `lang = ko`
-- Any other → use the appropriate language code
+- `zh`: `正在启动视觉交付服务...`
+- `en`: `Starting Visual Delivery service...`
 
-Tell user startup message in matched language:
-- `zh`: "正在启动视觉交付服务..."
-- `en`: "Starting Visual Delivery service..."
+Run:
 
 ```bash
 node {SKILL_DIR}/scripts/start.js --data-dir {DATA_DIR} --lang {lang}
 ```
 
-Parse stdout JSON:
+Parse stdout JSON.
 
 | `status` | Action |
 |----------|--------|
-| `started` | Continue. If `first_run` is true, tell user where design spec is created. |
+| `started` | Continue. If `first_run` is true, mention the initialized design spec path. |
 | `already_running` | Continue. |
-| `error` | Tell user the `message` and stop. |
+| `error` | Tell the user the `message` and stop. |
 
-Tell user ready message in matched language:
-- `zh`: "视觉交付服务已就绪：{local_url}"
-- `en`: "Visual Delivery ready at {local_url}".
+Ready message:
 
-If `first_run` is true, also tell user in matched language:
-- `zh`: "设计规范已初始化：{design_spec_path}"
-- `en`: "Design spec initialized at {design_spec_path}".
+- `zh`: `视觉交付服务已就绪：{local_url}`
+- `en`: `Visual Delivery ready at {local_url}`.
 
-#### Step 1.5: Analyze project (first run only)
-
-On first run, the Agent should **intelligently analyze the project** to set up the project name and description. Read project files to understand what this project is about:
-
-1. Read `package.json` (if exists) — get `name`, `description`, `version`
-2. Read `README.md` or `README.zh-CN.md` (if exists) — get project summary
-3. Read other relevant files (e.g., `SPEC.md`, project config files) to understand the project
-
-Then update the project configuration via API:
-
-```bash
-curl -s -X PUT http://localhost:3847/api/project \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name": "YOUR DETECTED PROJECT NAME",
-    "description": "YOUR DETECTED PROJECT DESCRIPTION (1-2 sentences)"
-  }'
-```
-
-This ensures the dashboard shows meaningful project information instead of "未命名项目".
-
-Immediately ask remote access choice in matched language (specific, not open-ended):
-
-- `zh`:
-  > 服务当前可通过本地地址访问：{local_url}
-  > 如需外部访问，请选择：
-  > 1) 开放 3847 端口用于局域网/公网访问
-  > 2) 启动临时公网隧道（需要 `cloudflared`）
-  >
-  > 回复：`仅本地` 或 `启动隧道`
-
-- `en`:
-  > The service is available locally at {local_url}.
-  > For external access, choose one:
-  > 1) Open network access to port 3847
-  > 2) Start a temporary public tunnel (requires `cloudflared`)
-  >
-  > Reply with: `local only` or `start tunnel`.
-
-If user chooses tunnel:
+If the user asks for remote access, run:
 
 ```bash
 node {SKILL_DIR}/scripts/start.js --data-dir {DATA_DIR} --remote
 ```
 
-If `remote_url` is returned, tell user the tunnel URL.
-
-#### Step 1b: Generate locale (if needed)
-
-Only English has a built-in locale preset. For ALL other languages (including Chinese), the agent generates the locale at runtime.
-
-Check if locale needs generation:
-
-1. Read `{DATA_DIR}/data/locale.json` (current locale) and `{DATA_DIR}/locales/en.json` (English reference with all keys).
-2. Generation is needed if ANY of these are true:
-   - `platform_lang` is not English AND the current locale values are in English (wrong language)
-   - The current locale has fewer keys than the English reference (new keys added after a template update)
-
-To generate: read the English reference `{DATA_DIR}/locales/en.json` (contains all required keys). Translate every value to `platform_lang`. Then write via API:
+Or persist the choice for the next restart:
 
 ```bash
-curl -s -X PUT http://localhost:3847/api/locale \
+curl -s -X PUT http://localhost:3847/api/settings \
   -H 'Content-Type: application/json' \
-  -d '{ "appTitle": "任务交付中心", "settings": "设置", ... }'
+  -d '{ "remote": true }'
 ```
 
-After writing, tell user to refresh the browser (or the next page load will pick up the new locale automatically).
+If the user asks to protect the site with a key, enable the access key in
+Settings or through the API:
 
-### Step 1.5: Check trigger mode
+```bash
+curl -s -X PUT http://localhost:3847/api/settings \
+  -H 'Content-Type: application/json' \
+  -d '{ "access_key_enabled": true }'
+```
 
-Read the current trigger mode from settings:
+Then share the key from `GET /api/settings`. Users can access the site with
+`?vd_key=...`; API clients can use the `x-vd-access-key` header.
+
+### Step 1b: Initialize Project Workspace
+
+On first run, identify the project and connect existing project knowledge before
+creating reports.
+
+1. Read likely project metadata:
+   - `package.json`
+   - `README.md` / `README.zh-CN.md`
+   - `AGENTS.md`, `CLAUDE.md`, docs, references, memory, notes, logs
+2. Update project config:
+
+```bash
+curl -s -X PUT http://localhost:3847/api/project \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "DETECTED PROJECT NAME",
+    "description": "1-2 sentence project summary"
+  }'
+```
+
+3. Scan or rescan the project harness:
+
+```bash
+curl -s -X POST http://localhost:3847/api/harness/rescan
+```
+
+Principles:
+
+- Prefer indexing external project documents over copying them.
+- Do not create duplicate logs when the project already has a working memory or
+  log system.
+- Use Visual Delivery managed logs/documents only as fallback.
+
+### Step 1c: Locale Setup
+
+English and Chinese have built-in presets. For all other languages, the agent
+may generate or update `{DATA_DIR}/data/locale.json` through:
+
+```bash
+curl -s http://localhost:3847/api/locale
+curl -s -X PUT http://localhost:3847/api/locale \
+  -H 'Content-Type: application/json' \
+  -d '{ "appTitle": "...", "settings": "...", "...": "..." }'
+```
+
+Generate or update locale when:
+
+- `platform_lang` is not English/Chinese and the current locale is English
+- the locale has fewer keys than `{DATA_DIR}/locales/en.json`
+
+### Step 2: Decide Whether To Create A Report
+
+Read settings:
 
 ```bash
 curl -s http://localhost:3847/api/settings
 ```
 
-Check the `trigger_mode` field:
-
 | `trigger_mode` | Behavior |
 |----------------|----------|
-| `auto` | Always proceed to Step 2 for every task result. |
-| `smart` (default) | Proceed to Step 2 only when the result benefits from visual presentation (structured data, code reviews, dashboards, comparisons, multi-item decisions). Skip for simple text answers, confirmations, or short responses — reply with plain text instead. |
-| `manual` | Only proceed to Step 2 when the user explicitly requests visual delivery (e.g., "show me visually", "deliver this", "create a delivery page"). Otherwise respond with plain text. |
+| `auto` | Always create a visual report for task outcomes. |
+| `smart` | Create a report for complex/structured work; respond inline for simple replies. |
+| `manual` | Create a report only when explicitly requested. |
 
-If the current interaction does not qualify based on trigger_mode, respond normally with plain text and skip Steps 2–4.
+### Step 3: Route Report Template
 
-### Step 2: Generate delivery page (Generative UI)
+Before generating the report, choose a template and briefly state the reason.
+The agent chooses by default; the user may override.
 
-Generate `content.type = "generated_html"` — a complete, self-contained HTML page.
+Structure layer:
 
-Pipeline:
+- `standard-report`: one focused report, short-cycle or single artifact
+- `complex-review`: multi-section review with artifacts, reasoning, decisions,
+  and feedback prompts
 
-1. **Requirement Analysis**: define goals, audience, key decision points.
-2. **Design Planning**: choose layout, visual style, interaction strategy. Read design tokens from `GET /api/design-tokens` and use `var(--vds-*)` CSS variables.
-3. **HTML Generation**: produce a full `<!DOCTYPE html>` page with inline CSS and JS. See [references/generative-ui-guide.md](references/generative-ui-guide.md) for rules.
-4. **Feedback Hooks (REQUIRED)**: every reviewable item MUST have per-item choice options using `data-vd-feedback-*` button attributes. Options must be **contextually specific** to the content (not generic approve/reject). Each item group MUST also include an always-visible "Other..." text input form for free-text feedback. See [references/generative-ui-guide.md](references/generative-ui-guide.md) for the survey model and patterns. Annotation feedback (text selection) is automatic — no agent action needed.
-5. **Self-check**: before publishing, verify the HTML contains at least one element with `data-vd-feedback-action`. If none exists, go back to step 4.
-6. **Publish**: POST to `/api/deliveries`.
+Complex-review routing:
 
-Core principles:
+- Use mixed sections instead of repeating one presentation layer.
+- Use `document` for context, rationale, and conclusions.
+- Use `table` for comparisons, decision matrices, risks, and structured checks.
+- Use `canvas` for design creativity, brainstorming, inspiration collection, and
+  product/design co-creation.
+- Use `slides` for step-by-step stakeholder review and decision walkthroughs.
+- When `content` is omitted, `/api/reports` creates a default mixed-section
+  `report_template` based on the requested primary presentation.
 
-- **Interactive first**: build functional widgets, charts, forms — not walls of text.
-- **Visual richness**: use colors, grids, cards, gradients, icons, animations.
-- **Self-contained**: single HTML string with inline `<style>` and `<script>`. No external files except CDN libraries.
-- **Design tokens**: reference `var(--vds-colors-primary)`, `var(--vds-colors-text)`, etc. The platform injects token values at runtime.
-- **Allowed CDNs**: Tailwind CSS (`https://cdn.tailwindcss.com`), Chart.js, Mermaid, D3.js, Highlight.js, and similar visualization/utility libraries.
-- **File links**: to reference local project files, use `http://localhost:3847/api/files/view?path=ABSOLUTE_PATH`. The platform serves files within the project directory. For external URLs, use `target="_blank"` (iframe sandbox allows popups).
-- **Responsive**: support desktop and mobile viewports.
-- **No placeholders**: every element must be functional with real data.
-- **No hidden content**: all content and feedback buttons must be fully visible by default. NEVER use `<details>`/`<summary>`, accordions, collapsible panels, or click-to-expand patterns.
-- **Mandatory per-item feedback (survey model)**: every reviewable item MUST have `data-vd-feedback-*` choice buttons plus an always-visible "Other..." text input form. Options must be **contextually specific** — tailored to the actual content, not generic. Do NOT generate global/overall feedback forms — the platform sidebar handles that.
-- **Predefined options = buttons**: use `<button>` elements with `data-vd-feedback-*` for predefined choices. Each button click = one complete feedback action.
-- **"Other..." option = inline form**: each item group MUST include a `<form data-vd-feedback-action="other_comment">` with a text input and submit button. The form must be always visible (not hidden behind a click). Use the same `data-vd-feedback-item-id` as the predefined buttons.
-- **Mutual exclusion**: all buttons and the "Other..." form for the same item share the same `data-vd-feedback-item-id`. Selecting a predefined option deselects any previous choice; submitting "Other..." text replaces any selected predefined option.
+Presentation layer:
 
-Per-item feedback example (survey-style choices):
+- `document`: analysis, rationale, proposals, prose-heavy reports
+- `table`: data, comparisons, evaluation matrices, structured rows
+- `canvas`: design ideation, brainstorming, inspiration collection, product
+  design thinking, spatial/visual collaboration
+- `slides`: multi-step narrative, stakeholder walkthrough, pitch/review deck
 
-```html
-<!-- Code review: contextually specific options for each issue -->
-<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--vds-colors-border,#e2e8f0)">
-  <button data-vd-feedback-action="accept_fix"
-          data-vd-feedback-label="Issue #1: Missing null check"
-          data-vd-feedback-item-id="issue-1">
-    Accept Fix
-  </button>
-  <button data-vd-feedback-action="defer"
-          data-vd-feedback-label="Issue #1: Missing null check"
-          data-vd-feedback-item-id="issue-1">
-    Defer
-  </button>
-  <button data-vd-feedback-action="wont_fix"
-          data-vd-feedback-label="Issue #1: Missing null check"
-          data-vd-feedback-item-id="issue-1">
-    Won't Fix
-  </button>
-  <!-- Always-visible "Other..." text input -->
-  <form data-vd-feedback-action="other_comment"
-        data-vd-feedback-label="Issue #1: Missing null check"
-        data-vd-feedback-item-id="issue-1"
-        style="display:inline-flex; gap:6px; align-items:center; margin:0">
-    <input type="text" name="text" placeholder="Other..."
-           style="width:140px; padding:6px 10px; border:1px solid var(--vds-colors-border,#e2e8f0); border-radius:8px; font-size:13px; font-family:inherit">
-    <button type="submit"
-            style="padding:6px 12px; border:none; border-radius:8px; background:#6b7280; color:#fff; font-size:13px; cursor:pointer">
-      Submit
-    </button>
-  </form>
-</div>
+Canvas mode:
+
+- Use for design creativity, brainstorming, inspiration collection, product
+  design direction, and visual collaboration.
+- Treat it as a project co-creation workspace, not a static image report or a
+  one-off canvas screenshot.
+- The implementation uses `tldraw` and follows the local infinite-canvas
+  collaboration direction of Cowart.
+- Agent can continuously add material, organize ideas, place options, explain
+  decisions, and advance product/design thinking on the canvas.
+- User can annotate, add material, select regions, and submit feedback in the
+  same canvas space.
+- Persist canvas state in the current project workspace. Later reports may
+  reference the canvas page, selected nodes, or snapshots as artifacts.
+
+Template feedback targets:
+
+- Document templates should expose `document_paragraph` targets with paragraph
+  line and quote metadata.
+- Table templates should expose sortable/filterable views plus `table_row` and
+  `table_field` targets.
+- Canvas templates should expose `canvas_node` and `canvas_selection` targets.
+- Slides templates should expose `slide_page` targets and `slide_decision`
+  targets for pages that need confirmation.
+
+Routing explanation example:
+
+```text
+这次汇报包含多个方案、设计推理和待确认点，我会使用 complex-review；
+其中视觉方案部分用 canvas，决策对比用 table，结论用 document。
 ```
 
-The platform Bridge Script automatically captures clicks and routes them to the feedback sidebar. Agent does NOT need to write any postMessage code.
+### Step 4: Create Report
 
-### Step 3: Create delivery
+Create reports through `/api/reports`, not `/api/deliveries`.
 
-Tell user: "Preparing visual delivery..."
+Minimal report:
 
 ```bash
-curl -s -X POST http://localhost:3847/api/deliveries \
+curl -s -X POST http://localhost:3847/api/reports \
   -H 'Content-Type: application/json' \
   -d '{
-    "mode": "task_delivery",
-    "title": "YOUR TITLE",
-    "metadata": {
-      "project_name": "YOUR PROJECT",
-      "task_name": "YOUR TASK",
-      "generated_at": "ISO_TIME",
-      "audience": "stakeholder"
-    },
-    "content": {
-      "type": "generated_html",
-      "html": "<!DOCTYPE html><html>...YOUR GENERATED PAGE...</html>"
-    }
+    "title": "REPORT TITLE",
+    "structure": "standard-report",
+    "presentation": "document",
+    "routing_reason": "Why this template was selected"
   }'
 ```
 
-Tell user: "View the delivery at {url}".
+Rich report with sections:
 
-### Step 4: Process user feedback
-
-When user submits feedback via the UI, the delivery status changes to `pending_feedback`.
-
-#### 4a: Read feedback (lightweight)
-
-Use ONE of these methods — both avoid loading the full HTML content:
-
-**Method 1 — API (preferred):**
-
-```bash
-curl -s http://localhost:3847/api/deliveries/{DELIVERY_ID}/feedback
-```
-
-Returns:
 ```json
 {
-  "delivery_id": "d_...",
-  "status": "pending_feedback",
-  "pending_count": 2,
-  "pending_feedback": [
-    {
-      "id": "f_...",
-      "kind": "interactive",
-      "payload": { "action": "accept_fix", "item_id": "issue-1", "label": "..." },
-      "handled": false
-    }
-  ],
-  "feedback": [...]
+  "title": "REPORT TITLE",
+  "structure": "complex-review",
+  "presentation": "canvas",
+  "routing_reason": "Canvas is appropriate because this is a design ideation review.",
+  "content": {
+    "type": "report_template",
+    "version": 1,
+    "structure": "complex-review",
+    "presentation": "canvas",
+    "sections": [
+      {
+        "id": "sec-direction",
+        "title": "方向探索",
+        "status": "draft",
+        "narrative": "What the agent explored and why.",
+        "presentation": "canvas",
+        "artifact": {
+          "type": "canvas",
+          "mode": "tldraw",
+          "tldraw_snapshot": null,
+          "seed_nodes": [
+            { "id": "agent-brief", "title": "Agent 工作区", "body": "放置方案和推理。" },
+            { "id": "inspiration", "title": "灵感与素材", "body": "收集参考和截图。" },
+            { "id": "feedback", "title": "用户反馈区", "body": "用户批注和补充。" }
+          ]
+        }
+      }
+    ]
+  }
 }
 ```
 
-**Method 2 — Direct file read:**
+After creation, tell the user:
 
+```text
+{local_url}/reports?report={report_id}
 ```
-{DATA_DIR}/data/deliveries/{DELIVERY_ID}/feedback.json
-```
 
-Read the file and filter for `handled === false` entries.
+### Step 5: Record Work Transparently
 
-#### 4b: Act on feedback
+Every important action should be recorded, but avoid duplicate project logs.
 
-Process each pending feedback item according to its `payload.action` and `payload.item_id`. Perform the actual work (fix code, update docs, etc.).
-
-#### 4c: Update delivery page (incremental — NOT full regeneration)
-
-After processing feedback, update the EXISTING delivery HTML to visually mark which items were addressed. Do NOT regenerate the entire page from scratch.
-
-Strategy: read the current HTML from `GET /api/deliveries/{DELIVERY_ID}`, then make **targeted edits** to the relevant sections only. For each processed item:
-- Add a visual "resolved" indicator (e.g., green checkmark, strikethrough, "✓ Resolved" badge)
-- Keep all other content unchanged
-
-Then push the updated HTML:
+Use project harness first:
 
 ```bash
-curl -s -X PUT http://localhost:3847/api/deliveries/{DELIVERY_ID}/content \
+curl -s http://localhost:3847/api/harness
+```
+
+If no appropriate external log/memory exists, use managed logs:
+
+```bash
+curl -s -X POST http://localhost:3847/api/logs \
   -H 'Content-Type: application/json' \
   -d '{
-    "content": {
-      "type": "generated_html",
-      "html": "<!DOCTYPE html>...INCREMENTALLY UPDATED PAGE..."
+    "type": "auto",
+    "event": "report_created",
+    "title": "Created report: ...",
+    "reportId": "r_..."
+  }'
+```
+
+Log entries should explain:
+
+- what happened
+- why it happened
+- related report/document/feedback ids
+- next action
+
+### Step 6: Process User Feedback
+
+Feedback is project-level work, even when submitted inside a report.
+
+Read report feedback:
+
+```bash
+curl -s http://localhost:3847/api/reports/{REPORT_ID}/feedback
+```
+
+Read project feedback pool:
+
+```bash
+curl -s http://localhost:3847/api/feedback
+curl -s 'http://localhost:3847/api/feedback?status=tracked'
+```
+
+Feedback states:
+
+```text
+tracked -> addressed -> confirmed -> archived
+```
+
+When acting on feedback:
+
+1. Read feedback content and target.
+2. Modify the actual artifact, code, document, table, canvas, or slides.
+3. Update the existing report or create the next report.
+4. Resolve feedback with a concrete change record.
+
+Resolve:
+
+```bash
+curl -s -X POST http://localhost:3847/api/reports/{REPORT_ID}/feedback/{FEEDBACK_ID}/resolve \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "changeRecord": {
+      "addressed_in_report_id": "r_...",
+      "change_summary": "What changed",
+      "diff_refs": ["sec-...", "file-or-artifact-ref"],
+      "needs_confirmation": true
     }
   }'
 ```
 
-**Critical**: The updated HTML should be the original with minimal edits — typically just adding CSS classes or small HTML snippets to resolved items. This saves tokens and time vs regenerating the full page.
-
-#### 4d: Resolve feedback
-
-Mark the processed feedback items as handled:
+Confirm after user accepts:
 
 ```bash
-curl -s -X POST http://localhost:3847/api/deliveries/{DELIVERY_ID}/feedback/resolve \
+curl -s -X POST http://localhost:3847/api/reports/{REPORT_ID}/feedback/{FEEDBACK_ID}/confirm
+```
+
+The report page must show addressed/confirmed feedback as a visible change
+record strip so the user can see what changed without searching history.
+
+### Step 7: Update Canvas Reports
+
+For canvas reports, persist tldraw snapshots:
+
+```bash
+curl -s -X PUT http://localhost:3847/api/reports/{REPORT_ID}/canvas \
   -H 'Content-Type: application/json' \
   -d '{
-    "feedback_ids": ["f_...", "f_..."],
-    "handled_by": "agent"
+    "sectionId": "sec-...",
+    "snapshot": { "document": { "store": {} }, "session": {} }
   }'
 ```
 
-When all feedback is resolved, delivery status returns to `normal`.
+When the agent adds canvas content, ensure the content is meaningful:
 
-User can also revoke (undo) unhandled feedback via the sidebar UI, or agent can revoke programmatically:
+- place idea clusters, references, options, constraints, and decision points
+- separate agent work areas, user feedback areas, and shared decision areas
+- keep user feedback areas visible
+- connect canvas nodes and selected regions to feedback targets when possible
 
-```bash
-POST /api/deliveries/:id/feedback/revoke
+Canvas feedback targets should identify the reviewed object:
+
+```json
+{
+  "kind": "canvas_node|canvas_selection",
+  "section_id": "sec-...",
+  "node_id": "agent-zone",
+  "shape_ids": ["shape:..."],
+  "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }
+}
 ```
 
-### Step 5: Design and platform settings
+Document reports should expose heading navigation and paragraph-level targets:
 
-- Read current design tokens:
-
-```bash
-GET /api/design-tokens
+```json
+{
+  "kind": "document_paragraph",
+  "section_id": "sec-...",
+  "paragraph_line": 12,
+  "quote": "Paragraph excerpt..."
+}
 ```
 
-- Read/update platform fields (`name`, `logo_url`, `slogan`, `visual_style`):
+### Step 8: Legacy Delivery Compatibility
 
-```bash
-GET /api/settings
-PUT /api/settings
-```
-
-- Language is set at initialization time (Step 1). The Settings page displays it as read-only. To change language, re-initialize the skill with the new language.
-
-- Update locale strings (agent-generated):
-
-```bash
-GET /api/locale
-PUT /api/locale
-```
-
-Tell user after update: "Settings updated. The UI refreshes in real time."
+`/api/deliveries` remains for old generated HTML deliveries and existing pages.
+Do not use it for new V4 reports unless maintaining legacy content. New work
+should use `/api/reports`.
 
 ### References
 
+- Product design: [docs/product-design-v4.md](docs/product-design-v4.md)
+- Implementation plan: [docs/implementation-plan-v4.md](docs/implementation-plan-v4.md)
 - API endpoints: [references/api.md](references/api.md)
 - Generative UI guide: [references/generative-ui-guide.md](references/generative-ui-guide.md)
 - Feedback payload model: [references/feedback-schema.md](references/feedback-schema.md)

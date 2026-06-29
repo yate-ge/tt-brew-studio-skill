@@ -1,4 +1,4 @@
-# API Reference (v2)
+# API Reference
 
 ## Table of Contents
 
@@ -7,6 +7,8 @@
 - [Delivery APIs](#delivery-apis)
 - [Feedback APIs](#feedback-apis)
 - [Settings APIs](#settings-apis)
+- [Locale APIs](#locale-apis)
+- [Report APIs](#report-apis)
 - [Harness and Documents APIs](#harness-and-documents-apis)
 - [File View](#file-view)
 - [Design Tokens](#design-tokens)
@@ -20,6 +22,11 @@
 ## Health
 
 ### `GET /health`
+
+### `GET /api/health`
+
+Both endpoints return the same health payload. `/api/health` exists for API
+namespace checks used by self-dev instructions and clients.
 
 Response:
 
@@ -143,6 +150,48 @@ Append execution timeline event(s).
 ```
 
 ## Feedback APIs
+
+V4 uses a project-level feedback pool. Legacy delivery feedback remains for old
+delivery pages.
+
+### `GET /api/feedback`
+
+Query params:
+
+- `status = tracked|addressed|confirmed|archived`
+
+Returns project-level feedback.
+
+### `POST /api/feedback`
+
+Creates global project feedback.
+
+```json
+{
+  "content": "Feedback text",
+  "source": { "type": "report", "report_id": "r_..." },
+  "author": "user"
+}
+```
+
+Project feedback creation writes a transparency log entry. The log uses the
+harness-selected external log target when available and falls back to managed
+`.visual-delivery/data/logs.json`.
+
+### `POST /api/feedback/:id/resolve`
+
+Marks feedback as `addressed` and stores a change record.
+
+### `POST /api/feedback/:id/confirm`
+
+Marks feedback as `confirmed`.
+
+### `POST /api/feedback/:id/archive`
+
+Marks feedback as `archived`. If the feedback originated from a report, the
+report feedback mirror is updated too.
+
+Resolve, confirm, and archive operations also write transparency log entries.
 
 ### `GET /api/deliveries/:id/feedback`
 
@@ -285,6 +334,10 @@ Returns platform configuration:
   "language": "en",
   "language_explicit": true,
   "trigger_mode": "smart",
+  "port": 3847,
+  "remote": false,
+  "access_key_enabled": false,
+  "access_key": "vdk_...",
   "platform": {
     "name": "Task Delivery Center",
     "slogan": "Make feedback clear. Let agents work easier."
@@ -294,17 +347,251 @@ Returns platform configuration:
 
 `trigger_mode` values: `"auto"` | `"smart"` (default) | `"manual"`
 
+`remote=true` is read by `scripts/start.js` on the next restart and binds the
+server to `0.0.0.0`; `remote=false` binds to localhost. `access_key_enabled`
+activates access-key protection for pages and APIs. Clients can provide the key
+with `?vd_key=...`, `x-vd-access-key`, or the `vd_access_key` cookie.
+
 ### `PUT /api/settings`
 
 ```json
 {
   "trigger_mode": "auto",
+  "remote": true,
+  "access_key_enabled": true,
+  "access_key": "vdk_...",
+  "rotate_access_key": false,
   "platform": {
     "name": "My Delivery Hub",
     "slogan": "..."
   }
 }
 ```
+
+Use `"rotate_access_key": true` to generate a new key server-side.
+
+## Locale APIs
+
+### `GET /api/locale`
+
+Returns the current UI locale object injected into the app shell.
+
+### `PUT /api/locale`
+
+Replaces the current UI locale object.
+
+```json
+{
+  "appTitle": "Visual Delivery",
+  "settings": "Settings"
+}
+```
+
+## Report APIs
+
+V4 reports are project-scoped records stored under
+`.visual-delivery/data/reports/{report_id}/`. A report owns its template
+content and report-level feedback files, while committed feedback is also
+mirrored into the project-level feedback pool.
+
+### `POST /api/reports`
+
+Creates a canonical report.
+
+Request:
+
+```json
+{
+  "title": "Design direction review",
+  "structure": "standard-report|complex-review",
+  "presentation": "document|table|canvas|slides",
+  "routing_reason": "Why the agent selected this template",
+  "content": {
+    "type": "report_template",
+    "sections": []
+  }
+}
+```
+
+If `content` is omitted, the server creates a default `report_template`.
+For `standard-report`, the default contains one section using the requested
+presentation. For `complex-review`, the default contains mixed sections:
+
+- `document` for context and explanation
+- the requested primary presentation for the main artifact
+- `table` for structured decisions when useful
+- `slides` for step-by-step review when useful
+
+For `canvas` reports, sections include a tldraw artifact with role-aware seed
+nodes and regions. The default canvas schema separates:
+
+- `agent` nodes for agent work, reasoning, options, and sources
+- `user` nodes for user comments, added material, and annotations
+- `shared` nodes for decisions, tradeoffs, and next actions
+
+Response: the hydrated report, including `feedback`, `drafts`, and
+`pending_feedback_count`.
+
+### `GET /api/reports`
+
+Query params:
+
+- `status`
+- `search`
+- `limit`
+- `offset`
+
+Returns canonical reports plus legacy deliveries mapped as read-compatible
+reports.
+
+### `GET /api/reports/:id`
+
+Returns a hydrated report.
+
+Important fields:
+
+- `structure`
+- `presentation`
+- `content.type = "report_template"` for V4 template reports
+- `content.sections[]`
+- `content.change_records[]` for visible feedback-loop summaries
+- `feedback[]`
+- `drafts[]`
+- `pending_feedback_count`
+
+### `PUT /api/reports/:id`
+
+Updates report metadata and content. The `id` is immutable.
+
+### `PUT /api/reports/:id/canvas`
+
+Persists a tldraw snapshot for a canvas section.
+
+Request:
+
+```json
+{
+  "sectionId": "sec_...",
+  "snapshot": {
+    "document": { "store": {} },
+    "session": {}
+  }
+}
+```
+
+### `POST /api/reports/:id/feedback/draft`
+
+Saves report feedback drafts for the sidebar.
+
+```json
+{ "items": [{ "kind": "interactive", "payload": {} }] }
+```
+
+### `POST /api/reports/:id/feedback/commit`
+
+Commits feedback drafts. New feedback entries are written to both
+`reports/{id}/feedback.json` and `.visual-delivery/data/feedback.json`, and a
+transparency log entry records that the report feedback entered the project
+feedback pool.
+
+Common V4 template feedback targets:
+
+```json
+{
+  "target": {
+    "kind": "document_paragraph",
+    "section_id": "sec-doc",
+    "paragraph_line": 12,
+    "quote": "Paragraph excerpt"
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "table_field",
+    "section_id": "sec-table",
+    "column_key": "score",
+    "column_label": "评分"
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "table_row",
+    "section_id": "sec-table",
+    "row_id": "option-a",
+    "row_index": 1,
+    "row_label": "方案 A"
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "canvas_node",
+    "section_id": "sec-canvas",
+    "node_id": "agent-zone",
+    "shape_id": "shape:vd-sec-canvas-agent-zone"
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "slide_page",
+    "section_id": "sec-slides",
+    "slide_id": "slide-01",
+    "slide_index": 1
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "slide_decision",
+    "section_id": "sec-slides",
+    "slide_id": "slide-02",
+    "slide_index": 2,
+    "decision_id": "decision-template-choice",
+    "decision_status": "needs_decision",
+    "prompt": "是否采用画布模式作为默认创意评审模板？"
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "canvas_selection",
+    "section_id": "sec-canvas",
+    "shape_ids": ["shape:..."],
+    "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }
+  }
+}
+```
+
+### `POST /api/reports/:id/feedback/revoke`
+
+Removes unhandled feedback entries from the report and project feedback pool,
+then writes a transparency log entry.
+
+### `POST /api/reports/:id/feedback/:feedbackId/resolve`
+
+Marks feedback as `addressed`, sets `handled=true` for legacy UI compatibility,
+stores a `changeRecord`, mirrors the state into the project feedback pool, and
+writes a transparency log entry.
+
+### `POST /api/reports/:id/feedback/:feedbackId/confirm`
+
+Marks addressed feedback as `confirmed`, mirrors the state into the project
+feedback pool, and writes a transparency log entry.
 
 ## Harness and Documents APIs
 
@@ -351,6 +638,38 @@ Returns the discovered project harness and document-index summary.
 
 Rescans the project root for external documents and rewrites
 `harness.json` / `document-index.json`.
+
+### `POST /api/harness/sources`
+
+Adds a manual harness source. The path must stay inside the project root.
+
+```json
+{
+  "path": "docs",
+  "title": "Project docs",
+  "kind": "project_documentation",
+  "log_target": false
+}
+```
+
+### `PUT /api/harness/sources/:id`
+
+Updates a source display name, kind, enabled state, or log-target state.
+
+```json
+{
+  "title": "Work log",
+  "kind": "work_log",
+  "enabled": true,
+  "log_target": true
+}
+```
+
+When `log_target=true`, the source becomes the preferred transparency log target.
+
+### `DELETE /api/harness/sources/:id`
+
+Disables a source without deleting project files.
 
 ### `GET /api/documents`
 
@@ -433,6 +752,9 @@ Server-to-client events:
 - `design_updated`
 - `content_updated`
 - `feedback_revoked`
+- `harness_updated`
+- `harness_rescanned`
+- `locale_updated`
 
 Event payload shape:
 

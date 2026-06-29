@@ -37,6 +37,7 @@ for PLATFORM_DIR in "${PLATFORMS[@]}"; do
            --exclude='.DS_Store' \
            --exclude='node_modules' \
            --exclude='.visual-delivery*' \
+           --exclude='output' \
            --exclude='.codebuddy' \
            --exclude='.learnbuddy' \
            --exclude='.workbuddy' \

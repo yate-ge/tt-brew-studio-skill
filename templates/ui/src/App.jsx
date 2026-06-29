@@ -4,7 +4,6 @@ import AppLayout from './components/layout/AppLayout';
 import ProjectHome from './pages/ProjectHome';
 import Reports from './pages/Reports';
 import ReportNew from './pages/ReportNew';
-import ReportDetail from './pages/ReportDetail';
 import Logs from './pages/Logs';
 import Settings from './pages/Settings';
 import DeliveryPage from './pages/DeliveryPage';
@@ -20,7 +19,7 @@ export default function App() {
         <Route path="/logs" element={<Logs />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/reports/new" element={<ReportNew />} />
-        <Route path="/reports/:reportId" element={<ReportDetail />} />
+        <Route path="/reports/:reportId" element={<Reports />} />
         <Route path="/d/:id" element={<DeliveryPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

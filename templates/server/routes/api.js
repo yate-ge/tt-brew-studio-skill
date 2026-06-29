@@ -10,6 +10,13 @@ const DELIVERY_STATUSES = ['normal', 'pending_feedback'];
 const ALIGNMENT_STATES = ['active', 'resolved', 'canceled'];
 
 const DEFAULT_SETTINGS = {
+  language: 'en',
+  language_explicit: false,
+  trigger_mode: 'smart',
+  port: 3847,
+  remote: false,
+  access_key_enabled: false,
+  access_key: '',
   platform: {
     name: 'Visual Delivery',
     logo_url: '',
@@ -17,6 +24,34 @@ const DEFAULT_SETTINGS = {
     visual_style: 'executive-brief',
   },
 };
+
+function generateAccessKey() {
+  return `vdk_${crypto.randomBytes(18).toString('base64url')}`;
+}
+
+function normalizeSettings(stored = {}) {
+  const port = Number.parseInt(stored.port, 10);
+  const normalizedPort = port >= 1024 && port <= 65535 ? port : DEFAULT_SETTINGS.port;
+  const triggerMode = ['auto', 'smart', 'manual'].includes(stored.trigger_mode)
+    ? stored.trigger_mode
+    : DEFAULT_SETTINGS.trigger_mode;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...stored,
+    trigger_mode: triggerMode,
+    port: normalizedPort,
+    remote: stored.remote === true,
+    access_key_enabled: stored.access_key_enabled === true,
+    access_key: typeof stored.access_key === 'string' && stored.access_key.trim()
+      ? stored.access_key.trim()
+      : generateAccessKey(),
+    platform: {
+      ...DEFAULT_SETTINGS.platform,
+      ...(stored.platform || {}),
+    },
+  };
+}
 
 function ensureDeliveryContent(content) {
   if (!content || typeof content !== 'object') return false;
@@ -308,18 +343,19 @@ function setupRoutes(app, dataDir, options = {}) {
 
   function readSettings() {
     const stored = readJSONObject(settingsPath);
-    if (!stored) return DEFAULT_SETTINGS;
-
-    return {
-      platform: {
-        ...DEFAULT_SETTINGS.platform,
-        ...(stored.platform || {}),
-      },
-    };
+    return normalizeSettings(stored || {});
   }
 
   // Health
   app.get('/health', (req, res) => {
+    res.json({
+      status: 'ok',
+      uptime: Math.floor(process.uptime()),
+      version: '2.0.0',
+    });
+  });
+
+  app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
       uptime: Math.floor(process.uptime()),
@@ -923,8 +959,23 @@ function setupRoutes(app, dataDir, options = {}) {
     try {
       const current = readSettings();
       const input = req.body || {};
+      const nextPort = Number.parseInt(input.port, 10);
+      const hasValidPort = nextPort >= 1024 && nextPort <= 65535;
+      const nextTriggerMode = ['auto', 'smart', 'manual'].includes(input.trigger_mode)
+        ? input.trigger_mode
+        : current.trigger_mode;
 
       const next = {
+        ...current,
+        language: input.language || current.language,
+        language_explicit: input.language_explicit === undefined ? current.language_explicit : !!input.language_explicit,
+        trigger_mode: nextTriggerMode,
+        port: hasValidPort ? nextPort : current.port,
+        remote: input.remote === undefined ? current.remote : !!input.remote,
+        access_key_enabled: input.access_key_enabled === undefined ? current.access_key_enabled : !!input.access_key_enabled,
+        access_key: input.rotate_access_key
+          ? generateAccessKey()
+          : (typeof input.access_key === 'string' && input.access_key.trim() ? input.access_key.trim() : current.access_key),
         platform: {
           ...current.platform,
           ...(input.platform || {}),
@@ -953,6 +1004,40 @@ function setupRoutes(app, dataDir, options = {}) {
       console.error('Error reading tokens.json:', err.message);
       res.status(500).json({
         error: { code: 'INTERNAL_ERROR', message: 'Invalid design tokens' },
+      });
+    }
+  });
+
+  // Locale strings injected into the UI shell.
+  app.get('/api/locale', (req, res) => {
+    const localePath = path.join(dataRoot, 'locale.json');
+    try {
+      const locale = readJSONObject(localePath) || {};
+      res.status(200).json(locale);
+    } catch (err) {
+      console.error('Error reading locale.json:', err.message);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: 'Invalid locale file' },
+      });
+    }
+  });
+
+  app.put('/api/locale', async (req, res) => {
+    const localePath = path.join(dataRoot, 'locale.json');
+    try {
+      const locale = req.body;
+      if (!locale || Array.isArray(locale) || typeof locale !== 'object') {
+        return res.status(400).json({
+          error: { code: 'INVALID_REQUEST', message: 'locale must be an object' },
+        });
+      }
+      await writeJSON(localePath, locale);
+      broadcast('locale_updated', locale);
+      res.status(200).json(locale);
+    } catch (err) {
+      console.error('Error updating locale.json:', err.message);
+      res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message },
       });
     }
   });
@@ -1223,6 +1308,9 @@ function setupRoutes(app, dataDir, options = {}) {
 
   function buildHarness(documents, previousHarness, now) {
     const sourcesByPath = new Map();
+    const previousSources = Array.isArray(previousHarness?.sources) ? previousHarness.sources : [];
+    const previousByPath = new Map(previousSources.map((source) => [source.path, source]));
+
     for (const doc of documents) {
       const firstSegment = doc.path.includes('/') ? doc.path.split('/')[0] : '.';
       const source = sourcesByPath.get(firstSegment) || {
@@ -1238,6 +1326,38 @@ function setupRoutes(app, dataDir, options = {}) {
       sourcesByPath.set(firstSegment, source);
     }
 
+    for (const [sourcePath, source] of sourcesByPath.entries()) {
+      const previous = previousByPath.get(sourcePath);
+      if (previous) {
+        sourcesByPath.set(sourcePath, {
+          ...source,
+          id: previous.id || source.id,
+          title: previous.title || source.title,
+          enabled: previous.enabled !== false,
+          manual: !!previous.manual,
+          log_target: !!previous.log_target,
+        });
+      } else {
+        sourcesByPath.set(sourcePath, {
+          ...source,
+          enabled: true,
+          manual: false,
+          log_target: false,
+        });
+      }
+    }
+
+    for (const previous of previousSources) {
+      if (previous.manual && previous.enabled !== false && !sourcesByPath.has(previous.path)) {
+        sourcesByPath.set(previous.path, {
+          ...previous,
+          document_count: 0,
+        });
+      }
+    }
+
+    const transparencyTarget = previousHarness?.transparency_target || previousSources.find((source) => source.log_target)?.path || null;
+
     return {
       version: 1,
       project_root: projectRoot,
@@ -1247,9 +1367,46 @@ function setupRoutes(app, dataDir, options = {}) {
         documents_path: toPosixPath(path.relative(projectRoot, skillManagedDocumentsPath)),
       },
       sources: Array.from(sourcesByPath.values()).sort((a, b) => a.path.localeCompare(b.path)),
+      transparency_target: transparencyTarget,
       discovered_at: previousHarness?.discovered_at || now,
       updated_at: now,
     };
+  }
+
+  function summarizeDocumentIndex(documentIndex) {
+    return {
+      project_root: documentIndex.project_root,
+      scanned_at: documentIndex.scanned_at,
+      total: documentIndex.documents.length,
+    };
+  }
+
+  function readHarnessState() {
+    return {
+      harness: readJSONObject(projectHarnessPath) || null,
+      documentIndex: readDocumentIndex(),
+    };
+  }
+
+  async function writeHarness(harness) {
+    const next = {
+      ...harness,
+      updated_at: new Date().toISOString(),
+    };
+    await writeJSON(projectHarnessPath, next);
+    return next;
+  }
+
+  function validateRelativeProjectPath(inputPath) {
+    const relPath = toPosixPath(String(inputPath || '').trim()).replace(/^\/+/, '');
+    if (!relPath) {
+      throw new Error('path is required');
+    }
+    const absPath = path.resolve(projectRoot, relPath);
+    if (!isPathInside(projectRoot, absPath)) {
+      throw new Error('path must be inside the project root');
+    }
+    return { relPath, absPath };
   }
 
   async function rescanHarness() {
@@ -1292,6 +1449,40 @@ function setupRoutes(app, dataDir, options = {}) {
     return documentIndex;
   }
 
+  function sourcePathForDocument(docPath) {
+    return docPath.includes('/') ? docPath.split('/')[0] : '.';
+  }
+
+  function filterDocumentsByHarness(documents, harness) {
+    const sources = Array.isArray(harness?.sources) ? harness.sources : [];
+    const sourceByPath = new Map(sources.map((source) => [source.path, source]));
+    return documents.filter((doc) => {
+      const sourcePath = sourcePathForDocument(doc.path);
+      const source = sourceByPath.get(doc.path) || sourceByPath.get(sourcePath);
+      return !source || source.enabled !== false;
+    });
+  }
+
+  async function mergeDocumentsIntoIndex(documentsToMerge, now) {
+    const current = readDocumentIndex();
+    const byPath = new Map((current.documents || []).map((doc) => [doc.path, doc]));
+    for (const doc of documentsToMerge) {
+      byPath.set(doc.path, doc);
+    }
+    const nextIndex = {
+      ...current,
+      version: 1,
+      project_root: projectRoot,
+      scanned_at: now,
+      documents: Array.from(byPath.values()).sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+        return a.path.localeCompare(b.path);
+      }),
+    };
+    await writeJSON(projectDocumentIndexPath, nextIndex);
+    return nextIndex;
+  }
+
   ensureHarnessState().catch((err) => {
     console.error('Error initializing project harness:', err.message);
   });
@@ -1323,11 +1514,7 @@ function setupRoutes(app, dataDir, options = {}) {
       const { harness, documentIndex } = await ensureHarnessState();
       res.json({
         harness,
-        document_index: {
-          project_root: documentIndex.project_root,
-          scanned_at: documentIndex.scanned_at,
-          total: documentIndex.documents.length,
-        },
+        document_index: summarizeDocumentIndex(documentIndex),
       });
     } catch (err) {
       console.error('Error reading harness:', err);
@@ -1344,11 +1531,7 @@ function setupRoutes(app, dataDir, options = {}) {
       });
       res.json({
         harness,
-        document_index: {
-          project_root: documentIndex.project_root,
-          scanned_at: documentIndex.scanned_at,
-          total: documentIndex.documents.length,
-        },
+        document_index: summarizeDocumentIndex(documentIndex),
       });
     } catch (err) {
       console.error('Error rescanning harness:', err);
@@ -1356,10 +1539,114 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
+  app.post('/api/harness/sources', async (req, res) => {
+    try {
+      const { relPath, absPath } = validateRelativeProjectPath(req.body.path);
+      const now = new Date().toISOString();
+      const { harness, documentIndex } = await ensureHarnessState();
+      const stat = fs.existsSync(absPath) ? fs.statSync(absPath) : null;
+      const manualDocs = new Map();
+      if (stat?.isFile() && isDocumentFileName(path.basename(absPath))) {
+        addDocument(manualDocs, absPath, now);
+      } else if (stat?.isDirectory()) {
+        walkDocumentDirectory(absPath, relPath, 1, manualDocs, now);
+      }
+      const nextDocumentIndex = manualDocs.size > 0
+        ? await mergeDocumentsIntoIndex(Array.from(manualDocs.values()), now)
+        : documentIndex;
+      const nextSource = {
+        id: stableId('src', relPath),
+        path: relPath,
+        title: req.body.title || relPath,
+        kind: req.body.kind || sourceKindForPath(relPath),
+        source: 'external',
+        writable: stat ? hasWriteAccess(absPath) : false,
+        document_count: nextDocumentIndex.documents.filter((doc) => doc.path === relPath || doc.path.startsWith(`${relPath}/`)).length,
+        enabled: true,
+        manual: true,
+        log_target: !!req.body.log_target,
+      };
+      const sources = (harness.sources || []).filter((source) => source.path !== relPath);
+      sources.push(nextSource);
+      const nextHarness = await writeHarness({
+        ...harness,
+        sources,
+        transparency_target: nextSource.log_target ? relPath : harness.transparency_target || null,
+        updated_at: now,
+      });
+      broadcast('harness_updated', nextHarness);
+      res.status(201).json({ harness: nextHarness, source: nextSource, document_index: summarizeDocumentIndex(nextDocumentIndex) });
+    } catch (err) {
+      res.status(400).json({ error: { code: 'INVALID_REQUEST', message: err.message } });
+    }
+  });
+
+  app.put('/api/harness/sources/:id', async (req, res) => {
+    try {
+      const { harness } = await ensureHarnessState();
+      let updatedSource = null;
+      const sources = (harness.sources || []).map((source) => {
+        if (source.id !== req.params.id) return source;
+        updatedSource = {
+          ...source,
+          title: req.body.title ?? source.title,
+          kind: req.body.kind ?? source.kind,
+          enabled: req.body.enabled === undefined ? source.enabled !== false : !!req.body.enabled,
+          log_target: req.body.log_target === undefined ? !!source.log_target : !!req.body.log_target,
+        };
+        return updatedSource;
+      });
+      if (!updatedSource) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Harness source not found' } });
+      }
+      const nextSources = sources.map((source) => ({
+        ...source,
+        log_target: updatedSource.log_target ? source.id === updatedSource.id : (source.id === updatedSource.id ? false : source.log_target),
+      }));
+      const nextHarness = await writeHarness({
+        ...harness,
+        sources: nextSources,
+        transparency_target: updatedSource.log_target
+          ? updatedSource.path
+          : (harness.transparency_target === updatedSource.path ? null : harness.transparency_target),
+      });
+      broadcast('harness_updated', nextHarness);
+      res.json({ harness: nextHarness, source: updatedSource });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.delete('/api/harness/sources/:id', async (req, res) => {
+    try {
+      const { harness } = await ensureHarnessState();
+      const existing = (harness.sources || []).find((source) => source.id === req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Harness source not found' } });
+      }
+      const sources = (harness.sources || []).map((source) => (
+        source.id === req.params.id
+          ? { ...source, enabled: false, log_target: false }
+          : source
+      ));
+      const nextHarness = await writeHarness({
+        ...harness,
+        sources,
+        transparency_target: harness.transparency_target === existing.path ? null : harness.transparency_target,
+      });
+      broadcast('harness_updated', nextHarness);
+      res.json({ harness: nextHarness, source: { ...existing, enabled: false, log_target: false } });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
   app.get('/api/documents', async (req, res) => {
     try {
       await ensureHarnessState();
+      const { harness } = readHarnessState();
       let { documents, scanned_at: scannedAt } = readDocumentIndex();
+      documents = filterDocumentsByHarness(documents, harness);
       const { kind, search, limit, offset } = req.query;
 
       if (kind) documents = documents.filter((doc) => doc.kind === kind);
@@ -1430,6 +1717,22 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
+  async function updateReportFeedbackMirror(feedback) {
+    const reportId = feedback?.report_id || feedback?.source?.report_id;
+    if (!reportId) return;
+    const feedbackPath = path.join(projectReportsPath, reportId, 'feedback.json');
+    if (!fs.existsSync(feedbackPath)) return;
+    await updateJSON(feedbackPath, (items) => items.map((item) => (
+      item.id === feedback.id ? { ...item, ...feedback } : item
+    )), []);
+  }
+
+  function shortLogText(value, max = 60) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= max) return text;
+    return `${text.slice(0, max - 1)}...`;
+  }
+
   // V3: Project-level feedback pool
   app.get('/api/feedback', (req, res) => {
     try {
@@ -1459,6 +1762,14 @@ function setupRoutes(app, dataDir, options = {}) {
         updatedAt: now,
       };
       await updateJSON(projectFeedbackPath, (items) => [...items, feedback], []);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'feedback_created',
+        title: `记录反馈：${shortLogText(feedback.content)}`,
+        content: '用户提交了一条项目级反馈，状态为 tracked。',
+        tags: ['feedback'],
+        createdAt: now,
+      });
       broadcast('feedback_updated', { action: 'created', feedback });
       res.status(201).json(feedback);
     } catch (err) {
@@ -1481,6 +1792,15 @@ function setupRoutes(app, dataDir, options = {}) {
       if (!resolved) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
       }
+      await updateReportFeedbackMirror(resolved);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'feedback_addressed',
+        title: `处理反馈：${shortLogText(resolved.content)}`,
+        content: changeRecord?.change_summary || changeRecord?.changeSummary || '反馈已标记为 addressed。',
+        tags: ['feedback'],
+        createdAt: now,
+      });
       broadcast('feedback_updated', { action: 'resolved', feedback: resolved });
       res.json(resolved);
     } catch (err) {
@@ -1507,12 +1827,112 @@ function setupRoutes(app, dataDir, options = {}) {
       if (!confirmed) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
       }
+      await updateReportFeedbackMirror(confirmed);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'feedback_confirmed',
+        title: `确认反馈：${shortLogText(confirmed.content)}`,
+        content: '用户已确认这条反馈的处理结果。',
+        tags: ['feedback'],
+        createdAt: now,
+      });
       broadcast('feedback_updated', { action: 'confirmed', feedback: confirmed });
       res.json(confirmed);
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
+
+  app.post('/api/feedback/:id/archive', async (req, res) => {
+    try {
+      const now = new Date().toISOString();
+      let archived = null;
+      await updateJSON(projectFeedbackPath, (items) => items.map((f) => {
+        if (f.id === req.params.id) {
+          archived = {
+            ...f,
+            status: 'archived',
+            archived_at: now,
+            updated_at: now,
+            updatedAt: now,
+          };
+          return archived;
+        }
+        return f;
+      }), []);
+      if (!archived) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
+      }
+      await updateReportFeedbackMirror(archived);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'feedback_archived',
+        title: `归档反馈：${shortLogText(archived.content)}`,
+        content: '反馈已归档。',
+        tags: ['feedback'],
+        createdAt: now,
+      });
+      broadcast('feedback_updated', { action: 'archived', feedback: archived });
+      res.json(archived);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  function renderLogMarkdown(log) {
+    const lines = [
+      '',
+      `## ${log.title || log.event || 'Visual Delivery Log'}`,
+      '',
+      `- Time: ${log.createdAt}`,
+      `- Type: ${log.type || 'manual'}`,
+    ];
+    if (log.event) lines.push(`- Event: ${log.event}`);
+    if (log.reportId) lines.push(`- Report: ${log.reportId}`);
+    if (Array.isArray(log.tags) && log.tags.length > 0) lines.push(`- Tags: ${log.tags.join(', ')}`);
+    if (log.content) {
+      lines.push('', String(log.content));
+    }
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  function findExternalLogTarget() {
+    const harness = readJSONObject(projectHarnessPath);
+    const documentIndex = readDocumentIndex();
+    const enabledSources = Array.isArray(harness?.sources)
+      ? harness.sources.filter((source) => source.enabled !== false)
+      : [];
+    const targetPath = harness?.transparency_target || enabledSources.find((source) => source.log_target)?.path;
+    const docs = documentIndex.documents || [];
+
+    const candidates = [];
+    if (targetPath) {
+      candidates.push(...docs.filter((doc) => doc.writable && (doc.path === targetPath || doc.path.startsWith(`${targetPath}/`))));
+    }
+    candidates.push(...docs.filter((doc) => doc.writable && (doc.kind === 'work_log' || doc.kind === 'project_memory')));
+    candidates.sort((a, b) => {
+      const score = (doc) => (doc.kind === 'work_log' ? 0 : 1) + (doc.path.endsWith('.md') ? 0 : 2);
+      return score(a) - score(b);
+    });
+
+    return candidates[0] || null;
+  }
+
+  async function writeTransparencyLog(log) {
+    const externalTarget = findExternalLogTarget();
+    if (!externalTarget) {
+      return { strategy: 'managed', path: 'logs.json' };
+    }
+
+    const absPath = path.resolve(projectRoot, externalTarget.path);
+    if (!isPathInside(projectRoot, absPath) || !hasWriteAccess(absPath)) {
+      return { strategy: 'managed', path: 'logs.json' };
+    }
+
+    fs.appendFileSync(absPath, renderLogMarkdown(log), 'utf8');
+    return { strategy: 'external', path: externalTarget.path };
+  }
 
   // V3: Project logs
   app.get('/api/logs', (req, res) => {
@@ -1543,33 +1963,510 @@ function setupRoutes(app, dataDir, options = {}) {
         title: req.body.title || '',
         event: req.body.event || null,
         reportId: req.body.reportId || null,
+        content: req.body.content || '',
         tags: req.body.tags || [],
         createdAt: now,
       };
-      await updateJSON(projectLogsPath, (items) => [...items, log], []);
-      broadcast('log_created', log);
-      res.status(201).json(log);
+      const savedLog = await appendLogEntry(log);
+      res.status(201).json(savedLog);
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
 
-  // V3: Reports (structured reports with sections)
+  // V4: Reports (canonical project-scoped report model)
+  const REPORT_PRESENTATIONS = new Set(['document', 'table', 'canvas', 'slides']);
+  const REPORT_STRUCTURES = new Set(['standard', 'standard-report', 'complex-review']);
+
+  function reportDir(reportId) {
+    return path.join(projectReportsPath, reportId);
+  }
+
+  function reportFilePath(reportId) {
+    return path.join(reportDir(reportId), 'report.json');
+  }
+
+  function legacyReportFilePath(reportId) {
+    return path.join(projectReportsPath, `${reportId}.json`);
+  }
+
+  function reportFeedbackPath(reportId) {
+    return path.join(reportDir(reportId), 'feedback.json');
+  }
+
+  function reportDraftsPath(reportId) {
+    return path.join(reportDir(reportId), 'drafts.json');
+  }
+
+  function normalizeReportStructure(structure) {
+    if (!structure) return 'standard-report';
+    if (structure === 'standard') return 'standard-report';
+    return REPORT_STRUCTURES.has(structure) ? structure : 'standard-report';
+  }
+
+  function normalizeReportPresentation(presentation) {
+    return REPORT_PRESENTATIONS.has(presentation) ? presentation : 'document';
+  }
+
+  function reportSection(id, title, presentation, artifactTitle, narrative = '') {
+    const normalizedPresentation = normalizeReportPresentation(presentation);
+    return {
+      id,
+      title,
+      status: 'draft',
+      narrative,
+      presentation: normalizedPresentation,
+      artifact: createTemplateArtifact(normalizedPresentation, artifactTitle || title),
+      feedback_targets: [],
+    };
+  }
+
+  function reportTimestamp(report, key) {
+    return report?.[key] || report?.[key.replace('_at', 'At')] || null;
+  }
+
+  function defaultRoutingReason(structure, presentation) {
+    const normalizedStructure = normalizeReportStructure(structure);
+    const normalizedPresentation = normalizeReportPresentation(presentation);
+    if (normalizedStructure === 'complex-review') {
+      if (normalizedPresentation === 'canvas') {
+        return 'Complex-review uses mixed sections: document for context, canvas for visual co-creation, table for decisions, and slides for review flow.';
+      }
+      if (normalizedPresentation === 'table') {
+        return 'Complex-review uses mixed sections: document for context, table for structured comparison, and slides for decisions.';
+      }
+      if (normalizedPresentation === 'slides') {
+        return 'Complex-review uses mixed sections: document for context, slides for narrative review, and table for decision tracking.';
+      }
+      return 'Complex-review uses mixed sections: document for explanation and table for structured confirmation.';
+    }
+    return `Standard report uses ${normalizedPresentation} as the primary presentation layer.`;
+  }
+
+  function createTemplateArtifact(presentation, title) {
+    if (presentation === 'table') {
+      return {
+        type: 'table',
+        columns: [
+          { key: 'item', label: '项目' },
+          { key: 'summary', label: '说明' },
+          { key: 'status', label: '状态' },
+        ],
+        rows: [
+          { id: 'row-1', item: title || '待补充项目', summary: '由 agent 填充数据和证据', status: 'draft' },
+          { id: 'row-2', item: '待确认事项', summary: '记录需要用户选择、批准或补充的信息', status: 'pending' },
+        ],
+        views: [
+          { id: 'draft', label: '草稿', filter: { status: 'draft' } },
+          { id: 'pending', label: '待确认', filter: { status: 'pending' } },
+        ],
+        feedback_targets: ['row-1'],
+      };
+    }
+    if (presentation === 'canvas') {
+      return {
+        type: 'canvas',
+        mode: 'tldraw',
+        tldraw_snapshot: null,
+        assets: [],
+        canvas_regions: [
+          { id: 'agent-zone', role: 'agent', title: 'Agent 工作区', description: '方案、推理、素材整理和设计说明。' },
+          { id: 'user-zone', role: 'user', title: '用户反馈区', description: '用户批注、补充素材、圈选区域和问题。' },
+          { id: 'shared-decision-zone', role: 'shared', title: '共享决策区', description: '对齐结论、决策项和后续动作。' },
+        ],
+        seed_nodes: [
+          {
+            id: 'agent-brief',
+            role: 'agent',
+            title: 'Agent 工作区',
+            body: '放置方案、素材、推理过程和设计说明。',
+            x: 0,
+            y: 0,
+            w: 280,
+            h: 170,
+            color: 'blue',
+          },
+          {
+            id: 'inspiration',
+            role: 'agent',
+            title: '灵感与素材',
+            body: '收集参考、截图、链接和用户补充的信息。',
+            x: 340,
+            y: 0,
+            w: 280,
+            h: 170,
+            color: 'yellow',
+          },
+          {
+            id: 'feedback',
+            role: 'user',
+            title: '用户反馈区',
+            body: '用户可以圈选区域、批注或补充新的想法。',
+            x: 0,
+            y: 240,
+            w: 280,
+            h: 170,
+            color: 'green',
+          },
+          {
+            id: 'decision',
+            role: 'shared',
+            title: '共享决策区',
+            body: '沉淀需要确认的结论、取舍和下一步动作。',
+            x: 340,
+            y: 240,
+            w: 280,
+            h: 170,
+            color: 'violet',
+          },
+        ],
+        node_feedback_targets: ['agent-brief', 'inspiration', 'feedback', 'decision'],
+        prompt: '在无限画布中放置方案、素材、批注和待决策点。',
+      };
+    }
+    if (presentation === 'slides') {
+      return {
+        type: 'slides',
+        slides: [
+          {
+            id: 'slide-1',
+            title: title || '汇报页',
+            body: '由 agent 补充本页结论、证据和需要用户确认的问题。',
+            decision: {
+              id: 'main-decision',
+              prompt: '这页内容是否符合当前对齐方向？',
+              status: 'needs_decision',
+            },
+            feedback_targets: ['slide-1'],
+          },
+        ],
+      };
+    }
+    return {
+      type: 'document',
+      body: `# ${title || '汇报内容'}\n\n由 agent 补充产出、解释、证据和待决策点。\n`,
+      feedback_targets: ['document-body'],
+    };
+  }
+
+  function createTemplateSections(structure, presentation, title) {
+    const normalizedStructure = normalizeReportStructure(structure);
+    const normalizedPresentation = normalizeReportPresentation(presentation);
+    if (normalizedStructure !== 'complex-review') {
+      return [
+        reportSection(generateId('sec'), '汇报内容', normalizedPresentation, title),
+      ];
+    }
+
+    const sections = [
+      reportSection(generateId('sec'), '背景与目标', 'document', '背景与目标', '说明任务背景、用户目标、约束和本次评审范围。'),
+    ];
+
+    if (normalizedPresentation === 'canvas') {
+      sections.push(
+        reportSection(generateId('sec'), '视觉画布与协作空间', 'canvas', '视觉画布与协作空间', '用于设计创意、头脑风暴、灵感采集和产品设计思路推进。'),
+        reportSection(generateId('sec'), '方案取舍矩阵', 'table', '方案取舍矩阵', '把画布中的方案、风险和决策点结构化，便于逐项反馈。'),
+        reportSection(generateId('sec'), '评审结论与下一步', 'slides', '评审结论与下一步', '用逐页方式呈现结论、待确认决策和后续动作。')
+      );
+      return sections;
+    }
+
+    if (normalizedPresentation === 'table') {
+      sections.push(
+        reportSection(generateId('sec'), '数据与方案矩阵', 'table', title || '数据与方案矩阵', '用可筛选、可排序的表格承载对比和证据。'),
+        reportSection(generateId('sec'), '待确认决策', 'slides', '待确认决策', '把需要用户判断的事项拆成逐页评审。')
+      );
+      return sections;
+    }
+
+    if (normalizedPresentation === 'slides') {
+      sections.push(
+        reportSection(generateId('sec'), '逐页汇报', 'slides', title || '逐页汇报', '按叙事顺序推进结论、证据和待确认点。'),
+        reportSection(generateId('sec'), '决策与风险矩阵', 'table', '决策与风险矩阵', '汇总 slides 中需要反馈的结构化事项。')
+      );
+      return sections;
+    }
+
+    sections.push(
+      reportSection(generateId('sec'), '核心产出说明', 'document', title || '核心产出说明', '呈现 agent 的产出、解释、证据和关键判断。'),
+      reportSection(generateId('sec'), '待确认事项', 'table', '待确认事项', '用表格集中列出需要用户反馈的点。')
+    );
+    return sections;
+  }
+
+  function createReportContent({ title, structure, presentation, content, sections }) {
+    const normalizedStructure = normalizeReportStructure(structure);
+    const normalizedPresentation = normalizeReportPresentation(presentation);
+    if (content && typeof content === 'object') {
+      return {
+        ...content,
+        type: content.type || 'report_template',
+        structure: content.structure || normalizedStructure,
+        presentation: content.presentation || normalizedPresentation,
+        routing_reason: content.routing_reason || defaultRoutingReason(normalizedStructure, normalizedPresentation),
+        sections: sections || content.sections || createTemplateSections(normalizedStructure, normalizedPresentation, title),
+      };
+    }
+    return {
+      type: 'report_template',
+      version: 1,
+      structure: normalizedStructure,
+      presentation: normalizedPresentation,
+      routing_reason: defaultRoutingReason(normalizedStructure, normalizedPresentation),
+      change_records: [],
+      sections: sections || createTemplateSections(normalizedStructure, normalizedPresentation, title),
+    };
+  }
+
+  function collectRecentChangeRecords(limit = 6) {
+    return readJSONArray(projectFeedbackPath)
+      .filter((feedback) => {
+        const record = feedback.changeRecord || feedback.change_record;
+        return record && (feedback.status === 'addressed' || feedback.status === 'confirmed');
+      })
+      .sort((a, b) => new Date(b.updated_at || b.updatedAt || b.created_at || b.createdAt).getTime()
+        - new Date(a.updated_at || a.updatedAt || a.created_at || a.createdAt).getTime())
+      .slice(0, limit)
+      .map((feedback) => ({
+        feedback_id: feedback.id,
+        report_id: feedback.report_id || feedback.source?.report_id || null,
+        report_title: feedback.source?.report_title || '',
+        content: feedback.content || '',
+        status: feedback.status,
+        change_record: feedback.change_record || feedback.changeRecord,
+        updated_at: feedback.updated_at || feedback.updatedAt || feedback.created_at || feedback.createdAt,
+      }));
+  }
+
+  function normalizeReportRecord(report) {
+    if (!report || typeof report !== 'object') return null;
+    const createdAt = reportTimestamp(report, 'created_at') || new Date().toISOString();
+    const updatedAt = reportTimestamp(report, 'updated_at') || createdAt;
+    const structure = normalizeReportStructure(report.structure || report.content?.structure);
+    const presentation = normalizeReportPresentation(report.presentation || report.content?.presentation);
+    const content = report.content || createReportContent({
+      title: report.title,
+      structure,
+      presentation,
+      sections: report.sections,
+    });
+    const sections = content.sections || report.sections || [];
+    return {
+      ...report,
+      id: report.id,
+      title: report.title || '未命名汇报',
+      status: report.status || 'draft',
+      structure,
+      presentation,
+      content,
+      sections,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      createdAt,
+      updatedAt,
+      section_count: sections.length,
+      completed_section_count: sections.filter((section) => section.status === 'completed').length,
+    };
+  }
+
+  function readCanonicalReport(reportId) {
+    const stored = readJSONObject(reportFilePath(reportId)) || readJSONObject(legacyReportFilePath(reportId));
+    return normalizeReportRecord(stored);
+  }
+
+  function deliveryIndexToReport(entry) {
+    if (!entry) return null;
+    return normalizeReportRecord({
+      ...entry,
+      source: 'legacy_delivery',
+      structure: entry.metadata?.structure || 'standard-report',
+      presentation: entry.metadata?.presentation || 'document',
+      content: null,
+    });
+  }
+
+  function deliveryToReport(delivery) {
+    if (!delivery) return null;
+    return normalizeReportRecord({
+      ...delivery,
+      source: 'legacy_delivery',
+      structure: delivery.metadata?.structure || 'standard-report',
+      presentation: delivery.metadata?.presentation || 'document',
+      content: delivery.content,
+      feedback: delivery.feedback,
+      drafts: delivery.drafts,
+      pending_feedback_count: delivery.pending_feedback_count,
+    });
+  }
+
+  function listCanonicalReports() {
+    if (!fs.existsSync(projectReportsPath)) return [];
+    const reports = [];
+    for (const entry of fs.readdirSync(projectReportsPath, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const report = readCanonicalReport(entry.name);
+        if (report) reports.push(report);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        const reportId = entry.name.replace(/\.json$/, '');
+        if (!fs.existsSync(reportFilePath(reportId))) {
+          const report = readCanonicalReport(reportId);
+          if (report) reports.push(report);
+        }
+      }
+    }
+    return reports;
+  }
+
+  function readReportRecord(reportId) {
+    const canonical = readCanonicalReport(reportId);
+    if (canonical) return canonical;
+    return deliveryToReport(hydrateDelivery(reportId));
+  }
+
+  function readReportFeedback(reportId) {
+    const report = readCanonicalReport(reportId);
+    if (report) return readJSONArray(reportFeedbackPath(reportId));
+    return readDeliveryFeedback(reportId);
+  }
+
+  function readReportDrafts(reportId) {
+    const report = readCanonicalReport(reportId);
+    if (report) return readJSONArray(reportDraftsPath(reportId));
+    return readDeliveryDrafts(reportId);
+  }
+
+  async function writeReportRecord(report) {
+    const normalized = normalizeReportRecord(report);
+    fs.mkdirSync(reportDir(normalized.id), { recursive: true });
+    await writeJSON(reportFilePath(normalized.id), normalized);
+    if (!fs.existsSync(reportFeedbackPath(normalized.id))) await writeJSON(reportFeedbackPath(normalized.id), []);
+    if (!fs.existsSync(reportDraftsPath(normalized.id))) await writeJSON(reportDraftsPath(normalized.id), []);
+    return normalized;
+  }
+
+  async function updateReportRecord(reportId, updater) {
+    const current = readCanonicalReport(reportId);
+    if (!current) return null;
+    const updated = normalizeReportRecord(updater(current));
+    updated.updated_at = new Date().toISOString();
+    updated.updatedAt = updated.updated_at;
+    await writeReportRecord(updated);
+    return updated;
+  }
+
+  function publicReport(report, { includeDetail = false } = {}) {
+    const normalized = normalizeReportRecord(report);
+    if (!normalized) return null;
+    const feedback = includeDetail ? readReportFeedback(normalized.id) : [];
+    const drafts = includeDetail ? readReportDrafts(normalized.id) : [];
+    return {
+      ...normalized,
+      feedback,
+      drafts,
+      pending_feedback_count: feedback.filter((item) => item.handled === false || item.status === 'tracked').length,
+    };
+  }
+
+  async function appendLogEntry(entry) {
+    const log = {
+      ...entry,
+      id: entry.id || generateId('log'),
+      createdAt: entry.createdAt || new Date().toISOString(),
+    };
+    if (!log.transparency) {
+      log.transparency = await writeTransparencyLog(log);
+    }
+    await updateJSON(projectLogsPath, (items) => [...items, log], []);
+    broadcast('log_created', log);
+    return log;
+  }
+
+  function feedbackContentFromItem(item) {
+    if (item.content) return item.content;
+    if (item.payload?.note) return item.payload.note;
+    if (item.payload?.label) return item.payload.label;
+    if (item.payload?.quote) return `选中文本：${item.payload.quote}`;
+    if (item.payload?.action) return `操作反馈：${item.payload.label || item.payload.action}`;
+    return '用户提交了反馈';
+  }
+
+  function createReportFeedbackItem(report, item) {
+    const now = new Date().toISOString();
+    return {
+      id: generateId('fb'),
+      report_id: report.id,
+      kind: item.kind || 'direct',
+      payload: item.payload || {},
+      target: item.target || item.payload?.target || {},
+      status: 'tracked',
+      handled: false,
+      content: feedbackContentFromItem(item),
+      author: item.author || 'user',
+      source: {
+        type: 'report',
+        report_id: report.id,
+        report_title: report.title,
+        draft_id: item.id || null,
+      },
+      created_at: now,
+      updated_at: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  async function upsertProjectFeedback(feedback) {
+    await updateJSON(projectFeedbackPath, (items) => {
+      const idx = items.findIndex((item) => item.id === feedback.id);
+      if (idx >= 0) {
+        items[idx] = { ...items[idx], ...feedback };
+        return items;
+      }
+      return [...items, feedback];
+    }, []);
+  }
+
+  async function updateProjectFeedbackItem(feedbackId, updater) {
+    let updated = null;
+    await updateJSON(projectFeedbackPath, (items) => items.map((item) => {
+      if (item.id !== feedbackId) return item;
+      updated = updater(item);
+      return updated;
+    }), []);
+    return updated;
+  }
+
+  async function recalcReportStatus(reportId) {
+    const canonical = readCanonicalReport(reportId);
+    if (!canonical) {
+      return recalcDeliveryStatus(reportId);
+    }
+    const feedbacks = readReportFeedback(reportId);
+    const hasPending = feedbacks.some((item) => item.handled === false || item.status === 'tracked');
+    const nextStatus = hasPending ? 'pending_feedback' : (canonical.status === 'pending_feedback' ? 'normal' : canonical.status);
+    return updateReportRecord(reportId, (report) => ({ ...report, status: nextStatus }));
+  }
+
   app.get('/api/reports', (req, res) => {
     try {
-      // For now, map deliveries as reports
-      let entries = readJSONArray(indexPath);
-      // Enrich with V3 report fields (mock for existing entries)
-      const reports = entries
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        .map((e) => ({
-          ...e,
-          structure: e.mode === 'task_delivery' ? 'standard' : 'complex-review',
-          presentation: 'document',
-          sections: e.metadata?.sections || 1,
-          completedSections: e.status === 'submitted' ? (e.metadata?.sections || 1) : 0,
-        }));
-      res.json({ reports, total: reports.length });
+      const canonicalReports = listCanonicalReports();
+      const canonicalIds = new Set(canonicalReports.map((report) => report.id));
+      const legacyReports = readJSONArray(indexPath)
+        .filter((entry) => !canonicalIds.has(entry.id))
+        .map(deliveryIndexToReport)
+        .filter(Boolean);
+      let reports = [...canonicalReports, ...legacyReports];
+      const { status, search, limit, offset } = req.query;
+      if (status) reports = reports.filter((report) => report.status === status);
+      if (search) {
+        const query = String(search).toLowerCase();
+        reports = reports.filter((report) => `${report.title} ${report.metadata?.task_name || ''}`.toLowerCase().includes(query));
+      }
+      reports.sort((a, b) => new Date(b.updated_at || b.created_at).getTime() - new Date(a.updated_at || a.created_at).getTime());
+      const total = reports.length;
+      const off = parseInt(offset, 10) || 0;
+      const lim = parseInt(limit, 10) || reports.length || 50;
+      res.json({ reports: reports.slice(off, off + lim).map((report) => publicReport(report)), total });
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
@@ -1577,19 +2474,11 @@ function setupRoutes(app, dataDir, options = {}) {
 
   app.get('/api/reports/:id', (req, res) => {
     try {
-      const delivery = hydrateDelivery(req.params.id);
-      if (!delivery) {
+      const report = readReportRecord(req.params.id);
+      if (!report) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
       }
-      // Enrich with V3 report structure
-      res.json({
-        ...delivery,
-        structure: 'complex-review',
-        sections: [
-          { id: 'sec-1', title: '背景与目标', status: 'completed', narrative: delivery.content?.ui_spec?.description || '', presentation: 'document' },
-          { id: 'sec-2', title: '关键发现', status: 'progress', narrative: '', presentation: 'document' },
-        ],
-      });
+      res.json(publicReport(report, { includeDetail: true }));
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
@@ -1597,72 +2486,127 @@ function setupRoutes(app, dataDir, options = {}) {
 
   app.post('/api/reports', async (req, res) => {
     try {
-      const { title, structure, presentation, feedbackIds } = req.body;
+      const { title, structure, presentation, feedbackIds, metadata, content, sections, routing_reason: routingReason } = req.body;
       if (!title) {
         return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'title is required' } });
       }
       const now = new Date().toISOString();
-      const report = {
-        id: generateId('r'),
+      const normalizedStructure = normalizeReportStructure(structure);
+      const normalizedPresentation = normalizeReportPresentation(presentation);
+      const reportId = generateId('r');
+      const reportContent = createReportContent({
         title,
-        structure: structure || 'standard',
-        presentation: presentation || 'document',
+        structure: normalizedStructure,
+        presentation: normalizedPresentation,
+        content,
+        sections,
+      });
+      if (routingReason && reportContent.type === 'report_template') {
+        reportContent.routing_reason = routingReason;
+      }
+      if (reportContent.type === 'report_template' && !Array.isArray(reportContent.change_records)) {
+        reportContent.change_records = collectRecentChangeRecords();
+      }
+      if (reportContent.type === 'report_template' && reportContent.change_records.length === 0) {
+        reportContent.change_records = collectRecentChangeRecords();
+      }
+      const report = await writeReportRecord({
+        id: reportId,
+        title,
+        structure: normalizedStructure,
+        presentation: normalizedPresentation,
         status: 'draft',
         feedbackIds: feedbackIds || [],
-        sections: structure === 'complex-review' ? [
-          { id: `${generateId('sec')}`, title: '背景', status: 'pending', narrative: '', presentation: presentation || 'document' },
-          { id: `${generateId('sec')}`, title: '分析', status: 'pending', narrative: '', presentation: presentation || 'document' },
-          { id: `${generateId('sec')}`, title: '结论', status: 'pending', narrative: '', presentation: presentation || 'document' },
-        ] : [
-          { id: `${generateId('sec')}`, title: '汇报内容', status: 'pending', narrative: '', presentation: presentation || 'document' },
-        ],
+        metadata: metadata || {},
+        content: reportContent,
+        sections: reportContent.sections || [],
+        created_at: now,
+        updated_at: now,
         createdAt: now,
         updatedAt: now,
-      };
+      });
 
-      // Create report directory and feedback file
-      const reportDirPath = path.join(projectReportsPath, report.id);
-      fs.mkdirSync(reportDirPath, { recursive: true });
-      await writeJSON(path.join(reportDirPath, 'feedback.json'), []);
-
-      const reportFilePath = path.join(projectReportsPath, `${report.id}.json`);
-      await writeJSON(reportFilePath, report);
-
-      // Auto-create log entry
       const logEntry = {
         id: generateId('log'),
         type: 'auto',
         event: 'report_created',
         title: `创建汇报草稿：${title}`,
         reportId: report.id,
+        content: `创建 ${report.structure} / ${report.presentation} 汇报草稿。`,
         createdAt: now,
       };
-      await updateJSON(projectLogsPath, (items) => [...items, logEntry], []);
-      broadcast('log_created', logEntry);
+      await appendLogEntry(logEntry);
       broadcast('report_created', report);
 
-      res.status(201).json(report);
+      res.status(201).json(publicReport(report, { includeDetail: true }));
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
 
-  // ═══════════════════════════════════════════════════════
-  // V3: Report-level feedback
-  // ═══════════════════════════════════════════════════════
+  app.put('/api/reports/:id', async (req, res) => {
+    try {
+      const updated = await updateReportRecord(req.params.id, (report) => ({
+        ...report,
+        ...req.body,
+        id: report.id,
+        content: req.body.content ? createReportContent({
+          title: req.body.title || report.title,
+          structure: req.body.structure || report.structure,
+          presentation: req.body.presentation || report.presentation,
+          content: req.body.content,
+          sections: req.body.sections,
+        }) : report.content,
+      }));
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      broadcast('report_updated', updated);
+      res.json(publicReport(updated, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
-  // Helper: read report-level feedback file
-  function reportFeedbackPath(reportId) {
-    return path.join(projectReportsPath, reportId, 'feedback.json');
-  }
+  app.put('/api/reports/:id/canvas', async (req, res) => {
+    try {
+      const { sectionId, snapshot } = req.body || {};
+      if (!snapshot || typeof snapshot !== 'object') {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'snapshot is required' } });
+      }
+      const updated = await updateReportRecord(req.params.id, (report) => {
+        const content = report.content || createReportContent(report);
+        const sections = (content.sections || []).map((section) => {
+          if ((sectionId && section.id !== sectionId) || section.presentation !== 'canvas') return section;
+          return {
+            ...section,
+            artifact: {
+              ...(section.artifact || createTemplateArtifact('canvas', section.title)),
+              type: 'canvas',
+              mode: 'tldraw',
+              tldraw_snapshot: snapshot,
+              updated_at: new Date().toISOString(),
+            },
+          };
+        });
+        return { ...report, content: { ...content, sections }, sections };
+      });
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      broadcast('report_updated', updated);
+      res.json(publicReport(updated, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
-  function readReportFeedback(reportId) {
-    return readJSONArray(reportFeedbackPath(reportId));
-  }
-
-  // GET /api/reports/:id/feedback — Get all feedback for a report
   app.get('/api/reports/:id/feedback', (req, res) => {
     try {
+      const report = readReportRecord(req.params.id);
+      if (!report) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
       const feedbacks = readReportFeedback(req.params.id);
       res.json({ feedbacks, total: feedbacks.length });
     } catch (err) {
@@ -1671,24 +2615,111 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
-  // POST /api/reports/:id/feedback — Submit new feedback for a report
+  app.post('/api/reports/:id/feedback/draft', async (req, res) => {
+    try {
+      const report = readReportRecord(req.params.id);
+      if (!report) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      const drafts = Array.isArray(req.body.items) ? req.body.items : [];
+      if (readCanonicalReport(req.params.id)) {
+        await writeJSON(reportDraftsPath(req.params.id), drafts);
+      } else {
+        await writeJSON(deliveryFile(req.params.id, 'drafts.json'), drafts);
+      }
+      broadcast('feedback_draft_updated', { report_id: req.params.id, drafts });
+      res.json({ drafts });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/reports/:id/feedback/commit', async (req, res) => {
+    try {
+      const report = readReportRecord(req.params.id);
+      if (!report) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      const items = Array.isArray(req.body.items) ? req.body.items : [];
+      if (items.length === 0) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'items must be a non-empty array' } });
+      }
+      const feedbacks = items.map((item) => createReportFeedbackItem(report, item));
+      if (readCanonicalReport(req.params.id)) {
+        await updateJSON(reportFeedbackPath(req.params.id), (current) => [...current, ...feedbacks], []);
+        await writeJSON(reportDraftsPath(req.params.id), []);
+      } else {
+        await updateJSON(deliveryFile(req.params.id, 'feedback.json'), (current) => [...current, ...feedbacks], []);
+        await writeJSON(deliveryFile(req.params.id, 'drafts.json'), []);
+      }
+      for (const feedback of feedbacks) {
+        await upsertProjectFeedback(feedback);
+      }
+      await appendLogEntry({
+        type: 'auto',
+        event: 'report_feedback_committed',
+        title: `收到汇报反馈：${report.title}`,
+        reportId: report.id,
+        content: `用户在汇报中提交了 ${feedbacks.length} 条反馈，已进入项目级反馈池。`,
+        tags: ['report', 'feedback'],
+      });
+      const updatedReport = await recalcReportStatus(req.params.id);
+      broadcast('feedback_received', { report_id: req.params.id, feedback_ids: feedbacks.map((item) => item.id) });
+      broadcast('report_updated', updatedReport);
+      res.status(201).json({ feedback: feedbacks, drafts: [], report: publicReport(updatedReport, { includeDetail: true }) });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/reports/:id/feedback/revoke', async (req, res) => {
+    try {
+      const report = readReportRecord(req.params.id);
+      if (!report) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      const feedbackIds = Array.isArray(req.body.feedback_ids) ? req.body.feedback_ids : [];
+      if (feedbackIds.length === 0) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'feedback_ids must be a non-empty array' } });
+      }
+      const pathToFeedback = readCanonicalReport(req.params.id)
+        ? reportFeedbackPath(req.params.id)
+        : deliveryFile(req.params.id, 'feedback.json');
+      await updateJSON(pathToFeedback, (items) => items.filter((item) => !feedbackIds.includes(item.id)), []);
+      await updateJSON(projectFeedbackPath, (items) => items.filter((item) => !feedbackIds.includes(item.id)), []);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'report_feedback_revoked',
+        title: `撤回汇报反馈：${report.title}`,
+        reportId: report.id,
+        content: `用户撤回了 ${feedbackIds.length} 条尚未处理的反馈。`,
+        tags: ['report', 'feedback'],
+      });
+      const updatedReport = await recalcReportStatus(req.params.id);
+      broadcast('feedback_revoked', { report_id: req.params.id, feedback_ids: feedbackIds });
+      broadcast('report_updated', updatedReport);
+      res.json({ revoked: feedbackIds, report: publicReport(updatedReport, { includeDetail: true }) });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
   app.post('/api/reports/:id/feedback', async (req, res) => {
     try {
-      const { content, author } = req.body;
+      const report = readReportRecord(req.params.id);
+      if (!report) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Report not found' } });
+      }
+      const { content, author, target } = req.body;
       if (!content) {
         return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'content is required' } });
       }
-      const now = new Date().toISOString();
-      const feedback = {
-        id: generateId('fb'),
-        status: 'tracked',
-        content,
-        author: author || 'user',
-        createdAt: now,
-        updatedAt: now,
-      };
+      const feedback = createReportFeedbackItem(report, { kind: 'direct', content, author, target });
       await updateJSON(reportFeedbackPath(req.params.id), (items) => [...items, feedback], []);
+      await upsertProjectFeedback(feedback);
+      const updatedReport = await recalcReportStatus(req.params.id);
       broadcast('feedback_updated', { action: 'created', reportId: req.params.id, feedback });
+      broadcast('report_updated', updatedReport);
       res.status(201).json(feedback);
     } catch (err) {
       console.error('Error creating report feedback:', err);
@@ -1696,7 +2727,6 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
-  // POST /api/reports/:id/feedback/:feedbackId/resolve — Agent addresses feedback
   app.post('/api/reports/:id/feedback/:feedbackId/resolve', async (req, res) => {
     try {
       const { changeRecord } = req.body || {};
@@ -1704,7 +2734,16 @@ function setupRoutes(app, dataDir, options = {}) {
       let resolved = null;
       await updateJSON(reportFeedbackPath(req.params.id), (items) => items.map((f) => {
         if (f.id === req.params.feedbackId) {
-          resolved = { ...f, status: 'addressed', changeRecord: changeRecord || f.changeRecord, updatedAt: now };
+          resolved = {
+            ...f,
+            status: 'addressed',
+            handled: true,
+            changeRecord: changeRecord || f.changeRecord,
+            change_record: changeRecord || f.change_record,
+            resolved_at: now,
+            updated_at: now,
+            updatedAt: now,
+          };
           return resolved;
         }
         return f;
@@ -1712,7 +2751,19 @@ function setupRoutes(app, dataDir, options = {}) {
       if (!resolved) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
       }
+      await updateProjectFeedbackItem(req.params.feedbackId, () => resolved);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'report_feedback_addressed',
+        title: `处理汇报反馈：${shortLogText(resolved.content)}`,
+        reportId: req.params.id,
+        content: changeRecord?.change_summary || changeRecord?.changeSummary || '汇报反馈已标记为 addressed。',
+        tags: ['report', 'feedback'],
+        createdAt: now,
+      });
+      const updatedReport = await recalcReportStatus(req.params.id);
       broadcast('feedback_updated', { action: 'resolved', reportId: req.params.id, feedback: resolved });
+      broadcast('report_updated', updatedReport);
       res.json(resolved);
     } catch (err) {
       console.error('Error resolving report feedback:', err);
@@ -1720,7 +2771,6 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
-  // POST /api/reports/:id/feedback/:feedbackId/confirm — User confirms resolved feedback
   app.post('/api/reports/:id/feedback/:feedbackId/confirm', async (req, res) => {
     try {
       const now = new Date().toISOString();
@@ -1730,7 +2780,11 @@ function setupRoutes(app, dataDir, options = {}) {
           confirmed = {
             ...f,
             status: 'confirmed',
+            handled: true,
             changeRecord: { ...(f.changeRecord || {}), confirmedAt: now },
+            change_record: { ...(f.change_record || {}), confirmed_at: now },
+            confirmed_at: now,
+            updated_at: now,
             updatedAt: now,
           };
           return confirmed;
@@ -1740,6 +2794,16 @@ function setupRoutes(app, dataDir, options = {}) {
       if (!confirmed) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback not found' } });
       }
+      await updateProjectFeedbackItem(req.params.feedbackId, () => confirmed);
+      await appendLogEntry({
+        type: 'auto',
+        event: 'report_feedback_confirmed',
+        title: `确认汇报反馈：${shortLogText(confirmed.content)}`,
+        reportId: req.params.id,
+        content: '用户已确认这条汇报反馈的处理结果。',
+        tags: ['report', 'feedback'],
+        createdAt: now,
+      });
       broadcast('feedback_updated', { action: 'confirmed', reportId: req.params.id, feedback: confirmed });
       res.json(confirmed);
     } catch (err) {

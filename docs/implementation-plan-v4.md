@@ -43,9 +43,10 @@ V4 不把以下内容作为实现主线：
 3. Project harness / document discovery
 4. Project-level feedback pool
 5. Report 模板路由
-6. Complex-review 汇报模板
-7. Feedback change record
-8. 汇报后更新项目已有日志或工作文档
+6. Report 呈现层模板基础实现：文本文档、表格、画布、Slides
+7. Complex-review 汇报模板
+8. Feedback change record
+9. 汇报后更新项目已有日志或工作文档
 
 第一版不做：
 
@@ -54,7 +55,7 @@ V4 不把以下内容作为实现主线：
 - 复杂进度追踪
 - 多用户权限
 - 完整远程 host
-- canvas / slides 高级编辑器
+- canvas / slides 高级编辑器能力，例如多人实时协作、复杂矢量编辑、完整演示文稿编辑
 - 大规模视觉个性化系统
 
 ## 4. Phase 1：项目级工作空间
@@ -135,7 +136,7 @@ V4 不把以下内容作为实现主线：
 
 - 文本文档
 - 表格
-- 画布
+- 画布（参考 Cowart 类无限画布协作体验，使用 tldraw 实现）
 - slides
 - 混合 section
 
@@ -156,6 +157,45 @@ agent 自动选择模板，并说明理由。
 这次汇报包含多个方案对比和待决策项，我会使用 complex-review 结构；
 其中数据部分用表格呈现，结论部分用文档呈现。
 ```
+
+### 6.3 汇报模板实施范围
+
+V4 的几类汇报模板都需要实现基础版本，不能只停留在 `generated_html` 的通用渲染。
+模板系统应提供可被 agent 路由、可被 UI 渲染、可接入反馈池的数据结构。
+
+| 模板 | 第一版能力 | 关键数据 |
+|------|-----------|---------|
+| `document` | Markdown / HTML 内容、目录导航、段落级反馈、决策点组件 | sections、headings、feedback_targets |
+| `table` | 表格展示、筛选/排序、行级和字段级反馈 | columns、rows、views、feedback_targets |
+| `canvas` | tldraw 无限画布、文本/图片/卡片节点、批注节点、选区反馈、画布状态保存 | tldraw_snapshot、assets、node_feedback_targets |
+| `slides` | slide 导航、逐页汇报、页级反馈、重点决策页 | slides、speaker_notes、feedback_targets |
+| `complex-review` | 多 section 汇报、artifact + 叙事 + 决策点、多模板混排 | sections、artifacts、decisions、template_refs |
+
+画布模板使用 tldraw 作为实现内核。产品体验参考 GitHub 开源项目 Cowart
+（https://github.com/zhongerxin/cowart）的本地无限画布协作方向：agent 和用户围绕
+同一个项目画布推进工作，而不是只查看一次性静态交付物。
+画布模式适用于设计创意、头脑风暴、灵感采集、产品设计思路推进等场景。Agent 可以在
+无限画布中持续添加内容、整理素材、摆放方案、生成解释和推进下一步思路；用户可以在
+画布上批注、补充素材、圈选区域并提交反馈。
+
+第一版必须保存 tldraw snapshot，并把画布节点或选区映射到项目级反馈池。画布数据应
+归属于当前项目工作空间，后续汇报可以引用画布页面、节点、选区或截图作为 artifact。
+画布默认结构应包含 agent 工作区、用户反馈区和共享决策区。暂不实现多人实时协作、
+复杂矢量设计工具能力和完整素材管理系统。
+
+当前实现要求：
+
+- `/api/reports` 在缺省 content 时生成 `report_template`，`standard-report` 使用单 section，`complex-review` 使用混合 section。
+- `complex-review` 默认把 document 用作上下文说明，把主 presentation 用作核心 artifact，并按需要混入 table/slides。
+- 文档模板从 Markdown heading 自动生成目录导航。
+- 文档模板对段落生成 `document_paragraph` feedback target，包含段落行号和摘录。
+- 表格模板支持按 view 分类、全文查询、列排序。
+- 表格模板对行生成 `table_row` feedback target，对字段生成 `table_field` feedback target。
+- 画布模板默认 seed node 区分 `agent`、`user`、`shared` 角色区域。
+- 画布模板对 seed node 生成 `canvas_node` feedback target。
+- 画布模板对当前 tldraw 选区生成 `canvas_selection` feedback target，包含 shape ids 和 bounds。
+- Slides 模板支持左侧页导航、上一页/下一页逐页浏览。
+- Slides 模板对页面生成 `slide_page` feedback target，对待确认决策生成 `slide_decision` feedback target。
 
 ## 7. Phase 4：日志与项目 Harness 接入
 
@@ -326,11 +366,12 @@ tracked -> addressed -> confirmed -> archived
 4. 实现日志写入策略：优先更新项目已有位置，缺失时使用 skill 托管 fallback。
 5. 实现 project-level feedback pool。
 6. 实现 report 创建与模板路由。
-7. 实现 complex-review 的 section schema。
-8. 实现 report 提交后更新日志或工作文档。
-9. 实现 feedback addressed / confirmed / archived 生命周期。
-10. 实现下一次汇报中的 change record 展示。
-11. 最后统一平台外壳 UI。
+7. 实现基础汇报模板：document、table、canvas(tldraw)、slides。
+8. 实现 complex-review 的 section schema，并允许混合引用基础模板。
+9. 实现 report 提交后更新日志或工作文档。
+10. 实现 feedback addressed / confirmed / archived 生命周期。
+11. 实现下一次汇报中的 change record 展示。
+12. 最后统一平台外壳 UI。
 
 ## 13. 成功标准
 

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const express = require('express');
 const { setupWebSocket, broadcast, closeWebSocket } = require('./lib/ws');
 const { setupRoutes } = require('./routes/api');
@@ -39,6 +40,92 @@ if (!fs.existsSync(indexPath)) {
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.set('port', port);
+
+function parseCookies(header = '') {
+  return header.split(';').reduce((cookies, part) => {
+    const [rawKey, ...rest] = part.trim().split('=');
+    if (!rawKey) return cookies;
+    cookies[rawKey] = decodeURIComponent(rest.join('=') || '');
+    return cookies;
+  }, {});
+}
+
+function timingSafeEqual(a, b) {
+  const left = Buffer.from(String(a || ''));
+  const right = Buffer.from(String(b || ''));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function readAccessSettings() {
+  const settingsPath = path.join(dataDir, 'data', 'settings.json');
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    return {
+      enabled: settings.access_key_enabled === true,
+      key: typeof settings.access_key === 'string' ? settings.access_key : '',
+    };
+  } catch {
+    return { enabled: false, key: '' };
+  }
+}
+
+function accessKeyMiddleware(req, res, next) {
+  if (req.path === '/health' || req.path === '/api/health') return next();
+
+  const access = readAccessSettings();
+  if (!access.enabled || !access.key) return next();
+
+  const cookies = parseCookies(req.headers.cookie || '');
+  const provided = req.get('x-vd-access-key') || req.query.vd_key || cookies.vd_access_key;
+  if (provided && timingSafeEqual(provided, access.key)) {
+    if (req.query.vd_key) {
+      res.cookie('vd_access_key', access.key, {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+      });
+    }
+    return next();
+  }
+
+  if (req.method === 'GET' && req.accepts('html')) {
+    res.status(401).type('html').send(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visual Delivery Access</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #0f172a; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    form { width: min(420px, 100%); background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 24px; box-shadow: 0 20px 45px rgba(15, 23, 42, 0.08); }
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    p { margin: 0 0 18px; color: #64748b; font-size: 14px; line-height: 1.6; }
+    input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; }
+    button { margin-top: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <form method="GET" action="${req.path}">
+      <h1>需要访问密钥</h1>
+      <p>请输入当前项目的 Visual Delivery 访问密钥。</p>
+      <input name="vd_key" type="password" autocomplete="current-password" autofocus />
+      <button type="submit">进入</button>
+    </form>
+  </main>
+</body>
+</html>`);
+    return;
+  }
+
+  res.status(401).json({
+    error: { code: 'ACCESS_KEY_REQUIRED', message: 'Valid Visual Delivery access key required' },
+  });
+}
+
+app.use(accessKeyMiddleware);
 
 setupRoutes(app, dataDir, { projectDir });
 

@@ -8,8 +8,8 @@ const PORT = 3847;           // Avoids conflict with 3000/5173/8080 common dev p
 const HEALTH_TIMEOUT = 15;   // Seconds to wait for server startup
 
 const SKILL_DIR = path.resolve(__dirname, '..');
-// Only English has a built-in locale; all other languages are agent-generated at runtime
-const PRESET_LANGS = ['en'];
+// English and Chinese have built-in locale presets; other languages are agent-generated at runtime.
+const PRESET_LANGS = ['en', 'zh'];
 
 function log(msg) {
   process.stderr.write(`[visual-delivery] ${msg}\n`);
@@ -281,7 +281,7 @@ async function main() {
   if (needsLocaleRefresh) {
     const presetPath = path.join(localesDestDir, `${initLang}.json`);
     if (fs.existsSync(presetPath)) {
-      // Use built-in preset (English)
+      // Use built-in preset
       fs.cpSync(presetPath, localePath);
       log(`  Locale set from preset: ${initLang}`);
     } else {
@@ -294,7 +294,7 @@ async function main() {
     }
   }
 
-  // Platform defaults — English only; non-English falls back to locale values in frontend
+  // Platform defaults — English uses a named default; non-English falls back to locale values in frontend
   const PLATFORM_DEFAULTS_EN = { name: 'Task Delivery Center', slogan: 'Make feedback clear. Let agents work easier.', favicon: '🐂' };
 
   // Read existing settings to check if platform needs update
@@ -325,6 +325,7 @@ async function main() {
     fs.writeFileSync(
       settingsPath,
       JSON.stringify({
+        ...existingSettings,
         language: initLang,
         language_explicit: true,
         trigger_mode: existingSettings.trigger_mode || 'smart',

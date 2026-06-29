@@ -658,7 +658,7 @@ export default function Logs() {
               {activeLog.event && <span>· 事件：{activeLog.event}</span>}
               {activeLog.reportId && (
                 <span>
-                  · 关联汇报：<Link to={`/reports/${activeLog.reportId}`}>{activeLog.reportId}</Link>
+                  · 关联汇报：<Link to={`/reports?report=${encodeURIComponent(activeLog.reportId)}`}>{activeLog.reportId}</Link>
                 </span>
               )}
               {(activeLog.tags || []).map((tag) => (

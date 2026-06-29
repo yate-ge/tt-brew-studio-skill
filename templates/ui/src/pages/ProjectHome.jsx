@@ -223,7 +223,7 @@ export default function ProjectHome() {
             {reports.length === 0 ? (
               <div style={STYLES.emptyText}>暂无汇报</div>
             ) : reports.map((report) => (
-              <Link key={report.id} to={`/reports/${report.id}`} style={STYLES.itemLink}>
+              <Link key={report.id} to={`/reports?report=${encodeURIComponent(report.id)}`} style={STYLES.itemLink}>
                 <div style={STYLES.itemTitle}>{report.title}</div>
                 <div style={STYLES.itemMeta}>
                   {formatTime(report.updated_at || report.updatedAt || report.created_at || report.createdAt)}
@@ -247,7 +247,7 @@ export default function ProjectHome() {
             ) : logs.map((log) => (
               <Link
                 key={log.id}
-                to={log.reportId ? `/reports/${log.reportId}` : '/logs'}
+                to={log.reportId ? `/reports?report=${encodeURIComponent(log.reportId)}` : '/logs'}
                 style={STYLES.itemLink}
               >
                 <div style={STYLES.itemTitle}>{log.title}</div>

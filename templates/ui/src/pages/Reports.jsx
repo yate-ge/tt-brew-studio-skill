@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
-  commitFeedback,
+  commitReportFeedback,
   fetchReport,
   fetchReports,
-  revokeFeedback,
-  saveFeedbackDraft,
+  revokeReportFeedback,
+  saveReportFeedbackDraft,
+  updateReportCanvas,
 } from '../lib/api';
 import { useDesignTokens } from '../hooks/useDesignTokens';
 import ContentRenderer from '../components/ContentRenderer';
+import ReportTemplateRenderer from '../components/ReportTemplateRenderer';
 import FeedbackSidebar from '../components/feedback/FeedbackSidebar';
 
 const STATUS_BADGES = {
@@ -189,6 +192,36 @@ const STYLES = {
   feedbackRail: {
     minWidth: 0,
   },
+  changeStrip: {
+    marginBottom: 'var(--vd-space-5)',
+    border: '1px solid var(--vd-success-border)',
+    borderRadius: 'var(--vd-radius-md)',
+    background: 'var(--vd-success-bg)',
+    overflow: 'hidden',
+  },
+  changeStripHeader: {
+    padding: 'var(--vd-space-3) var(--vd-space-4)',
+    borderBottom: '1px solid var(--vd-success-border)',
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  },
+  changeList: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  changeItem: {
+    padding: 'var(--vd-space-3) var(--vd-space-4)',
+    borderTop: '1px solid rgba(16, 185, 129, 0.16)',
+    color: 'var(--vd-text-secondary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    lineHeight: 'var(--vd-line-height-relaxed)',
+  },
+  changeMeta: {
+    marginTop: 4,
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+  },
   emptyState: {
     height: '100%',
     minHeight: 420,
@@ -257,7 +290,70 @@ function createDraftItem(item) {
   };
 }
 
+function changeRecordSummary(record) {
+  if (!record) return '';
+  return record.change_summary || record.summary || record.description || '';
+}
+
+function collectVisibleChangeRecords(report) {
+  const fromContent = Array.isArray(report?.content?.change_records) ? report.content.change_records : [];
+  const fromFeedback = (report?.feedback || [])
+    .filter((feedback) => (feedback.status === 'addressed' || feedback.status === 'confirmed') && (feedback.changeRecord || feedback.change_record))
+    .map((feedback) => ({
+      feedback_id: feedback.id,
+      content: feedback.content,
+      status: feedback.status,
+      change_record: feedback.change_record || feedback.changeRecord,
+      updated_at: feedback.updated_at || feedback.updatedAt,
+    }));
+  const seen = new Set();
+  return [...fromContent, ...fromFeedback].filter((item) => {
+    const key = item.feedback_id || `${item.content}:${changeRecordSummary(item.change_record)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return changeRecordSummary(item.change_record);
+  }).slice(0, 6);
+}
+
+function ChangeRecordStrip({ report }) {
+  const records = collectVisibleChangeRecords(report);
+  if (records.length === 0) return null;
+  return (
+    <section style={STYLES.changeStrip}>
+      <div style={STYLES.changeStripHeader}>
+        根据你之前的反馈，我做了这些调整：
+      </div>
+      <div style={STYLES.changeList}>
+        {records.map((item, index) => {
+          const record = item.change_record || {};
+          const refs = Array.isArray(record.diff_refs) ? record.diff_refs.filter(Boolean) : [];
+          return (
+            <div key={item.feedback_id || index} style={STYLES.changeItem}>
+              <div>{index + 1}. {changeRecordSummary(record)}</div>
+              <div style={STYLES.changeMeta}>
+                {item.content && <span>来源反馈：{item.content}</span>}
+                {refs.length > 0 && <span> · 位置：{refs.join(', ')}</span>}
+                {item.status && <span> · 状态：{item.status === 'confirmed' ? '已确认' : '已处理'}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function renderReportContent(report, tokens, feedbackHandlers) {
+  if (report?.content?.type === 'report_template') {
+    return (
+      <ReportTemplateRenderer
+        report={report}
+        onAddFeedback={feedbackHandlers.addDraftItem}
+        onCanvasSnapshot={feedbackHandlers.saveCanvasSnapshot}
+      />
+    );
+  }
+
   if (!report?.content) {
     return <div style={STYLES.emptyState}>这份汇报没有可渲染内容</div>;
   }
@@ -283,6 +379,9 @@ function renderReportContent(report, tokens, feedbackHandlers) {
 }
 
 export default function Reports() {
+  const { reportId: routeReportId } = useParams();
+  const [searchParams] = useSearchParams();
+  const requestedReportId = routeReportId || searchParams.get('report');
   const tokens = useDesignTokens();
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -302,7 +401,8 @@ export default function Reports() {
         const nextReports = data.reports || [];
         setReports(nextReports);
         if (!selectedReportId && nextReports.length > 0) {
-          setSelectedReportId(nextReports[0].id);
+          const requestedExists = requestedReportId && nextReports.some((report) => report.id === requestedReportId);
+          setSelectedReportId(requestedExists ? requestedReportId : nextReports[0].id);
         }
       })
       .catch(() => {
@@ -354,7 +454,7 @@ export default function Reports() {
     setDrafts(nextDrafts);
     if (!selectedReportId) return;
     try {
-      await saveFeedbackDraft(selectedReportId, nextDrafts);
+      await saveReportFeedbackDraft(selectedReportId, nextDrafts);
     } catch {
       /* keep local draft state so the user can retry */
     }
@@ -384,7 +484,7 @@ export default function Reports() {
     if (!selectedReportId || drafts.length === 0) return;
     setSubmitting(true);
     try {
-      await commitFeedback(selectedReportId, drafts);
+      await commitReportFeedback(selectedReportId, drafts);
       await persistDrafts([]);
       await reloadSelectedReport();
       setReports((items) => items.map((item) => (
@@ -400,10 +500,23 @@ export default function Reports() {
   async function handleRevokeFeedback(feedbackId) {
     if (!selectedReportId) return;
     try {
-      await revokeFeedback(selectedReportId, [feedbackId]);
+      await revokeReportFeedback(selectedReportId, [feedbackId]);
       await reloadSelectedReport();
     } catch {
       /* keep current state */
+    }
+  }
+
+  async function handleSaveCanvasSnapshot(sectionId, snapshot) {
+    if (!selectedReportId) return;
+    try {
+      const report = await updateReportCanvas(selectedReportId, { sectionId, snapshot });
+      setSelectedReport(report);
+      setReports((items) => items.map((item) => (
+        item.id === report.id ? { ...item, updated_at: report.updated_at, updatedAt: report.updatedAt } : item
+      )));
+    } catch {
+      /* tldraw keeps local state; the next edit will retry */
     }
   }
 
@@ -531,12 +644,14 @@ export default function Reports() {
               </div>
             </div>
             <div style={STYLES.contentBody}>
+              <ChangeRecordStrip report={selectedReport} />
               <div style={STYLES.reportWorkspace}>
                 <div style={STYLES.reportContent}>
                   {renderReportContent(selectedReport, tokens, {
                     addDraftItem,
                     replaceDraftByAction,
                     drafts,
+                    saveCanvasSnapshot: handleSaveCanvasSnapshot,
                   })}
                 </div>
                 <div style={STYLES.feedbackRail}>

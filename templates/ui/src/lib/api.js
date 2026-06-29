@@ -160,6 +160,14 @@ export async function confirmFeedback(feedbackId) {
   return res.json();
 }
 
+export async function archiveFeedback(feedbackId) {
+  const res = await fetch(`${BASE}/api/feedback/${feedbackId}/archive`, {
+    method: 'POST',
+  });
+  await ensureOk(res, 'Failed to archive feedback');
+  return res.json();
+}
+
 // ── V3 Logs APIs ──
 
 export async function fetchLogs(params = {}) {
@@ -191,6 +199,34 @@ export async function fetchHarness() {
 export async function rescanHarness() {
   const res = await fetch(`${BASE}/api/harness/rescan`, { method: 'POST' });
   await ensureOk(res, 'Failed to rescan harness');
+  return res.json();
+}
+
+export async function addHarnessSource(source) {
+  const res = await fetch(`${BASE}/api/harness/sources`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(source),
+  });
+  await ensureOk(res, 'Failed to add harness source');
+  return res.json();
+}
+
+export async function updateHarnessSource(sourceId, patch) {
+  const res = await fetch(`${BASE}/api/harness/sources/${sourceId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  await ensureOk(res, 'Failed to update harness source');
+  return res.json();
+}
+
+export async function removeHarnessSource(sourceId) {
+  const res = await fetch(`${BASE}/api/harness/sources/${sourceId}`, {
+    method: 'DELETE',
+  });
+  await ensureOk(res, 'Failed to remove harness source');
   return res.json();
 }
 
@@ -231,6 +267,56 @@ export async function createReport(reportData) {
     body: JSON.stringify(reportData),
   });
   await ensureOk(res, 'Failed to create report');
+  return res.json();
+}
+
+export async function updateReport(reportId, reportData) {
+  const res = await fetch(`${BASE}/api/reports/${reportId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reportData),
+  });
+  await ensureOk(res, 'Failed to update report');
+  return res.json();
+}
+
+export async function updateReportCanvas(reportId, { sectionId, snapshot }) {
+  const res = await fetch(`${BASE}/api/reports/${reportId}/canvas`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sectionId, snapshot }),
+  });
+  await ensureOk(res, 'Failed to update report canvas');
+  return res.json();
+}
+
+export async function saveReportFeedbackDraft(reportId, items) {
+  const res = await fetch(`${BASE}/api/reports/${reportId}/feedback/draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+  await ensureOk(res, 'Failed to save report feedback draft');
+  return res.json();
+}
+
+export async function commitReportFeedback(reportId, items) {
+  const res = await fetch(`${BASE}/api/reports/${reportId}/feedback/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  });
+  await ensureOk(res, 'Failed to commit report feedback');
+  return res.json();
+}
+
+export async function revokeReportFeedback(reportId, feedbackIds) {
+  const res = await fetch(`${BASE}/api/reports/${reportId}/feedback/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedback_ids: feedbackIds }),
+  });
+  await ensureOk(res, 'Failed to revoke report feedback');
   return res.json();
 }
 

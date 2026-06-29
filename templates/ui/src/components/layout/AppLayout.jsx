@@ -59,8 +59,12 @@ export default function AppLayout() {
   const location = useLocation();
   const [theme, setTheme] = useState(() => getThemePreference());
   const [projectName, setProjectName] = useState('');
+  const [isNarrow, setIsNarrow] = useState(() => (
+    typeof window !== 'undefined' ? window.innerWidth < 760 : false
+  ));
   const isSplitWorkspace = location.pathname.startsWith('/logs') || location.pathname.startsWith('/reports');
   const [sidebarVisible, setSidebarVisible] = useState(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 760) return false;
     try {
       return localStorage.getItem(SIDEBAR_VISIBLE_KEY) !== 'false';
     } catch {
@@ -70,6 +74,17 @@ export default function AppLayout() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', getThemePreference());
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const nextIsNarrow = window.innerWidth < 760;
+      setIsNarrow(nextIsNarrow);
+      if (nextIsNarrow) setSidebarVisible(false);
+    };
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   useEffect(() => {
@@ -107,6 +122,7 @@ export default function AppLayout() {
         projectName={projectName}
         theme={theme}
         visible={sidebarVisible}
+        overlay={isNarrow}
         onToggleTheme={handleToggleTheme}
         onToggleSidebar={handleToggleSidebar}
       />
@@ -135,6 +151,9 @@ export default function AppLayout() {
                   maxWidth: 'none',
                   margin: 0,
                   padding: 'var(--vd-space-4)',
+                } : {}),
+                ...(isNarrow ? {
+                  padding: '72px var(--vd-space-4) var(--vd-space-4)',
                 } : {}),
               }}
             >

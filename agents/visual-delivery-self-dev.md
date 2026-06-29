@@ -69,30 +69,39 @@ RUNTIME_DIR/data/design/
 2. 创建新汇报（选择 `complex-review` 结构层）
 3. 标题格式：`[Skill Dev] {任务描述}`
 
-#### 2.2 交付页面生成
+#### 2.2 开发汇报页面生成
 
-修改代码后，生成开发交付页面：
+修改代码后，生成开发汇报页面：
 
 ```bash
-curl -s -X POST http://localhost:3847/api/deliveries \
+curl -s -X POST http://localhost:3847/api/reports \
   -H 'Content-Type: application/json' \
   -d '{
-    "mode": "task_delivery",
     "title": "[Skill Dev] SKILL.md 修改：反馈生命周期",
-    "metadata": {
-      "project_name": "visual-delivery-skill",
-      "task_name": "feedback-lifecycle-v3",
-      "generated_at": "2026-06-29T20:43:00+08:00",
-      "audience": "developer"
-    },
+    "structure": "complex-review",
+    "presentation": "document",
+    "routing_reason": "自举开发需要呈现修改摘要、影响范围、验证证据和待反馈点。",
     "content": {
-      "type": "generated_html",
-      "html": "<!DOCTYPE html><html>...开发交付页面...</html>"
+      "type": "report_template",
+      "version": 1,
+      "structure": "complex-review",
+      "presentation": "document",
+      "sections": [
+        {
+          "id": "sec-summary",
+          "title": "修改摘要",
+          "presentation": "document",
+          "artifact": {
+            "type": "document",
+            "body": "# 修改摘要\n\n说明改了什么、为什么改、影响哪些文件。"
+          }
+        }
+      ]
     }
   }'
 ```
 
-#### 2.3 开发交付页面结构
+#### 2.3 开发汇报页面结构
 
 每页应包含：
 
@@ -110,7 +119,7 @@ curl -s -X POST http://localhost:3847/api/deliveries \
 
 ```bash
 # 读取反馈
-curl -s http://localhost:3847/api/deliveries/{DELIVERY_ID}/feedback
+curl -s http://localhost:3847/api/reports/{REPORT_ID}/feedback
 ```
 
 根据反馈类型处理：
@@ -127,7 +136,7 @@ curl -s http://localhost:3847/api/deliveries/{DELIVERY_ID}/feedback
 模板文件位于 `templates/` 目录，修改后需要：
 
 1. 在 dev 环境测试
-2. 生成交付页面
+2. 生成开发汇报页面
 3. 收集确认反馈
 4. **安装到各平台**
 5. 同步到正式环境
@@ -137,7 +146,7 @@ curl -s http://localhost:3847/api/deliveries/{DELIVERY_ID}/feedback
 SKILL.md 是 skill 的入口，修改后需要：
 
 1. 创建测试任务
-2. 用新 SKILL.md 逻辑生成交付页面
+2. 用新 SKILL.md 逻辑生成开发汇报页面
 3. 验证指令是否正确执行
 4. **安装到各平台**
 
@@ -227,9 +236,9 @@ node scripts/start.js --data-dir /Users/yatege/WorkingProject/visual-delivery-sk
 | 功能 | 验证方式 |
 |------|----------|
 | 服务启动 | `curl http://localhost:3847/health` |
-| 页面生成 | 创建 delivery，验证 HTML |
+| 页面生成 | 创建 report，验证 `content.type=report_template` |
 | 反馈收集 | 提交反馈，验证写入 |
-| 状态更新 | 修改 delivery content |
+| 状态更新 | 处理 report feedback 后验证 change record |
 
 ---
 
@@ -451,13 +460,13 @@ node /Users/yatege/WorkingProject/visual-delivery-skill/scripts/start.js \
 # 查看项目状态
 curl -s http://localhost:3847/api/project | jq .
 
-# 创建开发交付
-curl -s -X POST http://localhost:3847/api/deliveries \
+# 创建开发汇报
+curl -s -X POST http://localhost:3847/api/reports \
   -H 'Content-Type: application/json' \
   -d '{...}'
 
 # 读取反馈
-curl -s http://localhost:3847/api/deliveries/{id}/feedback
+curl -s http://localhost:3847/api/reports/{id}/feedback
 
 # 停止服务
 node /Users/yatege/WorkingProject/visual-delivery-skill/scripts/stop.js

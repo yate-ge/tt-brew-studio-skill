@@ -4,12 +4,14 @@ const STATUS_LABELS = {
   tracked: '待处理',
   addressed: '已处理',
   confirmed: '已确认',
+  archived: '已归档',
 };
 
 const STATUS_COLORS = {
   tracked: { bg: 'var(--vd-warning-bg)', color: 'var(--vd-warning)', border: 'var(--vd-warning-border)' },
   addressed: { bg: 'var(--vd-info-bg)', color: 'var(--vd-info)', border: 'var(--vd-info-border)' },
   confirmed: { bg: 'var(--vd-success-bg)', color: 'var(--vd-success)', border: 'var(--vd-success-border)' },
+  archived: { bg: 'var(--vd-surface-hover)', color: 'var(--vd-text-tertiary)', border: 'var(--vd-border-default)' },
 };
 
 const STYLES = {
@@ -123,7 +125,7 @@ const STYLES = {
   },
 };
 
-export default function FeedbackPanel({ feedbacks = [], onConfirmFeedback }) {
+export default function FeedbackPanel({ feedbacks = [], onConfirmFeedback, onArchiveFeedback }) {
   const [activeTab, setActiveTab] = useState('tracked');
 
   const filtered = feedbacks.filter((f) => {
@@ -135,6 +137,7 @@ export default function FeedbackPanel({ feedbacks = [], onConfirmFeedback }) {
     { key: 'tracked', label: '待处理', count: feedbacks.filter((f) => f.status === 'tracked').length },
     { key: 'addressed', label: '已处理', count: feedbacks.filter((f) => f.status === 'addressed').length },
     { key: 'confirmed', label: '已确认', count: feedbacks.filter((f) => f.status === 'confirmed').length },
+    { key: 'archived', label: '已归档', count: feedbacks.filter((f) => f.status === 'archived').length },
   ];
 
   return (
@@ -163,7 +166,7 @@ export default function FeedbackPanel({ feedbacks = [], onConfirmFeedback }) {
       <div style={STYLES.list}>
         {filtered.length === 0 ? (
           <div style={STYLES.emptyState}>
-            暂无{activeTab === 'tracked' ? '待处理' : activeTab === 'addressed' ? '已处理' : '已确认'}的反馈
+            暂无{STATUS_LABELS[activeTab] || ''}的反馈
           </div>
         ) : (
           filtered.map((fb) => {
@@ -216,6 +219,26 @@ export default function FeedbackPanel({ feedbacks = [], onConfirmFeedback }) {
                     }}
                   >
                     确认已解决
+                  </button>
+                )}
+
+                {(fb.status === 'confirmed' || fb.status === 'addressed') && onArchiveFeedback && (
+                  <button
+                    onClick={() => onArchiveFeedback(fb.id)}
+                    style={{
+                      marginTop: 'var(--vd-space-2)',
+                      padding: 'var(--vd-space-1) var(--vd-space-3)',
+                      borderRadius: 'var(--vd-radius-sm)',
+                      border: '1px solid var(--vd-border-default)',
+                      background: 'var(--vd-surface-bg)',
+                      color: 'var(--vd-text-secondary)',
+                      fontSize: 'var(--vd-font-size-xs)',
+                      fontWeight: 'var(--vd-font-weight-medium)',
+                      cursor: 'pointer',
+                      width: '100%',
+                    }}
+                  >
+                    归档
                   </button>
                 )}
               </div>

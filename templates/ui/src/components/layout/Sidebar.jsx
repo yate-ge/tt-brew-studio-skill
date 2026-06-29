@@ -56,6 +56,14 @@ const STYLES = {
     opacity: 0,
     pointerEvents: 'none',
   },
+  sidebarOverlay: {
+    position: 'fixed',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    zIndex: 40,
+    boxShadow: 'var(--vd-shadow-lg)',
+  },
   sidebarEdge: {
     position: 'absolute',
     top: 0,
@@ -148,13 +156,17 @@ const STYLES = {
   },
 };
 
-export default function Sidebar({ projectName, theme, visible, onToggleTheme, onToggleSidebar }) {
+export default function Sidebar({ projectName, theme, visible, overlay = false, onToggleTheme, onToggleSidebar }) {
   const location = useLocation();
   const displayName = projectName || '未命名项目';
 
   return (
     <aside
-      style={{ ...STYLES.sidebar, ...(visible ? {} : STYLES.sidebarHidden) }}
+      style={{
+        ...STYLES.sidebar,
+        ...(overlay ? STYLES.sidebarOverlay : {}),
+        ...(visible ? {} : STYLES.sidebarHidden),
+      }}
       aria-hidden={!visible}
     >
       <div style={{ ...STYLES.contentWrap, ...(visible ? {} : STYLES.contentWrapHidden) }}>
