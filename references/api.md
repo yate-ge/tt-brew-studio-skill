@@ -9,6 +9,7 @@
 - [Settings APIs](#settings-apis)
 - [Locale APIs](#locale-apis)
 - [Report APIs](#report-apis)
+- [Canvas Workspaces](#canvas-workspaces)
 - [Harness and Documents APIs](#harness-and-documents-apis)
 - [File View](#file-view)
 - [Design Tokens](#design-tokens)
@@ -421,6 +422,9 @@ core delivery content, decisions, and next steps.
 `table` and `slides` are not first-class presentation values. Tables may be
 rendered inside the document body. Canvas collaboration uses
 `canvas_workspace`, described below.
+Legacy `document`, `table`, `slides`, and `report_template` values normalize to
+`document_report`. Legacy `canvas` normalizes to `canvas_workspace`; new canvas
+collaboration should use the Canvas Workspaces APIs below.
 
 Response: the hydrated report, including `feedback`, `drafts`, and
 `pending_feedback_count`.
@@ -499,6 +503,9 @@ related workspace exists.
 ### `PUT /api/canvas-workspaces/:id/snapshot`
 
 Persists the tldraw snapshot and an agent-readable semantic index.
+Visual Delivery treats tldraw `frame` shapes as canvas sections: they are named
+containers, their child shapes are section content, and the semantic index
+records both section summaries and `contains` relationships.
 
 ```json
 {
@@ -507,13 +514,92 @@ Persists the tldraw snapshot and an agent-readable semantic index.
     "session": {}
   },
   "semantic_index": {
-    "version": 1,
+    "version": 2,
+    "sections": [
+      {
+        "kind": "canvas_section",
+        "shape_id": "shape:section",
+        "title": "Agent 工作区",
+        "child_shape_ids": ["shape:node"],
+        "bounds": { "x": 0, "y": 0, "w": 960, "h": 640 }
+      }
+    ],
     "nodes": [],
+    "assets": [
+      {
+        "shape_id": "shape:image",
+        "asset_id": "asset:...",
+        "alt_text": "Image description",
+        "section_id": "shape:section"
+      }
+    ],
     "annotations": [],
-    "relationships": []
+    "relationships": [
+      { "type": "contains", "from": "shape:section", "to": "shape:node" }
+    ]
   }
 }
 ```
+
+The request may include an `event` object. Use it to record an agent command
+batch whenever the agent writes to the canvas. The server stores the event in
+`.visual-delivery/data/canvas-workspaces/{workspace_id}/events.json`; future
+agent turns can inspect it together with the snapshot and semantic index.
+
+```json
+{
+  "snapshot": { "document": { "store": {} }, "session": {} },
+  "semantic_index": { "version": 2, "sections": [], "nodes": [] },
+  "event": {
+    "type": "agent_command_batch",
+    "actor": "agent",
+    "summary": "Added a decision section and three sticky notes.",
+    "target": {
+      "kind": "canvas_workspace",
+      "workspace_id": "cw_..."
+    },
+    "commands": [
+      {
+        "op": "create_section",
+        "client_id": "decision-section",
+        "title": "Decision",
+        "bounds": { "x": 0, "y": 0, "w": 960, "h": 640 }
+      },
+      {
+        "op": "add_sticky",
+        "client_id": "sticky-1",
+        "section_client_id": "decision-section",
+        "text": "Use the self-built tldraw canvas as the core runtime.",
+        "color": "yellow",
+        "bounds": { "x": 64, "y": 120, "w": 240, "h": 240 }
+      }
+    ],
+    "created_shape_ids": ["shape:..."],
+    "mutated_shape_ids": []
+  }
+}
+```
+
+Recommended command operations:
+
+| Operation | Purpose |
+| --- | --- |
+| `create_section` | Create a named tldraw frame as a container |
+| `rename_section` | Update a section's navigational name |
+| `duplicate_section` | Copy a section and its children |
+| `organize_section` | Reflow section children into lanes or grids |
+| `add_text` | Add titles, instructions, analysis, captions, or labels |
+| `add_sticky` | Add one participant idea, feedback item, concern, or decision |
+| `add_shape` | Add a diagram node, option, process step, or state |
+| `add_connector` | Link two nodes and mirror the relationship in `semantic_index.relationships` |
+| `add_table` | Add row-column data as a first-class semantic object |
+| `add_code_block` | Add code content with language metadata |
+| `add_label` | Add a numbered or lettered callout marker |
+| `add_image_asset` | Add an image with required `alt_text` |
+| `set_image_alt_text` | Update image accessibility metadata |
+
+The event command batch is an audit trail, not a separate source of truth. The
+same request must still persist the actual `snapshot` and `semantic_index`.
 
 ### `POST /api/reports/:id/feedback/draft`
 
@@ -555,9 +641,23 @@ Common V4 template feedback targets:
 ```json
 {
   "target": {
+    "kind": "canvas_section",
+    "workspace_id": "cw_...",
+    "section_id": "shape:section",
+    "section_title": "Agent 工作区",
+    "shape_ids": ["shape:section"],
+    "bounds": { "x": 0, "y": 0, "w": 960, "h": 640 }
+  }
+}
+```
+
+```json
+{
+  "target": {
     "kind": "canvas_node",
     "workspace_id": "cw_...",
     "node_id": "agent-zone",
+    "section_id": "shape:section",
     "shape_id": "shape:..."
   }
 }
@@ -568,6 +668,7 @@ Common V4 template feedback targets:
   "target": {
     "kind": "canvas_selection",
     "workspace_id": "cw_...",
+    "section_id": "shape:section",
     "shape_ids": ["shape:..."],
     "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }
   }

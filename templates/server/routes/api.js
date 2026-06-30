@@ -2083,14 +2083,25 @@ function setupRoutes(app, dataDir, options = {}) {
         ],
         seed_nodes: [
           {
+            id: 'report-goal',
+            role: 'agent',
+            title: title || '画布汇报目标',
+            body: '说明本次画布汇报要对齐的目标、上下文和需要用户确认的范围。',
+            x: -360,
+            y: 0,
+            w: 300,
+            h: 160,
+            color: 'blue',
+          },
+          {
             id: 'agent-brief',
             role: 'agent',
-            title: 'Agent 工作区',
-            body: '放置方案、素材、推理过程和设计说明。',
+            title: 'Agent 产出区',
+            body: '放置 agent 已完成的产出、核心判断、推理过程和设计说明。',
             x: 0,
             y: 0,
-            w: 280,
-            h: 170,
+            w: 320,
+            h: 190,
             color: 'blue',
           },
           {
@@ -2098,21 +2109,32 @@ function setupRoutes(app, dataDir, options = {}) {
             role: 'agent',
             title: '灵感与素材',
             body: '收集参考、截图、链接和用户补充的信息。',
-            x: 340,
+            x: 380,
             y: 0,
-            w: 280,
-            h: 170,
+            w: 320,
+            h: 190,
             color: 'yellow',
+          },
+          {
+            id: 'direction-work',
+            role: 'agent',
+            title: '方案推进区',
+            body: '组织设计方向、脑暴分支、取舍依据、风险和待验证问题。',
+            x: 0,
+            y: 260,
+            w: 320,
+            h: 190,
+            color: 'orange',
           },
           {
             id: 'feedback',
             role: 'user',
             title: '用户反馈区',
             body: '用户可以圈选区域、批注或补充新的想法。',
-            x: 0,
-            y: 240,
-            w: 280,
-            h: 170,
+            x: 380,
+            y: 260,
+            w: 320,
+            h: 190,
             color: 'green',
           },
           {
@@ -2120,14 +2142,14 @@ function setupRoutes(app, dataDir, options = {}) {
             role: 'shared',
             title: '共享决策区',
             body: '沉淀需要确认的结论、取舍和下一步动作。',
-            x: 340,
-            y: 240,
-            w: 280,
-            h: 170,
+            x: 760,
+            y: 0,
+            w: 320,
+            h: 190,
             color: 'violet',
           },
         ],
-        node_feedback_targets: ['agent-brief', 'inspiration', 'feedback', 'decision'],
+        node_feedback_targets: ['report-goal', 'agent-brief', 'inspiration', 'direction-work', 'feedback', 'decision'],
         prompt: '在无限画布中放置方案、素材、批注和待决策点。',
       };
     }
@@ -2491,16 +2513,34 @@ function setupRoutes(app, dataDir, options = {}) {
 
   function defaultCanvasSemanticIndex() {
     return {
-      version: 1,
+      version: 2,
       zones: [
         { id: 'agent-zone', role: 'agent', title: 'Agent 工作区' },
         { id: 'user-zone', role: 'user', title: '用户反馈区' },
         { id: 'shared-zone', role: 'shared', title: '共享决策区' },
       ],
+      sections: [],
       nodes: [],
+      assets: [],
       annotations: [],
       relationships: [],
       updated_at: null,
+    };
+  }
+
+  function normalizeCanvasSemanticIndex(index) {
+    const base = defaultCanvasSemanticIndex();
+    if (!index || typeof index !== 'object') return base;
+    return {
+      ...base,
+      ...index,
+      version: index.version || base.version,
+      zones: Array.isArray(index.zones) ? index.zones : base.zones,
+      sections: Array.isArray(index.sections) ? index.sections : [],
+      nodes: Array.isArray(index.nodes) ? index.nodes : [],
+      assets: Array.isArray(index.assets) ? index.assets : [],
+      annotations: Array.isArray(index.annotations) ? index.annotations : [],
+      relationships: Array.isArray(index.relationships) ? index.relationships : [],
     };
   }
 
@@ -2518,7 +2558,7 @@ function setupRoutes(app, dataDir, options = {}) {
       tags: Array.isArray(workspace.tags) ? workspace.tags : [],
       context: workspace.context || {},
       source_task_id: workspace.source_task_id || workspace.context?.task_id || null,
-      semantic_index: workspace.semantic_index || defaultCanvasSemanticIndex(),
+      semantic_index: normalizeCanvasSemanticIndex(workspace.semantic_index),
       selection_policy: workspace.selection_policy || {
         default: 'reuse_related_active_workspace',
         create_when: [
@@ -2880,7 +2920,7 @@ function setupRoutes(app, dataDir, options = {}) {
       const saved = await writeCanvasWorkspace({
         ...workspace,
         semantic_index: semanticIndex && typeof semanticIndex === 'object'
-          ? { ...semanticIndex, updated_at: now }
+          ? normalizeCanvasSemanticIndex({ ...semanticIndex, updated_at: now })
           : workspace.semantic_index,
         updated_at: now,
         updatedAt: now,

@@ -198,6 +198,11 @@ Document report structure:
 - `standard-report`: one focused report, short-cycle or single artifact.
 - `complex-review`: multi-section document with reasoning, evidence, decisions,
   and feedback prompts.
+- Use document sections for context, rationale, conclusions, comparisons,
+  decision matrices, risks, and structured checks.
+- Legacy `document`, `table`, `slides`, and `report_template` requests normalize
+  to `document_report`; do not route new work to those as separate first-class
+  delivery modes.
 - When `content` is omitted, `/api/reports` creates a `document_report`.
 
 Canvas workspace behavior:
@@ -210,15 +215,71 @@ Canvas workspace behavior:
 - The implementation uses `tldraw` and follows Cowart's local infinite-canvas
   direction: project-local persistence, image assets, annotations, selected
   regions, and agent-readable canvas state.
+- Agent can continuously add material, organize ideas, place options, explain
+  decisions, and advance product/design thinking on the canvas.
+- User can annotate, add material, select regions, and submit feedback in the
+  same canvas space.
+- Use tldraw frame shapes as Visual Delivery canvas sections. A section is a
+  named container with a visible top-left title; shapes reparented under that
+  frame are treated as the section's children in the semantic index.
+- Prefer sections for idea clusters, moodboard lanes, feedback areas, option
+  groups, and agent work areas. Keep section names short and navigational.
+- Canvas pages must support fullscreen viewing and feedback on selected canvas
+  elements through `canvas_selection` targets.
+- Canvas pages should support section-level operations when possible: create a
+  section around the current selection, duplicate a section, organize a
+  section's children, and rename the selected section.
+- Use the FigJam-inspired canvas discipline for agent work:
+  - inspect the existing workspace before writing
+  - plan the board narrative left-to-right, top-to-bottom
+  - use sections as short, navigational containers
+  - distinguish structural text from user/participant input
+  - use connector relationships for dependency, flow, and evidence links
+  - keep every write small enough to validate, then save the snapshot and
+    semantic index
+  - record created or mutated shape ids in the canvas event so future agent turns
+    can reference them deterministically
+- The report feedback panel is a floating workspace control, independent from
+  the report content layout.
 - Persist both the raw tldraw snapshot and a semantic index so the agent can
-  understand shapes, selections, annotations, and workspace history later.
+  understand sections, child relationships, shapes, selections, image alt text,
+  annotations, and workspace history later.
+
+Canvas node semantics borrowed from FigJam:
+
+- `section`: rendered as a tldraw `frame`; use it as the parent/container for
+  related content.
+- `sticky_note`: use for individual user ideas, brainstorm items, concerns, or
+  decisions. Keep one idea per sticky. Do not use sticky notes for instructions
+  or long analysis.
+- `text`: use for board titles, section headings, prompts, instructions,
+  captions, and analysis.
+- `shape`: use for diagram nodes, states, options, and process steps.
+- `connector`: use for spatial relationships; record `from`, `to`, direction,
+  line type, and optional label in `semantic_index.relationships`.
+- `table`, `code_block`, and `label`: treat as first-class semantic kinds even
+  when their current renderer falls back to grouped tldraw shapes. Do not model
+  tables as unrelated rectangles or code as plain body text in the semantic
+  index.
+
+Canvas write prompt:
+
+```text
+Before writing to a canvas workspace, read the workspace detail and inspect
+`semantic_index`. If the task is additive, choose the active related section or
+create a new named section. Plan content as an ordered command batch. After
+modifying the tldraw snapshot, persist both `snapshot` and `semantic_index` via
+`PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot`, and include an `event`
+with `commands`, `created_shape_ids`, `mutated_shape_ids`, and a short summary.
+```
 
 Feedback targets:
 
 - Document reports should expose `document_paragraph` targets with paragraph
   line and quote metadata.
-- Canvas workspaces should expose `canvas_workspace`, `canvas_node`, and
-  `canvas_selection` targets with shape ids and bounds when available.
+- Canvas workspaces should expose `canvas_workspace`, `canvas_section`,
+  `canvas_node`, and `canvas_selection` targets with shape ids and bounds when
+  available.
 
 Routing explanation example:
 
@@ -400,8 +461,10 @@ curl -s -X PUT http://localhost:3847/api/canvas-workspaces/{WORKSPACE_ID}/snapsh
   -d '{
     "snapshot": { "document": { "store": {} }, "session": {} },
     "semantic_index": {
-      "version": 1,
+      "version": 2,
+      "sections": [],
       "nodes": [],
+      "assets": [],
       "annotations": [],
       "relationships": []
     }
@@ -413,14 +476,19 @@ When the agent adds canvas content, ensure the content is meaningful:
 - place idea clusters, references, options, constraints, and decision points
 - separate agent work areas, user feedback areas, and shared decision areas
 - keep user feedback areas visible
+- put related canvas objects inside named sections; section membership should be
+  represented as `contains` relationships in `semantic_index.relationships`
+- preserve image alt text on image nodes and mirror it into
+  `semantic_index.assets[].alt_text`
 - connect canvas nodes and selected regions to feedback targets when possible
 
 Canvas feedback targets should identify the reviewed object:
 
 ```json
 {
-  "kind": "canvas_workspace|canvas_node|canvas_selection",
+  "kind": "canvas_workspace|canvas_section|canvas_node|canvas_selection",
   "workspace_id": "cw_...",
+  "section_id": "shape:...",
   "node_id": "agent-zone",
   "shape_ids": ["shape:..."],
   "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }
@@ -449,6 +517,7 @@ should use `/api/reports`.
 - Product design: [docs/product-design-v4.md](docs/product-design-v4.md)
 - Implementation plan: [docs/implementation-plan-v4.md](docs/implementation-plan-v4.md)
 - API endpoints: [references/api.md](references/api.md)
+- Canvas workspace model: [references/canvas-workspace-model.md](references/canvas-workspace-model.md)
 - Generative UI guide: [references/generative-ui-guide.md](references/generative-ui-guide.md)
 - Feedback payload model: [references/feedback-schema.md](references/feedback-schema.md)
 - Design tokens: [references/design-system.md](references/design-system.md)

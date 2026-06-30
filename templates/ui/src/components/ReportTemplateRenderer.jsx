@@ -35,6 +35,27 @@ function slugify(value) {
   return normalized || 'section';
 }
 
+function safeShapeKey(value) {
+  const normalized = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'node';
+}
+
+function markdownSummary(value, max = 260) {
+  const text = String(value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]+]\([^)]*\)/g, (match) => match.replace(/^\[|\]\([^)]*\)$/g, ''))
+    .replace(/[#>*_~[\]()|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
 function uniqueSlug(base, counts) {
   const count = counts.get(base) || 0;
   counts.set(base, count + 1);
@@ -157,6 +178,137 @@ function slideDecision(slide) {
     id: slide?.decision_id || slide?.id,
     text: decision || '需要确认的决策',
     status: slide?.decision_status || (slide?.needs_decision ? 'needs_decision' : 'open'),
+  };
+}
+
+function isCanvasPresentationReport(report) {
+  return (report?.presentation || report?.content?.presentation) === 'canvas';
+}
+
+function summarizeTableArtifact(artifact) {
+  const columns = Array.isArray(artifact?.columns) ? artifact.columns : [];
+  const rows = Array.isArray(artifact?.rows) ? artifact.rows : [];
+  const rowLines = rows.slice(0, 4).map((row, index) => {
+    const title = rowTitle(row, columns, index);
+    const status = row?.status ? ` (${row.status})` : '';
+    return `- ${title}${status}`;
+  });
+  return [`${rows.length} 行，${columns.length} 个字段。`, ...rowLines].filter(Boolean).join('\n');
+}
+
+function summarizeSlidesArtifact(artifact) {
+  const slides = Array.isArray(artifact?.slides) ? artifact.slides : [];
+  return slides.slice(0, 6).map((slide, index) => {
+    const decision = slideDecision(slide);
+    return `${index + 1}. ${slide?.title || `Slide ${index + 1}`}${decision ? `\n   决策：${decision.text}` : ''}`;
+  }).join('\n') || '暂无 slides 内容。';
+}
+
+function sectionToCanvasNode(section, index) {
+  const presentation = section.presentation || section.artifact?.type || 'document';
+  const artifact = section.artifact || {};
+  if (presentation === 'canvas' || artifact.type === 'canvas') return null;
+
+  let body = section.narrative || '';
+  if (presentation === 'table' || artifact.type === 'table') {
+    body = [body, summarizeTableArtifact(artifact)].filter(Boolean).join('\n\n');
+  } else if (presentation === 'slides' || artifact.type === 'slides') {
+    body = [body, summarizeSlidesArtifact(artifact)].filter(Boolean).join('\n\n');
+  } else {
+    body = [body, markdownSummary(artifact.body || artifact.markdown || artifact.content || '')].filter(Boolean).join('\n\n');
+  }
+
+  return {
+    id: `section-${index}-${section.id || presentation}`,
+    role: 'agent',
+    title: section.title || `Section ${index + 1}`,
+    body: body || '由 agent 在画布中补充该区块内容。',
+    x: (index % 2) * 360,
+    y: 520 + Math.floor(index / 2) * 240,
+    w: 320,
+    h: 190,
+    color: presentation === 'table' ? 'orange' : (presentation === 'slides' ? 'violet' : 'blue'),
+    source_section_id: section.id,
+    source_presentation: presentation,
+  };
+}
+
+function changeRecordToCanvasNode(item, index) {
+  const record = item.change_record || item.changeRecord || {};
+  const summary = record.change_summary || record.summary || record.description || '';
+  if (!summary) return null;
+  return {
+    id: `change-record-${item.feedback_id || item.id || index}`,
+    role: 'shared',
+    title: `反馈闭环 ${index + 1}`,
+    body: [
+      summary,
+      item.content ? `来源反馈：${item.content}` : '',
+      item.status ? `状态：${item.status === 'confirmed' ? '已确认' : '已处理'}` : '',
+    ].filter(Boolean).join('\n'),
+    x: 760,
+    y: 40 + index * 220,
+    w: 320,
+    h: 170,
+    color: 'green',
+  };
+}
+
+function uniqueCanvasNodes(nodes) {
+  const used = new Map();
+  return nodes.filter(Boolean).map((node, index) => {
+    const base = safeShapeKey(node.id || node.title || index);
+    const count = used.get(base) || 0;
+    used.set(base, count + 1);
+    const key = count === 0 ? base : `${base}-${count + 1}`;
+    return { ...node, _shapeKey: key };
+  });
+}
+
+function createCanvasReportSection(report, sections) {
+  const canvasSection = sections.find((section) => (
+    (section.presentation || section.artifact?.type) === 'canvas'
+  ));
+  const baseSection = canvasSection || {
+    id: 'canvas-report',
+    title: report?.title || '画布汇报',
+    presentation: 'canvas',
+    artifact: { type: 'canvas', mode: 'tldraw', seed_nodes: [] },
+  };
+  const baseArtifact = baseSection.artifact || {};
+  const existingSeedNodes = getCanvasSeedNodes(baseArtifact);
+  const routingNode = report?.content?.routing_reason ? {
+    id: 'routing-reason',
+    role: 'agent',
+    title: '汇报路由',
+    body: report.content.routing_reason,
+    x: -360,
+    y: 0,
+    w: 300,
+    h: 150,
+    color: 'blue',
+  } : null;
+  const sectionNodes = sections.map(sectionToCanvasNode).filter(Boolean);
+  const changeNodes = (Array.isArray(report?.content?.change_records) ? report.content.change_records : [])
+    .map(changeRecordToCanvasNode)
+    .filter(Boolean);
+
+  return {
+    ...baseSection,
+    title: baseSection.title || report?.title || '画布汇报',
+    presentation: 'canvas',
+    narrative: baseSection.narrative || '画布模式会把汇报内容、推理、决策和反馈目标放在同一个无限画布中。',
+    artifact: {
+      ...baseArtifact,
+      type: 'canvas',
+      mode: 'tldraw',
+      seed_nodes: uniqueCanvasNodes([
+        routingNode,
+        ...existingSeedNodes,
+        ...sectionNodes,
+        ...changeNodes,
+      ]),
+    },
   };
 }
 
@@ -669,6 +821,11 @@ function readSelectedShapeIds(editor) {
   }
 }
 
+function sameShapeIds(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => String(item) === String(b[index]));
+}
+
 function describeSelectedShapes(editor, shapeIds) {
   return shapeIds.map((shapeId) => {
     const shape = editor?.getShape?.(shapeId);
@@ -681,20 +838,39 @@ function describeSelectedShapes(editor, shapeIds) {
   });
 }
 
-function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFeedback }) {
+function canvasNodeShapeId(sectionId, node, index = 0) {
+  return createShapeId(`vd-${safeShapeKey(sectionId)}-${node._shapeKey || safeShapeKey(node.id || node.title || index)}`);
+}
+
+function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFeedback, variant = 'section' }) {
   const saveTimer = useRef(null);
+  const selectionPoller = useRef(null);
   const loaded = useRef(false);
   const editorRef = useRef(null);
   const [selectedShapeIds, setSelectedShapeIds] = useState([]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const snapshot = artifact?.tldraw_snapshot;
   const seedNodes = getCanvasSeedNodes(artifact);
+  const isReportCanvas = variant === 'report';
 
-  function seedCanvas(editor) {
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsFullscreen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen]);
+
+  useEffect(() => () => {
+    window.clearTimeout(saveTimer.current);
+    window.clearInterval(selectionPoller.current);
+  }, []);
+
+  function ensureSeedShapes(editor) {
     const existingShapes = editor.getCurrentPageShapes?.() || [];
-    if (existingShapes.length > 0) return;
-
     const shapes = seedNodes.map((node, index) => ({
-      id: createShapeId(`vd-${section.id}-${node.id || index}`),
+      id: canvasNodeShapeId(section.id, node, index),
       type: 'geo',
       x: Number.isFinite(node.x) ? node.x : index * 320,
       y: Number.isFinite(node.y) ? node.y : (index % 2 === 0 ? 0 : 220),
@@ -704,11 +880,12 @@ function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFe
         h: Number.isFinite(node.h) ? node.h : 170,
         fill: 'solid',
         color: node.color || ['blue', 'yellow', 'green', 'violet'][index % 4],
-        richText: toRichText(`${node.title}${node.role ? ` · ${node.role}` : ''}\n\n${node.body}`),
+        richText: toRichText(`${node.title || 'Canvas Node'}${node.role ? ` · ${node.role}` : ''}\n\n${node.body || ''}`),
       },
-    }));
-    editor.createShapes(shapes);
-    editor.zoomToFit?.();
+    })).filter((shape) => !editor.getShape?.(shape.id));
+
+    if (shapes.length > 0) editor.createShapes(shapes);
+    if (existingShapes.length === 0 && shapes.length > 0) editor.zoomToFit?.();
   }
 
   function handleMount(editor) {
@@ -721,10 +898,18 @@ function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFe
         console.error('Failed to load tldraw snapshot', error);
       }
     } else {
-      seedCanvas(editor);
+      ensureSeedShapes(editor);
     }
+    ensureSeedShapes(editor);
     loaded.current = true;
     setSelectedShapeIds(readSelectedShapeIds(editor));
+    window.clearInterval(selectionPoller.current);
+    selectionPoller.current = window.setInterval(() => {
+      const nextShapeIds = readSelectedShapeIds(editor);
+      setSelectedShapeIds((current) => (
+        sameShapeIds(current, nextShapeIds) ? current : nextShapeIds
+      ));
+    }, 250);
     const unsubscribe = editor.store.listen(() => {
       if (!loaded.current) return;
       setSelectedShapeIds(readSelectedShapeIds(editor));
@@ -744,8 +929,8 @@ function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFe
     };
   }
 
-  function handleCanvasNodeFeedback(node) {
-    const shapeId = String(createShapeId(`vd-${section.id}-${node.id}`));
+  function handleCanvasNodeFeedback(node, index = 0) {
+    const shapeId = String(canvasNodeShapeId(section.id, node, index));
     addFeedback(onAddFeedback, section, {
       id: `${reportId}:${section.id}:node:${node.id}`,
       kind: 'canvas_node',
@@ -784,46 +969,64 @@ function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFe
   }
 
   return (
-    <div style={styles.canvasShell}>
+    <div
+      style={{
+        ...styles.canvasShell,
+        ...(isReportCanvas ? styles.canvasReportShell : {}),
+        ...(isFullscreen ? styles.canvasFullscreenShell : {}),
+      }}
+    >
       <div style={styles.canvasToolbar}>
         <div>
-          <div style={styles.canvasTitle}>无限画布</div>
-          <div style={styles.canvasHint}>适合设计创意、头脑风暴、灵感采集和产品设计推进</div>
+          <div style={styles.canvasTitle}>{isReportCanvas ? (section.title || '画布汇报工作区') : '无限画布'}</div>
+          <div style={styles.canvasHint}>{section.narrative || '适合设计创意、头脑风暴、灵感采集和产品设计推进'}</div>
         </div>
-        <button
-          type="button"
-          style={styles.feedbackButton}
-          onClick={() => addFeedback(onAddFeedback, section, { id: `${reportId}:${section.id}:canvas`, kind: 'canvas' })}
-        >
-          对画布反馈
-        </button>
+        <div style={styles.canvasToolbarActions}>
+          <button
+            type="button"
+            style={{
+              ...styles.selectionFeedbackButton,
+              ...(selectedShapeIds.length === 0 ? styles.selectionFeedbackButtonDisabled : {}),
+            }}
+            disabled={selectedShapeIds.length === 0}
+            onClick={handleSelectionFeedback}
+          >
+            {selectedShapeIds.length > 0 ? `对选中元素反馈 (${selectedShapeIds.length})` : '选中元素后反馈'}
+          </button>
+          <button
+            type="button"
+            style={styles.feedbackButton}
+            onClick={() => setIsFullscreen((value) => !value)}
+          >
+            {isFullscreen ? '退出全屏' : '全屏查看'}
+          </button>
+          <button
+            type="button"
+            style={styles.feedbackButton}
+            onClick={() => addFeedback(onAddFeedback, section, { id: `${reportId}:${section.id}:canvas`, kind: 'canvas' })}
+          >
+            对画布反馈
+          </button>
+        </div>
       </div>
       <div style={styles.canvasTargetBar}>
         <div style={styles.canvasTargetGroup}>
-          {seedNodes.map((node) => (
+          {seedNodes.map((node, index) => (
             <button
               type="button"
-              key={node.id}
+              key={node._shapeKey || node.id || index}
               style={styles.canvasTargetButton}
-              onClick={() => handleCanvasNodeFeedback(node)}
+              onClick={() => handleCanvasNodeFeedback(node, index)}
             >
               {node.role ? `${node.title || node.id} · ${node.role}` : (node.title || node.id)}
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          style={{
-            ...styles.selectionFeedbackButton,
-            ...(selectedShapeIds.length === 0 ? styles.selectionFeedbackButtonDisabled : {}),
-          }}
-          disabled={selectedShapeIds.length === 0}
-          onClick={handleSelectionFeedback}
-        >
-          {selectedShapeIds.length > 0 ? `对选区反馈 (${selectedShapeIds.length})` : '选择画布对象后反馈'}
-        </button>
+        <div style={styles.canvasSelectionHint}>
+          {selectedShapeIds.length > 0 ? `当前选中 ${selectedShapeIds.length} 个元素` : '点击画布元素后，可在上方提交选中反馈'}
+        </div>
       </div>
-      <div style={styles.canvas}>
+      <div style={{ ...styles.canvas, ...(isReportCanvas ? styles.canvasReportStage : {}), ...(isFullscreen ? styles.canvasFullscreenStage : {}) }}>
         <Tldraw persistenceKey={`vd-report-${reportId}-${section.id}`} onMount={handleMount} />
       </div>
     </div>
@@ -858,6 +1061,21 @@ export default function ReportTemplateRenderer({ report, onAddFeedback, onCanvas
   if (sections.length === 0) {
     return <div style={styles.emptyArtifact}>这份汇报没有 section 内容。</div>;
   }
+  if (isCanvasPresentationReport(report)) {
+    const canvasSection = createCanvasReportSection(report, sections);
+    return (
+      <div style={styles.canvasReportRoot}>
+        <CanvasArtifact
+          reportId={report.id}
+          section={canvasSection}
+          artifact={canvasSection.artifact}
+          onCanvasSnapshot={onCanvasSnapshot}
+          onAddFeedback={onAddFeedback}
+          variant="report"
+        />
+      </div>
+    );
+  }
   return (
     <div style={styles.root}>
       {report.content?.routing_reason && (
@@ -884,6 +1102,9 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--vd-space-5)',
+  },
+  canvasReportRoot: {
+    minHeight: 'calc(100dvh - 180px)',
   },
   routingReason: {
     padding: 'var(--vd-space-3) var(--vd-space-4)',
@@ -1286,6 +1507,22 @@ const styles = {
   canvasShell: {
     background: 'var(--vd-page-bg)',
   },
+  canvasReportShell: {
+    border: '1px solid var(--vd-border-default)',
+    borderRadius: 'var(--vd-radius-lg)',
+    background: 'var(--vd-surface-bg)',
+    overflow: 'hidden',
+    boxShadow: 'var(--vd-shadow-sm)',
+  },
+  canvasFullscreenShell: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 40,
+    borderRadius: 0,
+    border: 'none',
+    background: 'var(--vd-surface-bg)',
+    boxShadow: 'none',
+  },
   canvasToolbar: {
     display: 'flex',
     alignItems: 'center',
@@ -1293,6 +1530,14 @@ const styles = {
     gap: 'var(--vd-space-4)',
     padding: 'var(--vd-space-3) var(--vd-space-4)',
     borderBottom: '1px solid var(--vd-border-subtle)',
+    background: 'var(--vd-surface-bg)',
+  },
+  canvasToolbarActions: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 'var(--vd-space-2)',
+    flexWrap: 'wrap',
   },
   canvasTargetBar: {
     display: 'flex',
@@ -1336,6 +1581,11 @@ const styles = {
     color: 'var(--vd-text-tertiary)',
     cursor: 'not-allowed',
   },
+  canvasSelectionHint: {
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+    whiteSpace: 'nowrap',
+  },
   canvasTitle: {
     color: 'var(--vd-text-primary)',
     fontSize: 'var(--vd-font-size-sm)',
@@ -1349,7 +1599,15 @@ const styles = {
   canvas: {
     height: 560,
     minHeight: 420,
-    background: '#f8fafc',
+    background: 'var(--vd-page-bg)',
+  },
+  canvasReportStage: {
+    height: 'calc(100dvh - 266px)',
+    minHeight: 560,
+  },
+  canvasFullscreenStage: {
+    height: 'calc(100dvh - 98px)',
+    minHeight: 0,
   },
   emptyArtifact: {
     padding: 'var(--vd-space-6)',

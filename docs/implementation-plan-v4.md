@@ -167,7 +167,7 @@ V4 的几类汇报模板都需要实现基础版本，不能只停留在 `genera
 |------|-----------|---------|
 | `document` | Markdown / HTML 内容、目录导航、段落级反馈、决策点组件 | sections、headings、feedback_targets |
 | `table` | 表格展示、筛选/排序、行级和字段级反馈 | columns、rows、views、feedback_targets |
-| `canvas` | tldraw 无限画布、文本/图片/卡片节点、批注节点、选区反馈、画布状态保存 | tldraw_snapshot、assets、node_feedback_targets |
+| `canvas` | tldraw 无限画布、section/frame 容器、文本/图片/卡片节点、批注节点、选区反馈、全屏查看、画布状态保存 | tldraw_snapshot、semantic_index.sections、assets、node_feedback_targets |
 | `slides` | slide 导航、逐页汇报、页级反馈、重点决策页 | slides、speaker_notes、feedback_targets |
 | `complex-review` | 多 section 汇报、artifact + 叙事 + 决策点、多模板混排 | sections、artifacts、decisions、template_refs |
 
@@ -178,6 +178,11 @@ V4 的几类汇报模板都需要实现基础版本，不能只停留在 `genera
 无限画布中持续添加内容、整理素材、摆放方案、生成解释和推进下一步思路；用户可以在
 画布上批注、补充素材、圈选区域并提交反馈。
 
+当任务路由到 `canvas_workspace` 时，页面不再把画布作为某个 report section
+嵌入文档流。任务上下文、产出、素材、方案推进、待确认决策和用户反馈区应持续沉淀在
+tldraw 无限画布工作区中。画布页提供全屏查看，选中画布元素后可提交
+`canvas_selection` 反馈。
+
 第一版必须保存 tldraw snapshot，并把画布节点或选区映射到项目级反馈池。画布数据应
 归属于当前项目工作空间，后续汇报可以引用画布页面、节点、选区或截图作为 artifact。
 画布默认结构应包含 agent 工作区、用户反馈区和共享决策区。暂不实现多人实时协作、
@@ -185,13 +190,15 @@ V4 的几类汇报模板都需要实现基础版本，不能只停留在 `genera
 
 当前实现要求：
 
-- `/api/reports` 在缺省 content 时生成 `report_template`，`standard-report` 使用单 section，`complex-review` 使用混合 section。
-- `complex-review` 默认把 document 用作上下文说明，把主 presentation 用作核心 artifact，并按需要混入 table/slides。
+- `/api/reports` 在缺省 content 时生成 `document_report`，`standard-report` 使用单 section，`complex-review` 使用多文档 section。
+- `document`、`table`、`slides` 和 `report_template` 是兼容别名，都会归一到 `document_report`；表格和类 slides 内容应进入文档结构。
+- `canvas` 是兼容别名，会归一到 `canvas_workspace`；新画布协作通过 `/api/canvas-workspaces/select` 选择或创建项目级画布。
 - 文档模板从 Markdown heading 自动生成目录导航。
 - 文档模板对段落生成 `document_paragraph` feedback target，包含段落行号和摘录。
 - 表格模板支持按 view 分类、全文查询、列排序。
 - 表格模板对行生成 `table_row` feedback target，对字段生成 `table_field` feedback target。
 - 画布模板默认 seed node 区分 `agent`、`user`、`shared` 角色区域。
+- 自建画布使用 tldraw frame 作为 `canvas_section` 容器，section 名称显示在左上角，子节点通过 parent/child 层级和 `contains` relationship 写入 semantic index。
 - 画布模板对 seed node 生成 `canvas_node` feedback target。
 - 画布模板对当前 tldraw 选区生成 `canvas_selection` feedback target，包含 shape ids 和 bounds。
 - Slides 模板支持左侧页导航、上一页/下一页逐页浏览。

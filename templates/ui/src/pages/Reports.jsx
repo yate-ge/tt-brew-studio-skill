@@ -180,6 +180,9 @@ const STYLES = {
     minHeight: 0,
     flex: 1,
   },
+  contentBodyCanvas: {
+    padding: 'var(--vd-space-4)',
+  },
   reportWorkspace: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) 320px',
@@ -191,6 +194,42 @@ const STYLES = {
   },
   feedbackRail: {
     minWidth: 0,
+  },
+  floatingFeedbackDock: {
+    position: 'fixed',
+    right: 'var(--vd-space-5)',
+    top: 'var(--vd-space-5)',
+    zIndex: 45,
+    width: 'min(360px, calc(100vw - 32px))',
+    maxHeight: 'calc(100dvh - 40px)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'var(--vd-space-2)',
+    pointerEvents: 'none',
+  },
+  floatingFeedbackDockClosed: {
+    width: 'auto',
+  },
+  floatingFeedbackToggle: (open, count) => ({
+    alignSelf: 'flex-end',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 'var(--vd-space-2)',
+    minHeight: 36,
+    padding: '0 var(--vd-space-3)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: `1px solid ${open ? 'var(--vd-primary-border)' : 'var(--vd-border-default)'}`,
+    background: open ? 'var(--vd-primary-bg)' : 'var(--vd-surface-bg)',
+    color: open ? 'var(--vd-primary)' : 'var(--vd-text-secondary)',
+    boxShadow: 'var(--vd-shadow-md)',
+    fontFamily: 'inherit',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: count > 0 ? 'var(--vd-font-weight-semibold)' : 'var(--vd-font-weight-medium)',
+    cursor: 'pointer',
+    pointerEvents: 'auto',
+  }),
+  floatingFeedbackPanel: {
+    pointerEvents: 'auto',
   },
   changeStrip: {
     marginBottom: 'var(--vd-space-5)',
@@ -317,6 +356,14 @@ function collectVisibleChangeRecords(report) {
   }).slice(0, 6);
 }
 
+function isCanvasReport(report) {
+  const presentation = report?.presentation || report?.content?.presentation;
+  const sections = report?.content?.sections || report?.sections || [];
+  return presentation === 'canvas' || sections.some((section) => (
+    section?.presentation === 'canvas' || section?.artifact?.type === 'canvas'
+  ));
+}
+
 function ChangeRecordStrip({ report }) {
   const records = collectVisibleChangeRecords(report);
   if (records.length === 0) return null;
@@ -342,6 +389,54 @@ function ChangeRecordStrip({ report }) {
         })}
       </div>
     </section>
+  );
+}
+
+function FloatingFeedbackDock({
+  drafts,
+  feedback,
+  onRemoveDraft,
+  onAddInteractive,
+  onCommit,
+  onRevoke,
+  submitting,
+}) {
+  const [open, setOpen] = useState(false);
+  const pendingCount = (feedback || []).filter((item) => item.handled === false || item.status === 'tracked').length;
+  const totalCount = drafts.length + pendingCount;
+
+  return (
+    <div
+      style={{
+        ...STYLES.floatingFeedbackDock,
+        ...(!open ? STYLES.floatingFeedbackDockClosed : {}),
+      }}
+    >
+      <button
+        type="button"
+        style={STYLES.floatingFeedbackToggle(open, totalCount)}
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-label={open ? '隐藏反馈栏' : '显示反馈栏'}
+      >
+        <span>{open ? '隐藏反馈' : '反馈栏'}</span>
+        {totalCount > 0 && <span>{totalCount}</span>}
+      </button>
+      {open && (
+        <div style={STYLES.floatingFeedbackPanel}>
+          <FeedbackSidebar
+            drafts={drafts}
+            feedback={feedback}
+            onRemoveDraft={onRemoveDraft}
+            onAddInteractive={onAddInteractive}
+            onCommit={onCommit}
+            onRevoke={onRevoke}
+            submitting={submitting}
+            floating
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -557,6 +652,8 @@ export default function Reports() {
     );
   }
 
+  const selectedIsCanvas = isCanvasReport(selectedReport);
+
   return (
     <div style={STYLES.page}>
       <aside style={STYLES.nav}>
@@ -645,30 +742,54 @@ export default function Reports() {
                 </div>
               </div>
             </div>
-            <div style={STYLES.contentBody}>
-              <ChangeRecordStrip report={selectedReport} />
-              <div style={STYLES.reportWorkspace}>
-                <div style={STYLES.reportContent}>
-                  {renderReportContent(selectedReport, tokens, {
-                    addDraftItem,
-                    replaceDraftByAction,
-                    drafts,
-                    saveCanvasSnapshot: handleSaveCanvasSnapshot,
-                  })}
+            {selectedIsCanvas ? (
+              <>
+                <div style={{ ...STYLES.contentBody, ...STYLES.contentBodyCanvas }}>
+                  <div style={STYLES.reportContent}>
+                    {renderReportContent(selectedReport, tokens, {
+                      addDraftItem,
+                      replaceDraftByAction,
+                      drafts,
+                      saveCanvasSnapshot: handleSaveCanvasSnapshot,
+                    })}
+                  </div>
                 </div>
-                <div style={STYLES.feedbackRail}>
-                  <FeedbackSidebar
-                    drafts={drafts}
-                    feedback={selectedReport.feedback || []}
-                    onRemoveDraft={removeDraftItem}
-                    onAddInteractive={addDraftItem}
-                    onCommit={handleCommitFeedback}
-                    onRevoke={handleRevokeFeedback}
-                    submitting={submitting}
-                  />
+                <FloatingFeedbackDock
+                  drafts={drafts}
+                  feedback={selectedReport.feedback || []}
+                  onRemoveDraft={removeDraftItem}
+                  onAddInteractive={addDraftItem}
+                  onCommit={handleCommitFeedback}
+                  onRevoke={handleRevokeFeedback}
+                  submitting={submitting}
+                />
+              </>
+            ) : (
+              <div style={STYLES.contentBody}>
+                <ChangeRecordStrip report={selectedReport} />
+                <div style={STYLES.reportWorkspace}>
+                  <div style={STYLES.reportContent}>
+                    {renderReportContent(selectedReport, tokens, {
+                      addDraftItem,
+                      replaceDraftByAction,
+                      drafts,
+                      saveCanvasSnapshot: handleSaveCanvasSnapshot,
+                    })}
+                  </div>
+                  <div style={STYLES.feedbackRail}>
+                    <FeedbackSidebar
+                      drafts={drafts}
+                      feedback={selectedReport.feedback || []}
+                      onRemoveDraft={removeDraftItem}
+                      onAddInteractive={addDraftItem}
+                      onCommit={handleCommitFeedback}
+                      onRevoke={handleRevokeFeedback}
+                      submitting={submitting}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </>
         )}
 

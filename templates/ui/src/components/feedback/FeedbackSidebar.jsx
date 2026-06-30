@@ -142,10 +142,11 @@ export default function FeedbackSidebar({
   onCommit,
   onRevoke,
   submitting,
+  floating = false,
 }) {
   const [textInput, setTextInput] = useState('');
 
-  const pendingFeedback = (feedback || []).filter((item) => item.handled === false);
+  const pendingFeedback = (feedback || []).filter((item) => item.handled === false || item.status === 'tracked');
 
   function handleAddDirect() {
     if (!textInput.trim()) return;
@@ -168,7 +169,7 @@ export default function FeedbackSidebar({
   }
 
   return (
-    <aside style={styles.sidebar}>
+    <aside style={{ ...styles.sidebar, ...(floating ? styles.sidebarFloating : {}) }}>
       {/* Header */}
       <div style={styles.header}>
         <h3 style={styles.title}>{t('feedbackSidebar')}</h3>
@@ -253,15 +254,22 @@ const styles = {
     flexShrink: 0,
     position: 'sticky',
     top: '16px',
-    border: '1px solid var(--vds-colors-border)',
-    borderRadius: '12px',
-    background: 'var(--vds-colors-surface)',
+    border: '1px solid var(--vd-border-default)',
+    borderRadius: 'var(--vd-radius-lg)',
+    background: 'var(--vd-surface-bg)',
     padding: '14px',
     display: 'flex',
     flexDirection: 'column',
     gap: '14px',
     maxHeight: 'calc(100vh - 48px)',
     overflow: 'auto',
+  },
+  sidebarFloating: {
+    width: '100%',
+    position: 'relative',
+    top: 'auto',
+    boxShadow: 'var(--vd-shadow-lg)',
+    maxHeight: 'calc(100dvh - 92px)',
   },
   header: {
     display: 'flex',
@@ -271,11 +279,11 @@ const styles = {
   title: {
     fontSize: '16px',
     fontWeight: '700',
-    color: 'var(--vds-colors-text)',
+    color: 'var(--vd-text-primary)',
     margin: 0,
   },
   draftBadge: {
-    background: 'var(--vds-colors-primary, #3b82f6)',
+    background: 'var(--vd-primary)',
     color: '#fff',
     fontSize: '12px',
     fontWeight: '700',
@@ -295,7 +303,7 @@ const styles = {
   sectionLabel: {
     fontSize: '12px',
     fontWeight: '600',
-    color: 'var(--vds-colors-text-secondary)',
+    color: 'var(--vd-text-secondary)',
     textTransform: 'uppercase',
     letterSpacing: '0.5px',
     display: 'flex',
@@ -305,8 +313,10 @@ const styles = {
   textarea: {
     width: '100%',
     resize: 'vertical',
-    border: '1px solid var(--vds-colors-border)',
+    border: '1px solid var(--vd-border-default)',
     borderRadius: '8px',
+    background: 'var(--vd-page-bg)',
+    color: 'var(--vd-text-primary)',
     padding: '10px',
     fontSize: '14px',
     fontFamily: 'inherit',
@@ -316,9 +326,9 @@ const styles = {
     transition: 'border-color 0.15s',
   },
   secondaryBtn: {
-    border: '1px solid var(--vds-colors-border)',
-    background: 'white',
-    color: 'var(--vds-colors-text)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-page-bg)',
+    color: 'var(--vd-text-primary)',
     borderRadius: '8px',
     padding: '8px 12px',
     fontSize: '13px',
@@ -331,7 +341,7 @@ const styles = {
     border: 'none',
     borderRadius: '8px',
     padding: '11px 14px',
-    background: 'var(--vds-colors-primary, #3b82f6)',
+    background: 'var(--vd-primary)',
     color: 'white',
     fontSize: '14px',
     cursor: 'pointer',
@@ -349,10 +359,10 @@ const styles = {
     gap: '8px',
   },
   card: {
-    border: '1px solid var(--vds-colors-border)',
+    border: '1px solid var(--vd-border-subtle)',
     borderRadius: '10px',
     padding: '10px 12px',
-    background: 'white',
+    background: 'var(--vd-page-bg)',
     display: 'flex',
     flexDirection: 'column',
     gap: '6px',
@@ -361,7 +371,7 @@ const styles = {
     border: '1px solid #fcd34d',
     borderRadius: '10px',
     padding: '10px 12px',
-    background: '#fffef5',
+    background: 'var(--vd-warning-bg)',
     display: 'flex',
     flexDirection: 'column',
     gap: '6px',
@@ -404,7 +414,7 @@ const styles = {
   removeBtn: {
     background: 'none',
     border: 'none',
-    color: 'var(--vds-colors-text-secondary)',
+    color: 'var(--vd-text-secondary)',
     fontSize: '12px',
     cursor: 'pointer',
     fontFamily: 'inherit',
@@ -427,7 +437,7 @@ const styles = {
   quote: {
     fontSize: '13px',
     fontStyle: 'italic',
-    color: 'var(--vds-colors-text-secondary)',
+    color: 'var(--vd-text-secondary)',
     lineHeight: '1.45',
     paddingLeft: '12px',
     borderLeft: '3px solid #c4b5fd',
@@ -441,7 +451,7 @@ const styles = {
   },
   noteText: {
     fontSize: '13px',
-    color: 'var(--vds-colors-text)',
+    color: 'var(--vd-text-primary)',
     lineHeight: '1.5',
   },
   actionRow: {
@@ -452,20 +462,20 @@ const styles = {
   },
   actionLabel: {
     fontSize: '13px',
-    color: 'var(--vds-colors-text)',
+    color: 'var(--vd-text-primary)',
     fontWeight: '500',
   },
   actionCode: {
     fontSize: '11px',
-    background: 'var(--vds-colors-surface, #f1f5f9)',
+    background: 'var(--vd-surface-hover)',
     padding: '2px 6px',
     borderRadius: '4px',
-    color: 'var(--vds-colors-text-secondary)',
-    fontFamily: 'var(--vds-typography-font-family-mono, monospace)',
+    color: 'var(--vd-text-secondary)',
+    fontFamily: 'var(--vd-font-mono, monospace)',
   },
   fieldsBlock: {
     fontSize: '12px',
-    background: 'var(--vds-colors-surface, #f8fafc)',
+    background: 'var(--vd-surface-hover)',
     borderRadius: '6px',
     padding: '8px',
     display: 'flex',
@@ -474,7 +484,7 @@ const styles = {
   },
   fieldsTitle: {
     fontWeight: '600',
-    color: 'var(--vds-colors-text-secondary)',
+    color: 'var(--vd-text-secondary)',
     marginBottom: '2px',
   },
   fieldRow: {
@@ -482,11 +492,11 @@ const styles = {
     gap: '6px',
   },
   fieldKey: {
-    color: 'var(--vds-colors-text-secondary)',
-    fontFamily: 'var(--vds-typography-font-family-mono, monospace)',
+    color: 'var(--vd-text-secondary)',
+    fontFamily: 'var(--vd-font-mono, monospace)',
   },
   fieldVal: {
-    color: 'var(--vds-colors-text)',
+    color: 'var(--vd-text-primary)',
     wordBreak: 'break-word',
   },
   pendingCount: {
@@ -504,7 +514,7 @@ const styles = {
   },
   emptyState: {
     fontSize: '13px',
-    color: 'var(--vds-colors-text-secondary)',
+    color: 'var(--vd-text-secondary)',
     textAlign: 'center',
     padding: '16px 0',
   },

@@ -1,15 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Tldraw, createShapeId, getSnapshot, loadSnapshot, toRichText } from 'tldraw';
 import 'tldraw/tldraw.css';
 import {
   activateCanvasWorkspace,
-  addCanvasWorkspaceFeedback,
   createCanvasWorkspace,
   fetchCanvasWorkspace,
   fetchCanvasWorkspaces,
   updateCanvasWorkspaceSnapshot,
 } from '../lib/api';
+
+const SECTION_PADDING = 64;
+const DEFAULT_SECTION_SIZE = { w: 960, h: 640 };
+const SECTION_DUPLICATE_OFFSET = { x: 160, y: 120 };
 
 function formatDate(value) {
   if (!value) return '未更新';
@@ -25,6 +28,18 @@ function readSelectedShapeIds(editor) {
     return editor?.getSelectedShapeIds?.() || [];
   } catch {
     return [];
+  }
+}
+
+function isCanvasSectionShape(shape) {
+  return shape?.type === 'frame';
+}
+
+function getShapePageBounds(editor, shapeOrId) {
+  try {
+    return compactBounds(editor?.getShapePageBounds?.(shapeOrId));
+  } catch {
+    return null;
   }
 }
 
@@ -57,105 +72,251 @@ function shapeText(shape) {
     props.text,
     props.name,
     props.url,
+    props.altText,
     collectPlainText(props.richText),
   ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 }
 
-function describeShape(shape) {
+function nearestCanvasSection(editor, shape) {
+  if (!editor || !shape) return null;
+  if (isCanvasSectionShape(shape)) return shape;
+  let parent = editor.getShapeParent?.(shape);
+  while (parent) {
+    if (isCanvasSectionShape(parent)) return parent;
+    parent = editor.getShapeParent?.(parent);
+  }
+  return null;
+}
+
+function describeShape(shape, editor = null) {
   const text = shapeText(shape);
+  const section = nearestCanvasSection(editor, shape);
+  const childIds = isCanvasSectionShape(shape) && editor?.getSortedChildIdsForParent
+    ? editor.getSortedChildIdsForParent(shape.id).map(String)
+    : [];
   return {
     shape_id: String(shape.id),
+    kind: isCanvasSectionShape(shape) ? 'canvas_section' : 'canvas_node',
     type: shape.type || 'shape',
     title: text.split(/\s+/).slice(0, 8).join(' ') || shape.type || 'shape',
     text,
+    parent_id: shape.parentId ? String(shape.parentId) : null,
+    section_id: section ? String(section.id) : null,
+    section_title: section?.props?.name || null,
+    child_shape_ids: childIds,
+    child_count: childIds.length,
+    bounds: editor ? getShapePageBounds(editor, shape.id) : null,
     x: shape.x,
     y: shape.y,
     w: shape.props?.w,
     h: shape.props?.h,
     asset_id: shape.props?.assetId || null,
+    alt_text: shape.props?.altText || shape.meta?.alt_text || '',
+    meta: shape.meta || {},
   };
 }
 
-function describeSelectedShapes(editor, shapeIds) {
-  return shapeIds.map((shapeId) => {
-    const shape = editor?.getShape?.(shapeId);
-    return describeShape(shape || { id: shapeId, type: 'shape', props: {} });
-  });
+function isImageLikeShape(shape) {
+  return shape?.type === 'image' || shape?.type === 'video';
 }
 
 function semanticIndexFromEditor(editor, workspace) {
-  const shapes = editor?.getCurrentPageShapes?.() || [];
+  const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+  const sections = shapes.filter(isCanvasSectionShape).map((shape) => describeShape(shape, editor));
+  const relationships = [];
+  for (const section of sections) {
+    for (const childId of section.child_shape_ids || []) {
+      relationships.push({
+        type: 'contains',
+        from: section.shape_id,
+        to: childId,
+      });
+    }
+  }
   return {
-    version: 1,
+    version: 2,
     workspace_id: workspace?.id,
     zones: workspace?.semantic_index?.zones || [
       { id: 'agent-zone', role: 'agent', title: 'Agent 工作区' },
       { id: 'user-zone', role: 'user', title: '用户反馈区' },
       { id: 'shared-zone', role: 'shared', title: '共享决策区' },
     ],
-    nodes: shapes.map(describeShape),
+    sections,
+    nodes: shapes.map((shape) => describeShape(shape, editor)),
+    assets: shapes.filter(isImageLikeShape).map((shape) => ({
+      shape_id: String(shape.id),
+      asset_id: shape.props?.assetId || null,
+      alt_text: shape.props?.altText || '',
+      section_id: nearestCanvasSection(editor, shape)?.id || null,
+      bounds: getShapePageBounds(editor, shape.id),
+    })),
     annotations: [],
-    relationships: [],
+    relationships,
     updated_at: new Date().toISOString(),
   };
+}
+
+function summarizeCanvasSections(editor) {
+  const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+  return shapes.filter(isCanvasSectionShape).map((shape) => {
+    const childIds = editor?.getSortedChildIdsForParent?.(shape.id) || [];
+    return {
+      id: String(shape.id),
+      title: shape.props?.name || '未命名 Section',
+      child_count: childIds.length,
+      bounds: getShapePageBounds(editor, shape.id),
+    };
+  });
+}
+
+function getActiveSection(editor, shapeIds = []) {
+  if (!editor) return null;
+  for (const shapeId of shapeIds) {
+    const shape = editor.getShape?.(shapeId);
+    if (isCanvasSectionShape(shape)) return shape;
+  }
+  for (const shapeId of shapeIds) {
+    const shape = editor.getShape?.(shapeId);
+    const section = nearestCanvasSection(editor, shape);
+    if (section) return section;
+  }
+  return null;
+}
+
+function viewportFallbackBounds(editor) {
+  const viewport = editor?.getViewportPageBounds?.();
+  if (!viewport) {
+    return { x: 0, y: 0, w: DEFAULT_SECTION_SIZE.w, h: DEFAULT_SECTION_SIZE.h };
+  }
+  return {
+    x: viewport.x + 80,
+    y: viewport.y + 80,
+    w: Math.min(DEFAULT_SECTION_SIZE.w, Math.max(560, viewport.w - 160)),
+    h: Math.min(DEFAULT_SECTION_SIZE.h, Math.max(360, viewport.h - 160)),
+  };
+}
+
+function sectionBoundsFromSelection(editor, shapeIds) {
+  const bounds = shapeIds.length > 0 ? compactBounds(editor?.getSelectionPageBounds?.()) : null;
+  if (!bounds) return viewportFallbackBounds(editor);
+  return {
+    x: bounds.x - SECTION_PADDING,
+    y: bounds.y - SECTION_PADDING,
+    w: Math.max(DEFAULT_SECTION_SIZE.w, bounds.w + SECTION_PADDING * 2),
+    h: Math.max(420, bounds.h + SECTION_PADDING * 2),
+  };
+}
+
+function categorizeSectionChild(shape) {
+  if (isImageLikeShape(shape)) return 'media';
+  if (shape.type === 'note' || shape.type === 'text') return 'notes';
+  if (shape.type === 'arrow' || shape.type === 'geo' || shape.type === 'line' || shape.type === 'draw') return 'diagram';
+  return 'other';
+}
+
+function localShapeSize(editor, shape) {
+  const bounds = getShapePageBounds(editor, shape.id) || {};
+  return {
+    w: shape.props?.w || bounds.w || 220,
+    h: shape.props?.h || bounds.h || 120,
+  };
+}
+
+function resizablePatch(shape, nextSize) {
+  const props = {};
+  if (Number.isFinite(shape.props?.w)) props.w = nextSize.w;
+  if (Number.isFinite(shape.props?.h)) props.h = nextSize.h;
+  return Object.keys(props).length > 0 ? props : undefined;
 }
 
 function seedWorkspace(editor) {
   const existingShapes = editor.getCurrentPageShapes?.() || [];
   if (existingShapes.length > 0) return;
-  editor.createShapes([
+  const sections = [
     {
-      id: createShapeId('vd-agent-zone'),
-      type: 'geo',
+      id: createShapeId('vd-agent-section'),
+      type: 'frame',
       x: 0,
       y: 0,
+      props: { name: 'Agent 工作区', w: 360, h: 220, color: 'blue' },
+      meta: { vd_kind: 'section', vd_role: 'agent' },
+    },
+    {
+      id: createShapeId('vd-user-section'),
+      type: 'frame',
+      x: 430,
+      y: 0,
+      props: { name: '用户反馈区', w: 360, h: 220, color: 'green' },
+      meta: { vd_kind: 'section', vd_role: 'user' },
+    },
+    {
+      id: createShapeId('vd-shared-section'),
+      type: 'frame',
+      x: 215,
+      y: 300,
+      props: { name: '共享决策区', w: 360, h: 220, color: 'violet' },
+      meta: { vd_kind: 'section', vd_role: 'shared' },
+    },
+  ];
+  editor.createShapes(sections);
+  editor.createShapes([
+    {
+      id: createShapeId('vd-agent-brief'),
+      type: 'geo',
+      x: 32,
+      y: 56,
       props: {
         geo: 'rectangle',
-        w: 320,
-        h: 190,
+        w: 296,
+        h: 126,
         fill: 'solid',
         color: 'blue',
         richText: toRichText('Agent 工作区\n\n方案、素材、推理过程和设计说明。'),
       },
     },
     {
-      id: createShapeId('vd-user-zone'),
+      id: createShapeId('vd-user-brief'),
       type: 'geo',
-      x: 380,
-      y: 0,
+      x: 462,
+      y: 56,
       props: {
         geo: 'rectangle',
-        w: 320,
-        h: 190,
+        w: 296,
+        h: 126,
         fill: 'solid',
         color: 'green',
         richText: toRichText('用户反馈区\n\n圈选、批注、补充素材和修改意见。'),
       },
     },
     {
-      id: createShapeId('vd-shared-zone'),
+      id: createShapeId('vd-shared-brief'),
       type: 'geo',
-      x: 190,
-      y: 260,
+      x: 247,
+      y: 356,
       props: {
         geo: 'rectangle',
-        w: 320,
-        h: 190,
+        w: 296,
+        h: 126,
         fill: 'solid',
         color: 'violet',
         richText: toRichText('共享决策区\n\n结论、取舍、下一步动作。'),
       },
     },
   ]);
+  editor.reparentShapes([createShapeId('vd-agent-brief')], createShapeId('vd-agent-section'));
+  editor.reparentShapes([createShapeId('vd-user-brief')], createShapeId('vd-user-section'));
+  editor.reparentShapes([createShapeId('vd-shared-brief')], createShapeId('vd-shared-section'));
+  editor.sendToBack?.(sections.map((section) => section.id));
   editor.zoomToFit?.();
 }
 
 const STYLES = {
   page: {
     display: 'grid',
-    gridTemplateColumns: '280px minmax(0, 1fr) 300px',
+    gridTemplateColumns: 'clamp(240px, 20vw, 320px) minmax(0, 1fr)',
     gap: 'var(--vd-space-4)',
     minHeight: 'calc(100dvh - 32px)',
+    width: '100%',
   },
   panel: {
     minHeight: 0,
@@ -234,6 +395,14 @@ const STYLES = {
     flexDirection: 'column',
     minWidth: 0,
   },
+  canvasPanelFullscreen: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 50,
+    border: 'none',
+    borderRadius: 0,
+    background: 'var(--vd-surface-bg)',
+  },
   canvasHeader: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -241,6 +410,14 @@ const STYLES = {
     gap: 'var(--vd-space-4)',
     padding: 'var(--vd-space-4)',
     borderBottom: '1px solid var(--vd-border-subtle)',
+    background: 'var(--vd-surface-bg)',
+  },
+  headerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 'var(--vd-space-2)',
+    flexWrap: 'wrap',
   },
   canvasTitle: {
     margin: 0,
@@ -271,62 +448,32 @@ const STYLES = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
-  canvasArea: {
-    flex: 1,
-    minHeight: 560,
-    background: '#f8fafc',
-  },
-  sidePanel: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  sideBody: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: 'var(--vd-space-4)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 'var(--vd-space-4)',
-  },
-  sectionTitle: {
-    margin: 0,
-    fontSize: 'var(--vd-font-size-sm)',
-    fontWeight: 'var(--vd-font-weight-semibold)',
-    color: 'var(--vd-text-primary)',
-  },
-  muted: {
-    color: 'var(--vd-text-tertiary)',
-    fontSize: 'var(--vd-font-size-xs)',
-    lineHeight: 1.5,
-  },
-  textarea: {
-    width: '100%',
-    minHeight: 96,
-    resize: 'vertical',
+  toolButton: {
     border: '1px solid var(--vd-border-default)',
     borderRadius: 'var(--vd-radius-md)',
     background: 'var(--vd-page-bg)',
-    color: 'var(--vd-text-primary)',
-    font: 'inherit',
-    fontSize: 'var(--vd-font-size-sm)',
-    padding: 'var(--vd-space-3)',
-    outline: 'none',
-  },
-  feedbackButton: {
-    border: 'none',
-    borderRadius: 'var(--vd-radius-md)',
-    background: 'var(--vd-primary)',
-    color: 'var(--vd-text-inverse)',
-    padding: '8px 12px',
-    fontSize: 'var(--vd-font-size-sm)',
-    fontWeight: 'var(--vd-font-weight-medium)',
+    color: 'var(--vd-text-secondary)',
+    padding: '7px 10px',
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
   },
-  feedbackItem: {
-    border: '1px solid var(--vd-border-subtle)',
+  toolButtonPrimary: {
+    border: '1px solid var(--vd-primary-border)',
     borderRadius: 'var(--vd-radius-md)',
-    padding: 'var(--vd-space-3)',
+    background: 'var(--vd-primary-bg)',
+    color: 'var(--vd-primary)',
+    padding: '7px 10px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  },
+  canvasArea: {
+    flex: 1,
+    minHeight: 560,
     background: 'var(--vd-page-bg)',
+  },
+  canvasAreaFullscreen: {
+    minHeight: 0,
   },
   empty: {
     padding: 'var(--vd-space-6)',
@@ -344,9 +491,9 @@ export default function CanvasWorkspace() {
   const [workspace, setWorkspace] = useState(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [selectedShapeIds, setSelectedShapeIds] = useState([]);
-  const [feedbackText, setFeedbackText] = useState('');
   const [savingState, setSavingState] = useState('已保存');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [toolMessage, setToolMessage] = useState('');
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const mounted = useRef(false);
@@ -396,9 +543,18 @@ export default function CanvasWorkspace() {
     return () => { canceled = true; };
   }, [selectedId, setSearchParams]);
 
-  const selectedShapes = useMemo(() => (
-    editorRef.current ? describeSelectedShapes(editorRef.current, selectedShapeIds) : []
-  ), [selectedShapeIds]);
+  useEffect(() => {
+    if (!isFullscreen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setIsFullscreen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen]);
+
+  useEffect(() => () => {
+    window.clearTimeout(saveTimer.current);
+  }, []);
 
   async function handleCreateWorkspace() {
     const created = await createCanvasWorkspace({
@@ -436,6 +592,157 @@ export default function CanvasWorkspace() {
     }
   }
 
+  function markToolMessage(message) {
+    setToolMessage(message);
+  }
+
+  function handleCreateSection() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const selectedIds = readSelectedShapeIds(editor);
+    const childIds = selectedIds.filter((shapeId) => {
+      const shape = editor.getShape?.(shapeId);
+      return shape && !isCanvasSectionShape(shape);
+    });
+    const bounds = sectionBoundsFromSelection(editor, childIds);
+    const sectionId = createShapeId(`vd-section-${Date.now()}`);
+    const nextIndex = summarizeCanvasSections(editor).length + 1;
+    editor.createShapes([
+      {
+        id: sectionId,
+        type: 'frame',
+        x: Math.round(bounds.x),
+        y: Math.round(bounds.y),
+        props: {
+          name: `Section ${nextIndex}`,
+          w: Math.round(bounds.w),
+          h: Math.round(bounds.h),
+          color: 'blue',
+        },
+        meta: {
+          vd_kind: 'section',
+          vd_created_by: 'user',
+          vd_created_at: new Date().toISOString(),
+        },
+      },
+    ]);
+    if (childIds.length > 0) {
+      editor.reparentShapes(childIds, sectionId);
+    }
+    editor.sendToBack?.([sectionId]);
+    editor.setSelectedShapes?.([sectionId]);
+    markToolMessage(childIds.length > 0 ? `已创建 Section，并收入 ${childIds.length} 个对象。` : '已创建空 Section。');
+  }
+
+  function handleDuplicateSection() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const selectedSections = readSelectedShapeIds(editor)
+      .map((shapeId) => editor.getShape?.(shapeId))
+      .filter(isCanvasSectionShape);
+    const sectionsToDuplicate = selectedSections.length > 0
+      ? selectedSections
+      : (() => {
+        const activeSection = getActiveSection(editor, readSelectedShapeIds(editor));
+        return activeSection ? [activeSection] : [];
+      })();
+    if (sectionsToDuplicate.length === 0) {
+      markToolMessage('请先选择一个 Section。');
+      return;
+    }
+    editor.duplicateShapes?.(sectionsToDuplicate.map((section) => section.id), SECTION_DUPLICATE_OFFSET);
+    markToolMessage(`已复制 ${sectionsToDuplicate.length} 个 Section。`);
+  }
+
+  function handleOrganizeSection() {
+    const editor = editorRef.current;
+    const section = getActiveSection(editor, readSelectedShapeIds(editor));
+    if (!editor || !section) {
+      markToolMessage('请先选择一个 Section 或其中的对象。');
+      return;
+    }
+    const childIds = (editor.getSortedChildIdsForParent?.(section.id) || [])
+      .filter((shapeId) => {
+        const child = editor.getShape?.(shapeId);
+        return child && !isCanvasSectionShape(child);
+      });
+    if (childIds.length === 0) {
+      markToolMessage('这个 Section 里还没有可整理的对象。');
+      return;
+    }
+    const groups = childIds
+      .map((shapeId) => editor.getShape?.(shapeId))
+      .filter(Boolean)
+      .reduce((acc, shape) => {
+        const key = categorizeSectionChild(shape);
+        acc[key].push(shape);
+        return acc;
+      }, { media: [], notes: [], diagram: [], other: [] });
+
+    groups.media.sort((a, b) => {
+      const sizeA = localShapeSize(editor, a);
+      const sizeB = localShapeSize(editor, b);
+      return (sizeB.w * sizeB.h) - (sizeA.w * sizeA.h);
+    });
+
+    const columns = [
+      { key: 'media', x: 56, y: 88, w: 360, maxW: 340, maxH: 220 },
+      { key: 'notes', x: 470, y: 88, w: 340, maxW: 320, maxH: 180 },
+      { key: 'diagram', x: 860, y: 88, w: 340, maxW: 320, maxH: 160 },
+      { key: 'other', x: 1250, y: 88, w: 300, maxW: 280, maxH: 150 },
+    ];
+    const patches = [];
+    let maxBottom = 0;
+    for (const column of columns) {
+      let y = column.y;
+      groups[column.key].forEach((shape, index) => {
+        const size = localShapeSize(editor, shape);
+        const scale = Math.min(1, column.maxW / size.w, column.maxH / size.h);
+        const nextSize = {
+          w: Math.max(48, Math.round(size.w * scale)),
+          h: Math.max(36, Math.round(size.h * scale)),
+        };
+        const props = resizablePatch(shape, nextSize);
+        patches.push({
+          id: shape.id,
+          type: shape.type,
+          x: column.x,
+          y,
+          props,
+          meta: {
+            ...(shape.meta || {}),
+            vd_section_id: String(section.id),
+            vd_sort_category: column.key,
+            vd_sort_index: String(index + 1),
+          },
+        });
+        y += nextSize.h + 28;
+      });
+      maxBottom = Math.max(maxBottom, y);
+    }
+    const nextWidth = Math.max(section.props?.w || 0, 1640);
+    const nextHeight = Math.max(section.props?.h || 0, maxBottom + 64, 520);
+    patches.push({
+      id: section.id,
+      type: 'frame',
+      props: {
+        w: Math.round(nextWidth),
+        h: Math.round(nextHeight),
+        name: section.props?.name || 'Section',
+        color: section.props?.color || 'blue',
+      },
+      meta: {
+        ...(section.meta || {}),
+        vd_kind: 'section',
+        vd_organized_at: new Date().toISOString(),
+        vd_organization: 'media_notes_diagram_other_columns',
+      },
+    });
+    editor.updateShapes(patches);
+    editor.setSelectedShapes?.([section.id]);
+    markToolMessage(`已整理 Section：${section.props?.name || section.id}。`);
+  }
+
   function handleMount(editor) {
     editorRef.current = editor;
     mounted.current = false;
@@ -451,10 +758,8 @@ export default function CanvasWorkspace() {
       seedWorkspace(editor);
     }
     mounted.current = true;
-    setSelectedShapeIds(readSelectedShapeIds(editor));
     const unsubscribe = editor.store.listen(() => {
       if (!mounted.current) return;
-      setSelectedShapeIds(readSelectedShapeIds(editor));
       window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => saveSnapshot(editor), 800);
     });
@@ -464,31 +769,6 @@ export default function CanvasWorkspace() {
       editorRef.current = null;
       unsubscribe?.();
     };
-  }
-
-  async function handleFeedbackSubmit() {
-    if (!workspace || !feedbackText.trim()) return;
-    const editor = editorRef.current;
-    const shapeIds = readSelectedShapeIds(editor);
-    const target = shapeIds.length > 0
-      ? {
-        type: 'canvas_selection',
-        shape_ids: shapeIds.map(String),
-        shapes: describeSelectedShapes(editor, shapeIds),
-        bounds: compactBounds(editor?.getSelectionPageBounds?.()),
-      }
-      : { type: 'canvas_workspace' };
-    const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
-      content: feedbackText.trim(),
-      target,
-      kind: target.type,
-      author: 'user',
-    });
-    setWorkspace((current) => ({
-      ...current,
-      feedback: [...(current?.feedback || []), feedback],
-    }));
-    setFeedbackText('');
   }
 
   if (loading) {
@@ -525,7 +805,7 @@ export default function CanvasWorkspace() {
         </div>
       </aside>
 
-      <main style={{ ...STYLES.panel, ...STYLES.canvasPanel }}>
+      <main style={{ ...STYLES.panel, ...STYLES.canvasPanel, ...(isFullscreen ? STYLES.canvasPanelFullscreen : {}) }}>
         {!workspace && (
           <div style={STYLES.empty}>选择一个画布，或新建画布开始协作。</div>
         )}
@@ -539,69 +819,37 @@ export default function CanvasWorkspace() {
                   <span style={STYLES.tag}>{savingState}</span>
                   <span style={STYLES.tag}>更新 {formatDate(workspace.updated_at)}</span>
                   {(workspace.tags || []).map((tag) => <span key={tag} style={STYLES.tag}>{tag}</span>)}
+                  {toolMessage && <span style={STYLES.tag}>{toolMessage}</span>}
                 </div>
               </div>
-              <button type="button" style={STYLES.ghostButton} onClick={handleActivate}>
-                设为当前
-              </button>
+              <div style={STYLES.headerActions}>
+                <button type="button" style={STYLES.toolButtonPrimary} onClick={handleCreateSection}>
+                  创建 Section
+                </button>
+                <button type="button" style={STYLES.toolButton} onClick={handleDuplicateSection}>
+                  复制 Section
+                </button>
+                <button type="button" style={STYLES.toolButton} onClick={handleOrganizeSection}>
+                  整理 Section
+                </button>
+                <button type="button" style={STYLES.ghostButton} onClick={() => setIsFullscreen((value) => !value)}>
+                  {isFullscreen ? '退出全屏' : '全屏查看'}
+                </button>
+                <button type="button" style={STYLES.ghostButton} onClick={handleActivate}>
+                  设为当前
+                </button>
+              </div>
             </header>
             {detailLoading ? (
               <div style={STYLES.empty}>正在加载画布...</div>
             ) : (
-              <div style={STYLES.canvasArea}>
+              <div style={{ ...STYLES.canvasArea, ...(isFullscreen ? STYLES.canvasAreaFullscreen : {}) }}>
                 <Tldraw key={workspace.id} persistenceKey={`vd-canvas-workspace-${workspace.id}`} onMount={handleMount} />
               </div>
             )}
           </>
         )}
       </main>
-
-      <aside style={{ ...STYLES.panel, ...STYLES.sidePanel }}>
-        <div style={STYLES.panelHeader}>
-          <h2 style={STYLES.title}>协作记录</h2>
-          <div style={STYLES.subtitle}>选中对象后提交反馈，会带上选区信息。</div>
-        </div>
-        <div style={STYLES.sideBody}>
-          <section>
-            <h3 style={STYLES.sectionTitle}>当前选区</h3>
-            {selectedShapeIds.length === 0 ? (
-              <p style={STYLES.muted}>未选择对象。</p>
-            ) : (
-              <p style={STYLES.muted}>{selectedShapeIds.length} 个对象：{selectedShapes.map((shape) => shape.title).join('、')}</p>
-            )}
-          </section>
-          <section>
-            <h3 style={STYLES.sectionTitle}>提交反馈</h3>
-            <textarea
-              style={STYLES.textarea}
-              value={feedbackText}
-              onChange={(event) => setFeedbackText(event.target.value)}
-              placeholder="写下对当前画布或选区的修改意见"
-            />
-            <button
-              type="button"
-              style={{ ...STYLES.feedbackButton, marginTop: 'var(--vd-space-2)' }}
-              onClick={handleFeedbackSubmit}
-              disabled={!workspace || !feedbackText.trim()}
-            >
-              提交反馈
-            </button>
-          </section>
-          <section>
-            <h3 style={STYLES.sectionTitle}>最近反馈</h3>
-            {(workspace?.feedback || []).length === 0 ? (
-              <p style={STYLES.muted}>暂无反馈。</p>
-            ) : (
-              (workspace.feedback || []).slice().reverse().slice(0, 6).map((item) => (
-                <div key={item.id} style={STYLES.feedbackItem}>
-                  <div style={{ color: 'var(--vd-text-primary)', fontSize: 'var(--vd-font-size-sm)' }}>{item.content}</div>
-                  <div style={STYLES.muted}>{formatDate(item.created_at)} · {item.target?.type || 'canvas_workspace'}</div>
-                </div>
-              ))
-            )}
-          </section>
-        </div>
-      </aside>
     </div>
   );
 }

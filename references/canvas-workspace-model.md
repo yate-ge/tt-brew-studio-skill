@@ -71,25 +71,36 @@ Core shape:
   "tags": ["design"],
   "context": {},
   "semantic_index": {
-    "version": 1,
+    "version": 2,
     "zones": [
       { "id": "agent-zone", "role": "agent", "title": "Agent 工作区" },
       { "id": "user-zone", "role": "user", "title": "用户反馈区" },
       { "id": "shared-zone", "role": "shared", "title": "共享决策区" }
     ],
+    "sections": [],
     "nodes": [
       {
         "shape_id": "shape:...",
+        "kind": "canvas_node",
         "type": "geo|text|image|arrow",
         "title": "节点标题",
         "text": "agent-readable text",
+        "parent_id": "shape:section",
+        "section_id": "shape:section",
+        "section_title": "Agent 工作区",
+        "child_shape_ids": [],
+        "child_count": 0,
+        "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 },
         "x": 0,
         "y": 0,
         "w": 320,
         "h": 180,
-        "asset_id": null
+        "asset_id": null,
+        "alt_text": "",
+        "meta": {}
       }
     ],
+    "assets": [],
     "annotations": [],
     "relationships": [],
     "updated_at": "ISO timestamp"
@@ -128,3 +139,148 @@ Use Cowart as a product and workflow reference rather than a runtime dependency.
 Cowart validates the direction: local tldraw canvas, project-local persistence,
 image holders, annotation screenshots, and agent tools that read selection state
 and write assets.
+
+## FigJam-Inspired Agent Protocol
+
+The Visual Delivery canvas should borrow FigJam's operational discipline without
+depending on FigJam as the runtime. The transferable patterns are:
+
+- inspect first, then write
+- build in small command batches
+- return or record every created and mutated shape id
+- use sections as navigational containers
+- position child nodes in the section's local coordinate system
+- resize sections to encompass children unless the section is intentionally a
+  participatory zone
+- represent relationships explicitly instead of relying only on visual
+  proximity
+- validate with screenshots or semantic index reads after meaningful writes
+
+These rules are agent-facing prompts. The current executable write path remains
+`PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot`: the agent writes the
+tldraw snapshot and semantic index, and includes a command batch in the optional
+`event` payload.
+
+## Canvas Command Batch
+
+When an agent changes a canvas, include a command batch in the snapshot event.
+This makes the write auditable and gives future agent turns deterministic ids to
+reference.
+
+```json
+{
+  "type": "agent_command_batch",
+  "actor": "agent",
+  "summary": "Added a section for FigJam experiment takeaways.",
+  "target": {
+    "kind": "canvas_workspace",
+    "workspace_id": "cw_..."
+  },
+  "commands": [
+    {
+      "op": "create_section",
+      "client_id": "figjam-takeaways",
+      "title": "FigJam Takeaways",
+      "bounds": { "x": 0, "y": 0, "w": 960, "h": 640 }
+    },
+    {
+      "op": "add_sticky",
+      "client_id": "sticky-api-limit",
+      "section_client_id": "figjam-takeaways",
+      "text": "External API limits make FigJam unsuitable as the core runtime.",
+      "color": "yellow",
+      "bounds": { "x": 64, "y": 120, "w": 240, "h": 240 }
+    }
+  ],
+  "created_shape_ids": ["shape:..."],
+  "mutated_shape_ids": []
+}
+```
+
+### Command Types
+
+`create_section`
+: Create a tldraw frame used as a canvas section. Required fields: `title`,
+`bounds`. Optional fields: `color`, `role`, `parent_id`.
+
+`rename_section`
+: Rename an existing section. Required fields: `section_id`, `title`.
+
+`duplicate_section`
+: Duplicate a section and its children. Required fields: `section_id`.
+Optional fields: `offset`.
+
+`organize_section`
+: Reflow a section's children into meaningful lanes or grids. Required fields:
+`section_id`. Optional fields: `strategy`, such as `media_notes_diagram_other`.
+
+`add_text`
+: Add structural text, such as a board title, heading, caption, prompt,
+instruction, or analysis paragraph. Required fields: `text`, `bounds` or
+`position`. Optional fields: `section_id`, `role`.
+
+`add_sticky`
+: Add one participant-style idea or feedback item. Required fields: `text`,
+`position` or `bounds`. Optional fields: `section_id`, `color`, `author`.
+Stickies should not carry long analysis or instructions.
+
+`add_shape`
+: Add a diagram node, option, process step, state, or decision node. Required
+fields: `text`, `shape`, `bounds`. Optional fields: `section_id`, `color`,
+`semantic_role`.
+
+`add_connector`
+: Add a relationship between nodes. Required fields: `from_shape_id`,
+`to_shape_id`. Optional fields: `label`, `direction`, `line_type`,
+`relationship_type`. Mirror the relation into `semantic_index.relationships`.
+
+`add_table`
+: Add row/column data as a first-class semantic object. Required fields:
+`columns`, `rows`, `bounds`. Current renderers may fall back to grouped tldraw
+shapes, but the semantic node kind should remain `table`.
+
+`add_code_block`
+: Add code with a language hint. Required fields: `code`, `language`, `bounds`.
+Current renderers may fall back to a text/shape group, but the semantic node
+kind should remain `code_block`.
+
+`add_label`
+: Add a numbered or lettered callout marker. Required fields: `label`,
+`position`. Optional fields: `target_shape_id`, `legend_text`.
+
+`add_image_asset`
+: Add or reference an image asset. Required fields: `asset_id` or `source`,
+`bounds`, `alt_text`. The same `alt_text` must appear in
+`semantic_index.assets[]`.
+
+`set_image_alt_text`
+: Update image alt text. Required fields: `shape_id`, `alt_text`.
+
+## Canvas Semantic Kinds
+
+Use semantic kinds consistently even when the renderer uses a tldraw fallback:
+
+| Semantic kind | Default renderer | Use |
+| --- | --- | --- |
+| `canvas_section` | `frame` | Named container and navigation unit |
+| `text` | `text` or `geo` | Titles, instructions, analysis, captions |
+| `sticky_note` | `note` or styled `geo` | One participant idea or feedback item |
+| `shape` | `geo` | Diagram nodes, states, options, decisions |
+| `connector` | `arrow` | Flow, dependency, evidence, reference link |
+| `table` | grouped shapes / future table renderer | Row-column data |
+| `code_block` | styled text / future code renderer | Code with language metadata |
+| `label` | ellipse/geo | Short callout marker |
+| `image` | `image` | Visual asset with required alt text |
+
+## Layout Rules
+
+- Reading order is left-to-right, top-to-bottom.
+- Context usually belongs on the left, evidence in the middle, decisions or asks
+  on the right.
+- Tight clusters mean "same thought"; wide gaps mean separate topics.
+- Use grids for batches of sticky notes. Do not stagger or overlap them.
+- Size sections from content outward, except workshop/feedback sections that are
+  intentionally sized for future user input.
+- Text that guides or explains belongs in text nodes, not sticky notes.
+- Keep section names short. A section name is for navigation; a visible heading
+  may be a separate text node inside the section.
