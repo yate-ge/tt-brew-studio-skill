@@ -62,7 +62,9 @@ export default function AppLayout() {
   const [isNarrow, setIsNarrow] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth < 760 : false
   ));
-  const isSplitWorkspace = location.pathname.startsWith('/logs') || location.pathname.startsWith('/reports');
+  const isSplitWorkspace = location.pathname.startsWith('/logs')
+    || location.pathname.startsWith('/reports')
+    || location.pathname.startsWith('/canvas');
   const [sidebarVisible, setSidebarVisible] = useState(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 760) return false;
     try {

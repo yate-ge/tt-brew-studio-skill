@@ -404,30 +404,23 @@ Request:
 {
   "title": "Design direction review",
   "structure": "standard-report|complex-review",
-  "presentation": "document|table|canvas|slides",
+  "presentation": "document_report",
   "routing_reason": "Why the agent selected this template",
   "content": {
-    "type": "report_template",
+    "type": "document_report",
     "sections": []
   }
 }
 ```
 
-If `content` is omitted, the server creates a default `report_template`.
-For `standard-report`, the default contains one section using the requested
-presentation. For `complex-review`, the default contains mixed sections:
+If `content` is omitted, the server creates a default `document_report`.
+For `standard-report`, the default contains one focused document section. For
+`complex-review`, the default contains multiple document sections for context,
+core delivery content, decisions, and next steps.
 
-- `document` for context and explanation
-- the requested primary presentation for the main artifact
-- `table` for structured decisions when useful
-- `slides` for step-by-step review when useful
-
-For `canvas` reports, sections include a tldraw artifact with role-aware seed
-nodes and regions. The default canvas schema separates:
-
-- `agent` nodes for agent work, reasoning, options, and sources
-- `user` nodes for user comments, added material, and annotations
-- `shared` nodes for decisions, tradeoffs, and next actions
+`table` and `slides` are not first-class presentation values. Tables may be
+rendered inside the document body. Canvas collaboration uses
+`canvas_workspace`, described below.
 
 Response: the hydrated report, including `feedback`, `drafts`, and
 `pending_feedback_count`.
@@ -452,7 +445,7 @@ Important fields:
 
 - `structure`
 - `presentation`
-- `content.type = "report_template"` for V4 template reports
+- `content.type = "document_report"` for current reports (`report_template` is legacy-compatible)
 - `content.sections[]`
 - `content.change_records[]` for visible feedback-loop summaries
 - `feedback[]`
@@ -463,9 +456,10 @@ Important fields:
 
 Updates report metadata and content. The `id` is immutable.
 
-### `PUT /api/reports/:id/canvas`
+### `PUT /api/reports/:id/canvas` legacy
 
-Persists a tldraw snapshot for a canvas section.
+Persists a tldraw snapshot for a legacy canvas section. New work should use
+`/api/canvas-workspaces/:id/snapshot`.
 
 Request:
 
@@ -475,6 +469,48 @@ Request:
   "snapshot": {
     "document": { "store": {} },
     "session": {}
+  }
+}
+```
+
+## Canvas Workspaces
+
+Canvas workspaces are project-scoped persistent collaboration spaces stored
+under `.visual-delivery/data/canvas-workspaces/{workspace_id}/`.
+
+### `POST /api/canvas-workspaces/select`
+
+Selects the most relevant active canvas workspace, or creates a new one when no
+related workspace exists.
+
+```json
+{
+  "title": "Design collaboration",
+  "purpose": "moodboard, image annotation, architecture alignment",
+  "tags": ["design"],
+  "context": {
+    "task_name": "Current task",
+    "prompt": "Current user request"
+  },
+  "force_new": false
+}
+```
+
+### `PUT /api/canvas-workspaces/:id/snapshot`
+
+Persists the tldraw snapshot and an agent-readable semantic index.
+
+```json
+{
+  "snapshot": {
+    "document": { "store": {} },
+    "session": {}
+  },
+  "semantic_index": {
+    "version": 1,
+    "nodes": [],
+    "annotations": [],
+    "relationships": []
   }
 }
 ```
@@ -510,22 +546,8 @@ Common V4 template feedback targets:
 ```json
 {
   "target": {
-    "kind": "table_field",
-    "section_id": "sec-table",
-    "column_key": "score",
-    "column_label": "评分"
-  }
-}
-```
-
-```json
-{
-  "target": {
-    "kind": "table_row",
-    "section_id": "sec-table",
-    "row_id": "option-a",
-    "row_index": 1,
-    "row_label": "方案 A"
+    "kind": "canvas_workspace",
+    "workspace_id": "cw_..."
   }
 }
 ```
@@ -534,34 +556,9 @@ Common V4 template feedback targets:
 {
   "target": {
     "kind": "canvas_node",
-    "section_id": "sec-canvas",
+    "workspace_id": "cw_...",
     "node_id": "agent-zone",
-    "shape_id": "shape:vd-sec-canvas-agent-zone"
-  }
-}
-```
-
-```json
-{
-  "target": {
-    "kind": "slide_page",
-    "section_id": "sec-slides",
-    "slide_id": "slide-01",
-    "slide_index": 1
-  }
-}
-```
-
-```json
-{
-  "target": {
-    "kind": "slide_decision",
-    "section_id": "sec-slides",
-    "slide_id": "slide-02",
-    "slide_index": 2,
-    "decision_id": "decision-template-choice",
-    "decision_status": "needs_decision",
-    "prompt": "是否采用画布模式作为默认创意评审模板？"
+    "shape_id": "shape:..."
   }
 }
 ```
@@ -570,7 +567,7 @@ Common V4 template feedback targets:
 {
   "target": {
     "kind": "canvas_selection",
-    "section_id": "sec-canvas",
+    "workspace_id": "cw_...",
     "shape_ids": ["shape:..."],
     "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }
   }

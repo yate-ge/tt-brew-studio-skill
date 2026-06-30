@@ -4,6 +4,7 @@ const NAV_ITEMS = [
   { to: '/', icon: 'home', label: '主页' },
   { to: '/logs', icon: 'logs', label: '日志' },
   { to: '/reports', icon: 'reports', label: '汇报' },
+  { to: '/canvas', icon: 'canvas', label: '画布' },
   { to: '/settings', icon: 'settings', label: '设置' },
 ];
 
@@ -28,6 +29,15 @@ const ICONS = {
       <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
       <line x1="3" y1="9" x2="21" y2="9"/>
       <line x1="9" y1="21" x2="9" y2="9"/>
+    </svg>
+  ),
+  canvas: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M8 8h4v4H8z"/>
+      <path d="M15 14h3v3h-3z"/>
+      <path d="M12 10l3 5"/>
+      <path d="M7 17l3-5"/>
     </svg>
   ),
   settings: (

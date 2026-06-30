@@ -4,6 +4,7 @@ import AppLayout from './components/layout/AppLayout';
 import ProjectHome from './pages/ProjectHome';
 import Reports from './pages/Reports';
 import ReportNew from './pages/ReportNew';
+import CanvasWorkspace from './pages/CanvasWorkspace';
 import Logs from './pages/Logs';
 import Settings from './pages/Settings';
 import DeliveryPage from './pages/DeliveryPage';
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/reports/new" element={<ReportNew />} />
         <Route path="/reports/:reportId" element={<Reports />} />
+        <Route path="/canvas" element={<CanvasWorkspace />} />
         <Route path="/d/:id" element={<DeliveryPage />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

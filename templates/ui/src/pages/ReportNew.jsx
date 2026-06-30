@@ -1,17 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createReport } from '../lib/api';
+import { createCanvasWorkspace, createReport } from '../lib/api';
 
 const STRUCTURE_OPTIONS = [
   { key: 'standard', label: '标准汇报', desc: '单 section，短周期汇报，快速呈现结论与证据' },
-  { key: 'complex-review', label: '复杂任务评审', desc: '多 section，适合长期任务，支持混合呈现层与反馈追踪' },
+  { key: 'complex-review', label: '复杂任务评审', desc: '多 section，适合长期任务，支持文档内反馈追踪' },
 ];
 
-const PRESENTATION_OPTIONS = [
-  { key: 'document', label: '文档', desc: '交互式文本文档，支持折叠、内嵌表格和代码', icon: 'doc' },
-  { key: 'table', label: '表格', desc: '交互式数据表格，支持排序、过滤和导出', icon: 'table' },
-  { key: 'canvas', label: '画布', desc: '无限画布，自由排布图片、便签和批注', icon: 'canvas' },
-  { key: 'slides', label: 'Slides', desc: '幻灯片播放器，适合逐页讲解和路演', icon: 'slides' },
+const SURFACE_OPTIONS = [
+  { key: 'document_report', label: 'Document Report', desc: '交互式交付文档，内容由任务目标决定，可内嵌表格、代码和决策项' },
+  { key: 'canvas_workspace', label: 'Canvas Workspace', desc: '持续协作画布，适合 moodboard、图片标注、思维导图和设计对齐' },
 ];
 
 const STYLES = {
@@ -119,14 +117,25 @@ const STYLES = {
 export default function ReportNew() {
   const navigate = useNavigate();
   const [structure, setStructure] = useState('complex-review');
-  const [presentation, setPresentation] = useState('document');
+  const [surfaceType, setSurfaceType] = useState('document_report');
 
   const handleCreate = async () => {
     try {
+      if (surfaceType === 'canvas_workspace') {
+        const workspace = await createCanvasWorkspace({
+          title: '协作画布',
+          purpose: '持续承载本项目的视觉协作、标注、moodboard 和结构化设计沟通。',
+          tags: ['collaboration', 'design'],
+          make_active: true,
+        });
+        navigate(`/canvas?workspace=${encodeURIComponent(workspace.id)}`);
+        return;
+      }
+
       await createReport({
-        title: '新建汇报',
+        title: '新建交付汇报',
         structure,
-        presentation,
+        presentation: 'document_report',
       });
       navigate('/reports');
     } catch {
@@ -144,7 +153,7 @@ export default function ReportNew() {
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
         </svg>
-        Agent 推荐：复杂任务评审 + 文档 作为主要呈现形式
+        Agent 推荐：复杂任务评审 + Document Report
       </div>
 
       {/* Step 1: Structure */}
@@ -167,23 +176,18 @@ export default function ReportNew() {
         </div>
       </div>
 
-      {/* Step 2: Presentation */}
+      {/* Step 2: Surface */}
       <div style={STYLES.section}>
         <div style={STYLES.sectionTitle}>
           <span style={STYLES.stepNum}>2</span>
-          选择主要呈现形式
-          {structure === 'complex-review' && (
-            <span style={{ fontSize: 'var(--vd-font-size-xs)', color: 'var(--vd-text-tertiary)', fontWeight: 400 }}>
-              （每个 section 可单独切换）
-            </span>
-          )}
+          选择交付模式
         </div>
         <div style={STYLES.optionGrid}>
-          {PRESENTATION_OPTIONS.map((opt) => (
+          {SURFACE_OPTIONS.map((opt) => (
             <div
               key={opt.key}
-              style={STYLES.optionCard(presentation === opt.key)}
-              onClick={() => setPresentation(opt.key)}
+              style={STYLES.optionCard(surfaceType === opt.key)}
+              onClick={() => setSurfaceType(opt.key)}
             >
               <div style={STYLES.optionLabel}>{opt.label}</div>
               <div style={STYLES.optionDesc}>{opt.desc}</div>
@@ -198,7 +202,7 @@ export default function ReportNew() {
           取消
         </button>
         <button style={STYLES.btnSubmit} onClick={handleCreate}>
-          创建汇报草稿
+          {surfaceType === 'canvas_workspace' ? '创建画布工作区' : '创建汇报草稿'}
         </button>
       </div>
     </div>

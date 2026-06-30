@@ -1052,6 +1052,7 @@ function setupRoutes(app, dataDir, options = {}) {
   const projectLogsPath = path.join(dataRoot, 'logs.json');
   const projectFeedbackPath = path.join(dataRoot, 'feedback.json');
   const projectReportsPath = path.join(dataRoot, 'reports');
+  const projectCanvasWorkspacesPath = path.join(dataRoot, 'canvas-workspaces');
   const skillManagedLogsPath = path.join(dataRoot, 'logs');
   const skillManagedDocumentsPath = path.join(dataRoot, 'documents');
 
@@ -1102,6 +1103,7 @@ function setupRoutes(app, dataDir, options = {}) {
 
   // Ensure V3 data dirs/files exist
   fs.mkdirSync(projectReportsPath, { recursive: true });
+  fs.mkdirSync(projectCanvasWorkspacesPath, { recursive: true });
   fs.mkdirSync(skillManagedLogsPath, { recursive: true });
   fs.mkdirSync(skillManagedDocumentsPath, { recursive: true });
   if (!fs.existsSync(projectLogsPath)) { fs.writeFileSync(projectLogsPath, '[]', 'utf8'); }
@@ -1975,7 +1977,14 @@ function setupRoutes(app, dataDir, options = {}) {
   });
 
   // V4: Reports (canonical project-scoped report model)
-  const REPORT_PRESENTATIONS = new Set(['document', 'table', 'canvas', 'slides']);
+  const REPORT_PRESENTATIONS = new Set(['document_report', 'canvas_workspace']);
+  const REPORT_PRESENTATION_ALIASES = new Map([
+    ['document', 'document_report'],
+    ['report_template', 'document_report'],
+    ['table', 'document_report'],
+    ['slides', 'document_report'],
+    ['canvas', 'canvas_workspace'],
+  ]);
   const REPORT_STRUCTURES = new Set(['standard', 'standard-report', 'complex-review']);
 
   function reportDir(reportId) {
@@ -2005,7 +2014,10 @@ function setupRoutes(app, dataDir, options = {}) {
   }
 
   function normalizeReportPresentation(presentation) {
-    return REPORT_PRESENTATIONS.has(presentation) ? presentation : 'document';
+    const key = String(presentation || '').trim();
+    if (REPORT_PRESENTATIONS.has(key)) return key;
+    if (REPORT_PRESENTATION_ALIASES.has(key)) return REPORT_PRESENTATION_ALIASES.get(key);
+    return 'document_report';
   }
 
   function reportSection(id, title, presentation, artifactTitle, narrative = '') {
@@ -2028,23 +2040,18 @@ function setupRoutes(app, dataDir, options = {}) {
   function defaultRoutingReason(structure, presentation) {
     const normalizedStructure = normalizeReportStructure(structure);
     const normalizedPresentation = normalizeReportPresentation(presentation);
-    if (normalizedStructure === 'complex-review') {
-      if (normalizedPresentation === 'canvas') {
-        return 'Complex-review uses mixed sections: document for context, canvas for visual co-creation, table for decisions, and slides for review flow.';
-      }
-      if (normalizedPresentation === 'table') {
-        return 'Complex-review uses mixed sections: document for context, table for structured comparison, and slides for decisions.';
-      }
-      if (normalizedPresentation === 'slides') {
-        return 'Complex-review uses mixed sections: document for context, slides for narrative review, and table for decision tracking.';
-      }
-      return 'Complex-review uses mixed sections: document for explanation and table for structured confirmation.';
+    if (normalizedPresentation === 'canvas_workspace') {
+      return 'Canvas workspace is a persistent project collaboration space. Reuse the active related canvas unless the user asks for a new one or the task is clearly unrelated.';
     }
-    return `Standard report uses ${normalizedPresentation} as the primary presentation layer.`;
+    if (normalizedStructure === 'complex-review') {
+      return 'Document report uses one interactive document surface. Tables, lists, and decisions live inside the document body instead of becoming separate table/slides artifacts.';
+    }
+    return 'Document report uses an interactive document surface for the delivery content.';
   }
 
   function createTemplateArtifact(presentation, title) {
-    if (presentation === 'table') {
+    const legacyPresentation = String(presentation || '').trim();
+    if (legacyPresentation === 'table') {
       return {
         type: 'table',
         columns: [
@@ -2063,7 +2070,7 @@ function setupRoutes(app, dataDir, options = {}) {
         feedback_targets: ['row-1'],
       };
     }
-    if (presentation === 'canvas') {
+    if (legacyPresentation === 'canvas') {
       return {
         type: 'canvas',
         mode: 'tldraw',
@@ -2124,7 +2131,7 @@ function setupRoutes(app, dataDir, options = {}) {
         prompt: '在无限画布中放置方案、素材、批注和待决策点。',
       };
     }
-    if (presentation === 'slides') {
+    if (legacyPresentation === 'slides') {
       return {
         type: 'slides',
         slides: [
@@ -2142,6 +2149,14 @@ function setupRoutes(app, dataDir, options = {}) {
         ],
       };
     }
+    const normalizedPresentation = normalizeReportPresentation(presentation);
+    if (normalizedPresentation === 'canvas_workspace') {
+      return {
+        type: 'document',
+        body: `# ${title || '画布协作空间'}\n\n这个任务适合进入项目级 canvas_workspace。请在画布页持续沉淀 moodboard、图片标注、结构图、思维导图和设计决策。\n`,
+        feedback_targets: ['document-body'],
+      };
+    }
     return {
       type: 'document',
       body: `# ${title || '汇报内容'}\n\n由 agent 补充产出、解释、证据和待决策点。\n`,
@@ -2154,43 +2169,15 @@ function setupRoutes(app, dataDir, options = {}) {
     const normalizedPresentation = normalizeReportPresentation(presentation);
     if (normalizedStructure !== 'complex-review') {
       return [
-        reportSection(generateId('sec'), '汇报内容', normalizedPresentation, title),
+        reportSection(generateId('sec'), '交付汇报', normalizedPresentation, title),
       ];
     }
 
     const sections = [
-      reportSection(generateId('sec'), '背景与目标', 'document', '背景与目标', '说明任务背景、用户目标、约束和本次评审范围。'),
+      reportSection(generateId('sec'), '背景与目标', normalizedPresentation, '背景与目标', '说明任务背景、用户目标、约束和本次评审范围。'),
+      reportSection(generateId('sec'), '核心交付内容', normalizedPresentation, title || '核心交付内容', '呈现 agent 的产出、解释、证据和关键判断。'),
+      reportSection(generateId('sec'), '决策与下一步', normalizedPresentation, '决策与下一步', '沉淀待确认事项、风险、取舍和后续动作。'),
     ];
-
-    if (normalizedPresentation === 'canvas') {
-      sections.push(
-        reportSection(generateId('sec'), '视觉画布与协作空间', 'canvas', '视觉画布与协作空间', '用于设计创意、头脑风暴、灵感采集和产品设计思路推进。'),
-        reportSection(generateId('sec'), '方案取舍矩阵', 'table', '方案取舍矩阵', '把画布中的方案、风险和决策点结构化，便于逐项反馈。'),
-        reportSection(generateId('sec'), '评审结论与下一步', 'slides', '评审结论与下一步', '用逐页方式呈现结论、待确认决策和后续动作。')
-      );
-      return sections;
-    }
-
-    if (normalizedPresentation === 'table') {
-      sections.push(
-        reportSection(generateId('sec'), '数据与方案矩阵', 'table', title || '数据与方案矩阵', '用可筛选、可排序的表格承载对比和证据。'),
-        reportSection(generateId('sec'), '待确认决策', 'slides', '待确认决策', '把需要用户判断的事项拆成逐页评审。')
-      );
-      return sections;
-    }
-
-    if (normalizedPresentation === 'slides') {
-      sections.push(
-        reportSection(generateId('sec'), '逐页汇报', 'slides', title || '逐页汇报', '按叙事顺序推进结论、证据和待确认点。'),
-        reportSection(generateId('sec'), '决策与风险矩阵', 'table', '决策与风险矩阵', '汇总 slides 中需要反馈的结构化事项。')
-      );
-      return sections;
-    }
-
-    sections.push(
-      reportSection(generateId('sec'), '核心产出说明', 'document', title || '核心产出说明', '呈现 agent 的产出、解释、证据和关键判断。'),
-      reportSection(generateId('sec'), '待确认事项', 'table', '待确认事项', '用表格集中列出需要用户反馈的点。')
-    );
     return sections;
   }
 
@@ -2198,9 +2185,11 @@ function setupRoutes(app, dataDir, options = {}) {
     const normalizedStructure = normalizeReportStructure(structure);
     const normalizedPresentation = normalizeReportPresentation(presentation);
     if (content && typeof content === 'object') {
+      const contentType = content.type === 'report_template' ? 'document_report' : (content.type || 'document_report');
       return {
         ...content,
-        type: content.type || 'report_template',
+        type: contentType,
+        surface_type: content.surface_type || normalizedPresentation,
         structure: content.structure || normalizedStructure,
         presentation: content.presentation || normalizedPresentation,
         routing_reason: content.routing_reason || defaultRoutingReason(normalizedStructure, normalizedPresentation),
@@ -2208,7 +2197,8 @@ function setupRoutes(app, dataDir, options = {}) {
       };
     }
     return {
-      type: 'report_template',
+      type: 'document_report',
+      surface_type: normalizedPresentation,
       version: 1,
       structure: normalizedStructure,
       presentation: normalizedPresentation,
@@ -2447,6 +2437,529 @@ function setupRoutes(app, dataDir, options = {}) {
     return updateReportRecord(reportId, (report) => ({ ...report, status: nextStatus }));
   }
 
+  // V4: Canvas workspaces (persistent project collaboration spaces)
+  const CANVAS_WORKSPACE_STATUSES = new Set(['active', 'archived']);
+
+  function canvasIndexPath() {
+    return path.join(projectCanvasWorkspacesPath, 'index.json');
+  }
+
+  function canvasWorkspaceDir(workspaceId) {
+    return path.join(projectCanvasWorkspacesPath, workspaceId);
+  }
+
+  function canvasWorkspaceFile(workspaceId) {
+    return path.join(canvasWorkspaceDir(workspaceId), 'workspace.json');
+  }
+
+  function canvasSnapshotFile(workspaceId) {
+    return path.join(canvasWorkspaceDir(workspaceId), 'snapshot.json');
+  }
+
+  function canvasEventsFile(workspaceId) {
+    return path.join(canvasWorkspaceDir(workspaceId), 'events.json');
+  }
+
+  function canvasFeedbackFile(workspaceId) {
+    return path.join(canvasWorkspaceDir(workspaceId), 'feedback.json');
+  }
+
+  function canvasAssetsDir(workspaceId) {
+    return path.join(canvasWorkspaceDir(workspaceId), 'assets');
+  }
+
+  function readCanvasIndex() {
+    const stored = readJSONObject(canvasIndexPath());
+    return {
+      version: 1,
+      active_workspace_id: stored?.active_workspace_id || null,
+      workspaces: Array.isArray(stored?.workspaces) ? stored.workspaces : [],
+      updated_at: stored?.updated_at || null,
+    };
+  }
+
+  async function writeCanvasIndex(index) {
+    const next = {
+      version: 1,
+      active_workspace_id: index.active_workspace_id || null,
+      workspaces: Array.isArray(index.workspaces) ? index.workspaces : [],
+      updated_at: new Date().toISOString(),
+    };
+    await writeJSON(canvasIndexPath(), next);
+    return next;
+  }
+
+  function defaultCanvasSemanticIndex() {
+    return {
+      version: 1,
+      zones: [
+        { id: 'agent-zone', role: 'agent', title: 'Agent 工作区' },
+        { id: 'user-zone', role: 'user', title: '用户反馈区' },
+        { id: 'shared-zone', role: 'shared', title: '共享决策区' },
+      ],
+      nodes: [],
+      annotations: [],
+      relationships: [],
+      updated_at: null,
+    };
+  }
+
+  function normalizeCanvasWorkspace(workspace) {
+    if (!workspace || typeof workspace !== 'object') return null;
+    const now = new Date().toISOString();
+    const createdAt = workspace.created_at || workspace.createdAt || now;
+    const updatedAt = workspace.updated_at || workspace.updatedAt || createdAt;
+    return {
+      id: workspace.id,
+      type: 'canvas_workspace',
+      title: workspace.title || '未命名画布',
+      purpose: workspace.purpose || '',
+      status: CANVAS_WORKSPACE_STATUSES.has(workspace.status) ? workspace.status : 'active',
+      tags: Array.isArray(workspace.tags) ? workspace.tags : [],
+      context: workspace.context || {},
+      source_task_id: workspace.source_task_id || workspace.context?.task_id || null,
+      semantic_index: workspace.semantic_index || defaultCanvasSemanticIndex(),
+      selection_policy: workspace.selection_policy || {
+        default: 'reuse_related_active_workspace',
+        create_when: [
+          'user_explicitly_requests_new_canvas',
+          'no_active_canvas_exists',
+          'task_context_is_unrelated_to_existing_canvases',
+          'existing_canvas_is_archived_or_too_crowded',
+        ],
+      },
+      created_at: createdAt,
+      updated_at: updatedAt,
+      createdAt,
+      updatedAt,
+      last_used_at: workspace.last_used_at || workspace.lastUsedAt || updatedAt,
+    };
+  }
+
+  function canvasWorkspaceSummary(workspace) {
+    const normalized = normalizeCanvasWorkspace(workspace);
+    if (!normalized) return null;
+    return {
+      id: normalized.id,
+      type: normalized.type,
+      title: normalized.title,
+      purpose: normalized.purpose,
+      status: normalized.status,
+      tags: normalized.tags,
+      context: normalized.context,
+      source_task_id: normalized.source_task_id,
+      created_at: normalized.created_at,
+      updated_at: normalized.updated_at,
+      last_used_at: normalized.last_used_at,
+    };
+  }
+
+  function listCanvasWorkspaces() {
+    const index = readCanvasIndex();
+    const summaries = [];
+    for (const entry of safeReadDir(projectCanvasWorkspacesPath)) {
+      if (!entry.isDirectory()) continue;
+      const workspace = normalizeCanvasWorkspace(readJSONObject(canvasWorkspaceFile(entry.name)));
+      if (workspace) summaries.push(canvasWorkspaceSummary(workspace));
+    }
+    const byId = new Map(summaries.map((item) => [item.id, item]));
+    for (const item of index.workspaces) {
+      if (item?.id && !byId.has(item.id)) byId.set(item.id, item);
+    }
+    return Array.from(byId.values())
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.last_used_at || b.updated_at || b.created_at).getTime()
+        - new Date(a.last_used_at || a.updated_at || a.created_at).getTime());
+  }
+
+  async function upsertCanvasIndexEntry(workspace, { makeActive = false } = {}) {
+    const summary = canvasWorkspaceSummary(workspace);
+    const index = readCanvasIndex();
+    const entries = index.workspaces.filter((item) => item.id !== summary.id);
+    entries.push(summary);
+    await writeCanvasIndex({
+      ...index,
+      active_workspace_id: makeActive ? summary.id : (index.active_workspace_id || summary.id),
+      workspaces: entries.sort((a, b) => new Date(b.last_used_at || b.updated_at).getTime()
+        - new Date(a.last_used_at || a.updated_at).getTime()),
+    });
+  }
+
+  async function writeCanvasWorkspace(workspace, { makeActive = false } = {}) {
+    const normalized = normalizeCanvasWorkspace(workspace);
+    fs.mkdirSync(canvasWorkspaceDir(normalized.id), { recursive: true });
+    fs.mkdirSync(canvasAssetsDir(normalized.id), { recursive: true });
+    await writeJSON(canvasWorkspaceFile(normalized.id), normalized);
+    if (!fs.existsSync(canvasSnapshotFile(normalized.id))) await writeJSON(canvasSnapshotFile(normalized.id), {});
+    if (!fs.existsSync(canvasEventsFile(normalized.id))) await writeJSON(canvasEventsFile(normalized.id), []);
+    if (!fs.existsSync(canvasFeedbackFile(normalized.id))) await writeJSON(canvasFeedbackFile(normalized.id), []);
+    await upsertCanvasIndexEntry(normalized, { makeActive });
+    return normalized;
+  }
+
+  function readCanvasWorkspace(workspaceId) {
+    return normalizeCanvasWorkspace(readJSONObject(canvasWorkspaceFile(workspaceId)));
+  }
+
+  function readCanvasSnapshot(workspaceId) {
+    return readJSONObject(canvasSnapshotFile(workspaceId)) || {};
+  }
+
+  function readCanvasEvents(workspaceId) {
+    return readJSONArray(canvasEventsFile(workspaceId));
+  }
+
+  function readCanvasFeedback(workspaceId) {
+    return readJSONArray(canvasFeedbackFile(workspaceId));
+  }
+
+  function publicCanvasWorkspace(workspace, { includeDetail = false } = {}) {
+    const normalized = normalizeCanvasWorkspace(workspace);
+    if (!normalized) return null;
+    const detail = includeDetail
+      ? {
+        snapshot: readCanvasSnapshot(normalized.id),
+        events: readCanvasEvents(normalized.id),
+        feedback: readCanvasFeedback(normalized.id),
+      }
+      : {};
+    return {
+      ...normalized,
+      ...detail,
+      pending_feedback_count: includeDetail
+        ? detail.feedback.filter((item) => item.handled === false || item.status === 'tracked').length
+        : undefined,
+    };
+  }
+
+  async function appendCanvasEvent(workspaceId, event = {}) {
+    const now = new Date().toISOString();
+    const item = {
+      id: event.id || generateId('cwe'),
+      type: event.type || 'workspace_event',
+      actor: event.actor || 'agent',
+      summary: event.summary || '',
+      target: event.target || null,
+      created_at: event.created_at || now,
+      createdAt: event.createdAt || event.created_at || now,
+    };
+    await updateJSON(canvasEventsFile(workspaceId), (items) => [...items, item], []);
+    return item;
+  }
+
+  function tokenizeCanvasQuery(value) {
+    return String(value || '')
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((token) => token.length >= 2);
+  }
+
+  function scoreCanvasWorkspace(workspace, context = {}) {
+    const tokens = tokenizeCanvasQuery([
+      context.title,
+      context.purpose,
+      context.task,
+      context.task_name,
+      context.prompt,
+      ...(Array.isArray(context.tags) ? context.tags : []),
+    ].filter(Boolean).join(' '));
+    const haystack = [
+      workspace.title,
+      workspace.purpose,
+      workspace.source_task_id,
+      ...(workspace.tags || []),
+      JSON.stringify(workspace.context || {}),
+    ].join(' ').toLowerCase();
+    let score = 0;
+    for (const token of tokens) {
+      if (haystack.includes(token)) score += 2;
+    }
+    const index = readCanvasIndex();
+    if (index.active_workspace_id === workspace.id) score += 5;
+    if (workspace.status === 'active') score += 2;
+    const lastUsed = new Date(workspace.last_used_at || workspace.updated_at || workspace.created_at).getTime();
+    const ageHours = Number.isFinite(lastUsed) ? (Date.now() - lastUsed) / 3600000 : 9999;
+    if (ageHours < 24) score += 2;
+    if (ageHours < 168) score += 1;
+    return score;
+  }
+
+  async function createCanvasWorkspace({ title, purpose, tags, context, source_task_id: sourceTaskId, make_active: makeActive }) {
+    const now = new Date().toISOString();
+    const workspace = await writeCanvasWorkspace({
+      id: generateId('cw'),
+      type: 'canvas_workspace',
+      title: title || '协作画布',
+      purpose: purpose || '',
+      status: 'active',
+      tags: Array.isArray(tags) ? tags : [],
+      context: context || {},
+      source_task_id: sourceTaskId || context?.task_id || null,
+      semantic_index: defaultCanvasSemanticIndex(),
+      created_at: now,
+      updated_at: now,
+      last_used_at: now,
+    }, { makeActive: makeActive !== false });
+    await appendCanvasEvent(workspace.id, {
+      type: 'workspace_created',
+      actor: 'agent',
+      summary: '创建 canvas_workspace。',
+    });
+    return workspace;
+  }
+
+  app.get('/api/canvas-workspaces', (req, res) => {
+    try {
+      let workspaces = listCanvasWorkspaces();
+      const { status, search } = req.query;
+      if (status) workspaces = workspaces.filter((workspace) => workspace.status === status);
+      if (search) {
+        const query = String(search).toLowerCase();
+        workspaces = workspaces.filter((workspace) => [
+          workspace.title,
+          workspace.purpose,
+          workspace.source_task_id,
+          ...(workspace.tags || []),
+        ].join(' ').toLowerCase().includes(query));
+      }
+      const index = readCanvasIndex();
+      res.json({
+        type: 'canvas_workspace_index',
+        active_workspace_id: index.active_workspace_id,
+        workspaces,
+        total: workspaces.length,
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces', async (req, res) => {
+    try {
+      const workspace = await createCanvasWorkspace(req.body || {});
+      await appendLogEntry({
+        type: 'auto',
+        event: 'canvas_workspace_created',
+        title: `创建画布工作区：${workspace.title}`,
+        content: workspace.purpose || '创建新的 canvas_workspace。',
+        tags: ['canvas_workspace'],
+      });
+      broadcast('canvas_workspace_created', canvasWorkspaceSummary(workspace));
+      res.status(201).json(publicCanvasWorkspace(workspace, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces/select', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const forceNew = body.force_new === true || body.new_canvas === true;
+      const selectionContext = { ...body, ...(body.context || {}) };
+      const candidates = listCanvasWorkspaces()
+        .filter((workspace) => workspace.status === 'active')
+        .map((workspace) => ({
+          workspace,
+          score: scoreCanvasWorkspace(workspace, selectionContext),
+        }))
+        .sort((a, b) => b.score - a.score);
+
+      let selected = null;
+      let reason = 'created_new_workspace';
+      if (!forceNew && candidates.length > 0 && candidates[0].score >= 5) {
+        selected = readCanvasWorkspace(candidates[0].workspace.id);
+        reason = 'reused_related_workspace';
+      }
+
+      if (!selected) {
+        selected = await createCanvasWorkspace({
+          title: body.title || body.context?.title || '协作画布',
+          purpose: body.purpose || body.context?.purpose || '',
+          tags: body.tags || body.context?.tags || [],
+          context: body.context || {},
+          source_task_id: body.source_task_id || body.context?.task_id || null,
+          make_active: true,
+        });
+      } else {
+        selected.last_used_at = new Date().toISOString();
+        selected.updated_at = selected.last_used_at;
+        selected.updatedAt = selected.updated_at;
+        await writeCanvasWorkspace(selected, { makeActive: true });
+        await appendCanvasEvent(selected.id, {
+          type: 'workspace_selected',
+          actor: 'agent',
+          summary: '根据当前任务上下文复用已有 canvas_workspace。',
+        });
+      }
+
+      res.json({
+        workspace: publicCanvasWorkspace(selected, { includeDetail: true }),
+        selection: {
+          reason,
+          score: candidates[0]?.score || 0,
+          candidates: candidates.slice(0, 5).map((item) => ({
+            id: item.workspace.id,
+            title: item.workspace.title,
+            score: item.score,
+          })),
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.get('/api/canvas-workspaces/:id', (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      res.json(publicCanvasWorkspace(workspace, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.put('/api/canvas-workspaces/:id', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const next = {
+        ...workspace,
+        ...req.body,
+        id: workspace.id,
+        type: 'canvas_workspace',
+        updated_at: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const saved = await writeCanvasWorkspace(next, { makeActive: req.body?.make_active === true });
+      broadcast('canvas_workspace_updated', canvasWorkspaceSummary(saved));
+      res.json(publicCanvasWorkspace(saved, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces/:id/activate', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      workspace.last_used_at = new Date().toISOString();
+      workspace.updated_at = workspace.last_used_at;
+      workspace.updatedAt = workspace.updated_at;
+      const saved = await writeCanvasWorkspace(workspace, { makeActive: true });
+      await appendCanvasEvent(saved.id, {
+        type: 'workspace_activated',
+        actor: req.body?.actor || 'user',
+        summary: '设为当前 canvas_workspace。',
+      });
+      broadcast('canvas_workspace_updated', canvasWorkspaceSummary(saved));
+      res.json(publicCanvasWorkspace(saved, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.put('/api/canvas-workspaces/:id/snapshot', async (req, res) => {
+    try {
+      const { snapshot, semantic_index: semanticIndex, event } = req.body || {};
+      if (!snapshot || typeof snapshot !== 'object') {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'snapshot is required' } });
+      }
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const now = new Date().toISOString();
+      await writeJSON(canvasSnapshotFile(workspace.id), snapshot);
+      const saved = await writeCanvasWorkspace({
+        ...workspace,
+        semantic_index: semanticIndex && typeof semanticIndex === 'object'
+          ? { ...semanticIndex, updated_at: now }
+          : workspace.semantic_index,
+        updated_at: now,
+        updatedAt: now,
+        last_used_at: now,
+      }, { makeActive: true });
+      if (event) {
+        await appendCanvasEvent(workspace.id, event);
+      }
+      broadcast('canvas_workspace_updated', canvasWorkspaceSummary(saved));
+      res.json(publicCanvasWorkspace(saved, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces/:id/events', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const event = await appendCanvasEvent(workspace.id, req.body || {});
+      res.status(201).json(event);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces/:id/feedback', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const content = String(req.body?.content || '').trim();
+      if (!content) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'content is required' } });
+      }
+      const now = new Date().toISOString();
+      const feedback = {
+        id: generateId('fb'),
+        kind: req.body?.kind || 'canvas_feedback',
+        workspace_id: workspace.id,
+        target: req.body?.target || {},
+        status: 'tracked',
+        handled: false,
+        content,
+        author: req.body?.author || 'user',
+        source: {
+          type: 'canvas_workspace',
+          workspace_id: workspace.id,
+          workspace_title: workspace.title,
+        },
+        created_at: now,
+        updated_at: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await updateJSON(canvasFeedbackFile(workspace.id), (items) => [...items, feedback], []);
+      await upsertProjectFeedback(feedback);
+      await appendCanvasEvent(workspace.id, {
+        type: 'feedback_received',
+        actor: feedback.author,
+        summary: content,
+        target: feedback.target,
+      });
+      await appendLogEntry({
+        type: 'auto',
+        event: 'canvas_feedback_committed',
+        title: `收到画布反馈：${workspace.title}`,
+        content,
+        tags: ['canvas_workspace', 'feedback'],
+      });
+      res.status(201).json(feedback);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
   app.get('/api/reports', (req, res) => {
     try {
       const canonicalReports = listCanonicalReports();
@@ -2501,13 +3014,13 @@ function setupRoutes(app, dataDir, options = {}) {
         content,
         sections,
       });
-      if (routingReason && reportContent.type === 'report_template') {
+      if (routingReason && (reportContent.type === 'report_template' || reportContent.type === 'document_report')) {
         reportContent.routing_reason = routingReason;
       }
-      if (reportContent.type === 'report_template' && !Array.isArray(reportContent.change_records)) {
+      if ((reportContent.type === 'report_template' || reportContent.type === 'document_report') && !Array.isArray(reportContent.change_records)) {
         reportContent.change_records = collectRecentChangeRecords();
       }
-      if (reportContent.type === 'report_template' && reportContent.change_records.length === 0) {
+      if ((reportContent.type === 'report_template' || reportContent.type === 'document_report') && reportContent.change_records.length === 0) {
         reportContent.change_records = collectRecentChangeRecords();
       }
       const report = await writeReportRecord({

@@ -2,8 +2,8 @@
 name: visual-delivery
 description: >
   Delivers task outcomes through a project-scoped visual workspace. Creates
-  structured reports, review pages, canvas/table/document/slides templates, logs,
-  and feedback loops for agent-user collaboration. Use when the agent should
+  document reports, persistent canvas workspaces, logs, and feedback loops for
+  agent-user collaboration. Use when the agent should
   communicate work visually or collect structured feedback. Skip for simple
   inline text answers.
 ---
@@ -177,71 +177,64 @@ curl -s http://localhost:3847/api/settings
 | `smart` | Create a report for complex/structured work; respond inline for simple replies. |
 | `manual` | Create a report only when explicitly requested. |
 
-### Step 3: Route Report Template
+### Step 3: Route Delivery Surface
 
-Before generating the report, choose a template and briefly state the reason.
-The agent chooses by default; the user may override.
+Before generating a visual delivery, choose one of two first-class surfaces and
+briefly state the reason. The agent chooses by default; the user may override.
 
-Structure layer:
+Surface types:
 
-- `standard-report`: one focused report, short-cycle or single artifact
-- `complex-review`: multi-section review with artifacts, reasoning, decisions,
-  and feedback prompts
+- `document_report`: the delivery itself is an interactive document. Use it for
+  reports, implementation summaries, reviews, decisions, evidence, and follow-up
+  actions. Tables may appear as Markdown or document blocks, but `table` is not a
+  separate delivery mode.
+- `canvas_workspace`: the delivery itself is a persistent project canvas. Use it
+  for design creativity, moodboards, image annotation, product architecture
+  alignment, mind maps, visual planning, and any task that benefits from spatial
+  co-creation. `slides` is not a separate delivery mode.
 
-Complex-review routing:
+Document report structure:
 
-- Use mixed sections instead of repeating one presentation layer.
-- Use `document` for context, rationale, and conclusions.
-- Use `table` for comparisons, decision matrices, risks, and structured checks.
-- Use `canvas` for design creativity, brainstorming, inspiration collection, and
-  product/design co-creation.
-- Use `slides` for step-by-step stakeholder review and decision walkthroughs.
-- When `content` is omitted, `/api/reports` creates a default mixed-section
-  `report_template` based on the requested primary presentation.
+- `standard-report`: one focused report, short-cycle or single artifact.
+- `complex-review`: multi-section document with reasoning, evidence, decisions,
+  and feedback prompts.
+- When `content` is omitted, `/api/reports` creates a `document_report`.
 
-Presentation layer:
+Canvas workspace behavior:
 
-- `document`: analysis, rationale, proposals, prose-heavy reports
-- `table`: data, comparisons, evaluation matrices, structured rows
-- `canvas`: design ideation, brainstorming, inspiration collection, product
-  design thinking, spatial/visual collaboration
-- `slides`: multi-step narrative, stakeholder walkthrough, pitch/review deck
+- Treat the canvas as a project co-creation workspace, not a one-off report
+  section, screenshot, or embedded artifact.
+- Reuse the current related canvas by default. Create a new canvas only when the
+  user explicitly asks, no active canvas exists, the task is clearly unrelated,
+  or the existing canvas is archived / too crowded.
+- The implementation uses `tldraw` and follows Cowart's local infinite-canvas
+  direction: project-local persistence, image assets, annotations, selected
+  regions, and agent-readable canvas state.
+- Persist both the raw tldraw snapshot and a semantic index so the agent can
+  understand shapes, selections, annotations, and workspace history later.
 
-Canvas mode:
+Feedback targets:
 
-- Use for design creativity, brainstorming, inspiration collection, product
-  design direction, and visual collaboration.
-- Treat it as a project co-creation workspace, not a static image report or a
-  one-off canvas screenshot.
-- The implementation uses `tldraw` and follows the local infinite-canvas
-  collaboration direction of Cowart.
-- Agent can continuously add material, organize ideas, place options, explain
-  decisions, and advance product/design thinking on the canvas.
-- User can annotate, add material, select regions, and submit feedback in the
-  same canvas space.
-- Persist canvas state in the current project workspace. Later reports may
-  reference the canvas page, selected nodes, or snapshots as artifacts.
-
-Template feedback targets:
-
-- Document templates should expose `document_paragraph` targets with paragraph
+- Document reports should expose `document_paragraph` targets with paragraph
   line and quote metadata.
-- Table templates should expose sortable/filterable views plus `table_row` and
-  `table_field` targets.
-- Canvas templates should expose `canvas_node` and `canvas_selection` targets.
-- Slides templates should expose `slide_page` targets and `slide_decision`
-  targets for pages that need confirmation.
+- Canvas workspaces should expose `canvas_workspace`, `canvas_node`, and
+  `canvas_selection` targets with shape ids and bounds when available.
 
 Routing explanation example:
 
 ```text
-这次汇报包含多个方案、设计推理和待确认点，我会使用 complex-review；
-其中视觉方案部分用 canvas，决策对比用 table，结论用 document。
+这次主要是实现总结和决策确认，我会使用 document_report；
+表格内容会作为文档内的结构化段落呈现。
+```
+
+```text
+这次涉及 moodboard、图片标注和视觉方向协作，我会复用相关的 canvas_workspace；
+如果没有匹配画布，再创建新的项目画布。
 ```
 
 ### Step 4: Create Report
 
-Create reports through `/api/reports`, not `/api/deliveries`.
+Create document reports through `/api/reports`, not `/api/deliveries`.
 
 Minimal report:
 
@@ -251,7 +244,7 @@ curl -s -X POST http://localhost:3847/api/reports \
   -d '{
     "title": "REPORT TITLE",
     "structure": "standard-report",
-    "presentation": "document",
+    "presentation": "document_report",
     "routing_reason": "Why this template was selected"
   }'
 ```
@@ -262,35 +255,50 @@ Rich report with sections:
 {
   "title": "REPORT TITLE",
   "structure": "complex-review",
-  "presentation": "canvas",
-  "routing_reason": "Canvas is appropriate because this is a design ideation review.",
+  "presentation": "document_report",
+  "routing_reason": "Document report is appropriate because this is a delivery review.",
   "content": {
-    "type": "report_template",
+    "type": "document_report",
     "version": 1,
     "structure": "complex-review",
-    "presentation": "canvas",
+    "presentation": "document_report",
     "sections": [
       {
-        "id": "sec-direction",
-        "title": "方向探索",
+        "id": "sec-summary",
+        "title": "交付汇报",
         "status": "draft",
-        "narrative": "What the agent explored and why.",
-        "presentation": "canvas",
+        "narrative": "What the agent delivered and why.",
+        "presentation": "document_report",
         "artifact": {
-          "type": "canvas",
-          "mode": "tldraw",
-          "tldraw_snapshot": null,
-          "seed_nodes": [
-            { "id": "agent-brief", "title": "Agent 工作区", "body": "放置方案和推理。" },
-            { "id": "inspiration", "title": "灵感与素材", "body": "收集参考和截图。" },
-            { "id": "feedback", "title": "用户反馈区", "body": "用户批注和补充。" }
-          ]
+          "type": "document",
+          "body": "# 交付汇报\n\n说明产出、证据、影响范围和待确认事项。"
         }
       }
     ]
   }
 }
 ```
+
+### Step 4b: Select Or Create Canvas Workspace
+
+Create or reuse canvas workspaces through `/api/canvas-workspaces/select`.
+
+```bash
+curl -s -X POST http://localhost:3847/api/canvas-workspaces/select \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "视觉方向协作",
+    "purpose": "moodboard、图片标注、结构图和设计决策协作",
+    "tags": ["design", "moodboard"],
+    "context": {
+      "task_name": "TASK NAME",
+      "prompt": "Current user request"
+    }
+  }'
+```
+
+The selection response includes `workspace` and `selection.reason`. Use the
+returned workspace URL pattern `/canvas?workspace={WORKSPACE_ID}`.
 
 After creation, tell the user:
 
@@ -354,8 +362,8 @@ tracked -> addressed -> confirmed -> archived
 When acting on feedback:
 
 1. Read feedback content and target.
-2. Modify the actual artifact, code, document, table, canvas, or slides.
-3. Update the existing report or create the next report.
+2. Modify the actual artifact, code, document report, or canvas workspace.
+3. Update the existing report / workspace or create the next report.
 4. Resolve feedback with a concrete change record.
 
 Resolve:
@@ -382,16 +390,21 @@ curl -s -X POST http://localhost:3847/api/reports/{REPORT_ID}/feedback/{FEEDBACK
 The report page must show addressed/confirmed feedback as a visible change
 record strip so the user can see what changed without searching history.
 
-### Step 7: Update Canvas Reports
+### Step 7: Update Canvas Workspaces
 
-For canvas reports, persist tldraw snapshots:
+For canvas workspaces, persist tldraw snapshots and semantic indexes:
 
 ```bash
-curl -s -X PUT http://localhost:3847/api/reports/{REPORT_ID}/canvas \
+curl -s -X PUT http://localhost:3847/api/canvas-workspaces/{WORKSPACE_ID}/snapshot \
   -H 'Content-Type: application/json' \
   -d '{
-    "sectionId": "sec-...",
-    "snapshot": { "document": { "store": {} }, "session": {} }
+    "snapshot": { "document": { "store": {} }, "session": {} },
+    "semantic_index": {
+      "version": 1,
+      "nodes": [],
+      "annotations": [],
+      "relationships": []
+    }
   }'
 ```
 
@@ -406,8 +419,8 @@ Canvas feedback targets should identify the reviewed object:
 
 ```json
 {
-  "kind": "canvas_node|canvas_selection",
-  "section_id": "sec-...",
+  "kind": "canvas_workspace|canvas_node|canvas_selection",
+  "workspace_id": "cw_...",
   "node_id": "agent-zone",
   "shape_ids": ["shape:..."],
   "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }

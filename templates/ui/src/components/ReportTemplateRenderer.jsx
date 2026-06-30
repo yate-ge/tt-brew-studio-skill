@@ -183,12 +183,21 @@ function addFeedback(onAddFeedback, section, target = {}) {
   });
 }
 
+function presentationLabel(value) {
+  if (value === 'document_report' || value === 'document') return 'Document Report';
+  if (value === 'canvas_workspace') return 'Canvas Workspace';
+  if (value === 'canvas') return 'Canvas';
+  if (value === 'table') return 'Table';
+  if (value === 'slides') return 'Slides';
+  return value || 'Document Report';
+}
+
 function SectionShell({ section, children, onAddFeedback }) {
   return (
     <section style={styles.section}>
       <header style={styles.sectionHeader}>
         <div>
-          <div style={styles.sectionEyebrow}>{section.presentation || section.artifact?.type || 'document'}</div>
+          <div style={styles.sectionEyebrow}>{presentationLabel(section.presentation || section.artifact?.type)}</div>
           <h2 style={styles.sectionTitle}>{section.title}</h2>
           {section.narrative && <p style={styles.narrative}>{section.narrative}</p>}
         </div>

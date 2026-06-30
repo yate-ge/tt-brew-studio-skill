@@ -261,7 +261,9 @@ function statusLabel(status) {
 }
 
 function structureLabel(report) {
-  return report?.structure === 'complex-review' ? '复杂任务评审' : '标准汇报';
+  const structure = report?.structure === 'complex-review' ? '复杂任务评审' : '标准汇报';
+  const surface = report?.presentation === 'canvas_workspace' ? 'Canvas Workspace' : 'Document Report';
+  return `${structure} · ${surface}`;
 }
 
 function formatDate(value) {
@@ -344,7 +346,7 @@ function ChangeRecordStrip({ report }) {
 }
 
 function renderReportContent(report, tokens, feedbackHandlers) {
-  if (report?.content?.type === 'report_template') {
+  if (report?.content?.type === 'report_template' || report?.content?.type === 'document_report') {
     return (
       <ReportTemplateRenderer
         report={report}

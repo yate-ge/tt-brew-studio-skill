@@ -290,6 +290,72 @@ export async function updateReportCanvas(reportId, { sectionId, snapshot }) {
   return res.json();
 }
 
+// ── V4 Canvas Workspace APIs ──
+
+export async function fetchCanvasWorkspaces(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const url = query ? `${BASE}/api/canvas-workspaces?${query}` : `${BASE}/api/canvas-workspaces`;
+  const res = await fetch(url);
+  await ensureOk(res, 'Failed to fetch canvas workspaces');
+  return res.json();
+}
+
+export async function fetchCanvasWorkspace(workspaceId) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}`);
+  await ensureOk(res, `Failed to fetch canvas workspace ${workspaceId}`);
+  return res.json();
+}
+
+export async function createCanvasWorkspace(workspaceData) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(workspaceData),
+  });
+  await ensureOk(res, 'Failed to create canvas workspace');
+  return res.json();
+}
+
+export async function selectCanvasWorkspace(selectionData) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/select`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(selectionData),
+  });
+  await ensureOk(res, 'Failed to select canvas workspace');
+  return res.json();
+}
+
+export async function activateCanvasWorkspace(workspaceId) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}/activate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actor: 'user' }),
+  });
+  await ensureOk(res, 'Failed to activate canvas workspace');
+  return res.json();
+}
+
+export async function updateCanvasWorkspaceSnapshot(workspaceId, { snapshot, semantic_index: semanticIndex, event }) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}/snapshot`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snapshot, semantic_index: semanticIndex, event }),
+  });
+  await ensureOk(res, 'Failed to update canvas workspace snapshot');
+  return res.json();
+}
+
+export async function addCanvasWorkspaceFeedback(workspaceId, feedback) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(feedback),
+  });
+  await ensureOk(res, 'Failed to add canvas workspace feedback');
+  return res.json();
+}
+
 export async function saveReportFeedbackDraft(reportId, items) {
   const res = await fetch(`${BASE}/api/reports/${reportId}/feedback/draft`, {
     method: 'POST',

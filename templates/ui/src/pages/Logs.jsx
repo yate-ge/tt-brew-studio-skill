@@ -10,6 +10,7 @@ import {
 import MarkdownDocumentViewer from '../components/MarkdownDocumentViewer';
 
 const KIND_LABELS = {
+  managed_log: '托管日志',
   agent_harness: 'Harness',
   agent_instructions: 'Agent 指令',
   note: '笔记',
@@ -22,25 +23,23 @@ const KIND_LABELS = {
   work_log: '工作日志',
 };
 
-const LOG_DOCUMENT_KINDS = new Set(['work_log', 'project_memory']);
+const CONTENT_SCOPES = [
+  { key: 'all', label: '全部' },
+  { key: 'logs', label: '日志' },
+  { key: 'documents', label: '文档' },
+];
 
-const VIEW_COPY = {
-  logs: {
-    label: '日志',
-    title: '过程记录',
-    empty: '当前没有独立日志，也没有发现项目记忆或工作日志文件。',
-  },
-  documents: {
-    label: '文档',
-    title: '工作文档',
-    empty: '当前筛选条件下没有文档。',
-  },
-};
+const GROUP_MODES = [
+  { key: 'type', label: '按照类型' },
+  { key: 'source', label: '按照来源' },
+];
+
+const LOG_DOCUMENT_KINDS = new Set(['work_log', 'project_memory']);
 
 const STYLES = {
   page: {
     display: 'grid',
-    gridTemplateColumns: '320px minmax(0, 1fr)',
+    gridTemplateColumns: '360px minmax(0, 1fr)',
     gap: 'var(--vd-space-5)',
     minHeight: 'calc(100dvh - 32px)',
     width: '100%',
@@ -71,6 +70,15 @@ const STYLES = {
     color: 'var(--vd-text-tertiary)',
     lineHeight: 'var(--vd-line-height-normal)',
   },
+  search: {
+    width: '100%',
+    padding: 'var(--vd-space-2) var(--vd-space-3)',
+    borderRadius: 'var(--vd-radius-md)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-surface-bg)',
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+  },
   navScroll: {
     flex: 1,
     minHeight: 0,
@@ -92,6 +100,29 @@ const STYLES = {
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
   },
+  segmented: {
+    display: 'grid',
+    gridAutoFlow: 'column',
+    gridAutoColumns: '1fr',
+    gap: 4,
+    padding: 4,
+    borderRadius: 'var(--vd-radius-md)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-page-bg)',
+  },
+  segmentButton: (active) => ({
+    minHeight: 32,
+    border: 'none',
+    borderRadius: 'var(--vd-radius-sm)',
+    background: active ? 'var(--vd-surface-bg)' : 'transparent',
+    color: active ? 'var(--vd-primary)' : 'var(--vd-text-secondary)',
+    boxShadow: active ? 'var(--vd-shadow-sm)' : 'none',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: active ? 'var(--vd-font-weight-semibold)' : 'var(--vd-font-weight-medium)',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }),
   navButton: (active) => ({
     width: '100%',
     display: 'flex',
@@ -114,28 +145,7 @@ const STYLES = {
     fontSize: 'var(--vd-font-size-xs)',
     fontWeight: 'var(--vd-font-weight-normal)',
   },
-  search: {
-    width: '100%',
-    padding: 'var(--vd-space-2) var(--vd-space-3)',
-    borderRadius: 'var(--vd-radius-md)',
-    border: '1px solid var(--vd-border-default)',
-    background: 'var(--vd-surface-bg)',
-    color: 'var(--vd-text-primary)',
-    fontSize: 'var(--vd-font-size-sm)',
-  },
-  rescanButton: {
-    width: '100%',
-    padding: 'var(--vd-space-2) var(--vd-space-3)',
-    borderRadius: 'var(--vd-radius-md)',
-    border: '1px solid var(--vd-border-default)',
-    background: 'var(--vd-surface-bg)',
-    color: 'var(--vd-text-secondary)',
-    fontSize: 'var(--vd-font-size-sm)',
-    fontWeight: 'var(--vd-font-weight-medium)',
-    fontFamily: 'inherit',
-    cursor: 'pointer',
-  },
-  resultHeader: {
+  listHeader: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -146,12 +156,24 @@ const STYLES = {
     fontWeight: 'var(--vd-font-weight-semibold)',
     color: 'var(--vd-text-primary)',
   },
+  sortButton: {
+    padding: '6px 9px',
+    borderRadius: 'var(--vd-radius-sm)',
+    border: '1px solid var(--vd-border-default)',
+    background: 'var(--vd-surface-bg)',
+    color: 'var(--vd-text-secondary)',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
   item: (active) => ({
     width: '100%',
     display: 'block',
     padding: 'var(--vd-space-3)',
     borderRadius: 'var(--vd-radius-md)',
     border: `1px solid ${active ? 'var(--vd-primary-border)' : 'var(--vd-border-subtle)'}`,
+    borderLeft: `3px solid ${active ? 'var(--vd-primary)' : 'var(--vd-border-subtle)'}`,
     background: active ? 'var(--vd-primary-bg)' : 'var(--vd-surface-bg)',
     color: 'var(--vd-text-primary)',
     textAlign: 'left',
@@ -160,11 +182,21 @@ const STYLES = {
     cursor: 'pointer',
     transition: 'background var(--vd-transition-fast), border-color var(--vd-transition-fast)',
   }),
+  itemTopline: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 'var(--vd-space-2)',
+    marginBottom: 3,
+  },
   itemTitle: {
+    minWidth: 0,
     fontSize: 'var(--vd-font-size-sm)',
     fontWeight: 'var(--vd-font-weight-semibold)',
     color: 'var(--vd-text-primary)',
-    marginBottom: 3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   itemPath: {
     fontSize: 'var(--vd-font-size-xs)',
@@ -187,8 +219,9 @@ const STYLES = {
     borderRadius: 'var(--vd-radius-sm)',
     fontSize: 10,
     fontWeight: 500,
-    background: tone === 'auto' ? 'var(--vd-info-bg)' : 'var(--vd-surface-hover)',
-    color: tone === 'auto' ? 'var(--vd-info)' : 'var(--vd-text-secondary)',
+    whiteSpace: 'nowrap',
+    background: tone === 'log' ? 'var(--vd-info-bg)' : 'var(--vd-surface-hover)',
+    color: tone === 'log' ? 'var(--vd-info)' : 'var(--vd-text-secondary)',
   }),
   contentPane: {
     minWidth: 0,
@@ -226,11 +259,29 @@ const STYLES = {
     padding: 'var(--vd-space-16) var(--vd-space-6)',
     color: 'var(--vd-text-tertiary)',
   },
+  logShell: {
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+  },
+  logHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 'var(--vd-space-4)',
+    paddingBottom: 'var(--vd-space-4)',
+    borderBottom: '1px solid var(--vd-border-subtle)',
+    flexWrap: 'wrap',
+  },
+  logTitleBlock: {
+    minWidth: 0,
+  },
   logTitle: {
     fontSize: 'var(--vd-font-size-xl)',
     fontWeight: 'var(--vd-font-weight-bold)',
     color: 'var(--vd-text-primary)',
-    marginBottom: 'var(--vd-space-2)',
+    marginBottom: 'var(--vd-space-1)',
   },
   logMeta: {
     display: 'flex',
@@ -238,15 +289,24 @@ const STYLES = {
     flexWrap: 'wrap',
     color: 'var(--vd-text-tertiary)',
     fontSize: 'var(--vd-font-size-xs)',
-    marginBottom: 'var(--vd-space-4)',
   },
   logBody: {
+    marginTop: 'var(--vd-space-6)',
     color: 'var(--vd-text-secondary)',
     lineHeight: 'var(--vd-line-height-relaxed)',
+    whiteSpace: 'pre-wrap',
+  },
+  logContentBox: {
+    marginTop: 'var(--vd-space-4)',
+    padding: 'var(--vd-space-4)',
+    borderRadius: 'var(--vd-radius-md)',
+    background: 'var(--vd-page-bg)',
+    border: '1px solid var(--vd-border-subtle)',
   },
 };
 
 function formatDate(iso) {
+  if (!iso) return '';
   try {
     return new Date(iso).toLocaleDateString('zh-CN', {
       month: 'short',
@@ -260,6 +320,7 @@ function formatDate(iso) {
 }
 
 function formatDateShort(iso) {
+  if (!iso) return '';
   try {
     return new Date(iso).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
   } catch {
@@ -284,7 +345,9 @@ function sourceForPath(filePath = '') {
 }
 
 function sourceLabel(sourcePath) {
+  if (sourcePath === 'managed_logs') return '托管日志';
   if (sourcePath === '.') return '根目录';
+  if (sourcePath === '.codex') return '项目级 Codex Skill';
   if (sourcePath === 'agents') return 'Agent Harness';
   if (sourcePath === 'docs') return '项目文档';
   if (sourcePath === 'references') return '参考资料';
@@ -292,7 +355,7 @@ function sourceLabel(sourcePath) {
 }
 
 function itemKey(item) {
-  return `${item.type}:${item.id}`;
+  return item ? `${item.type}:${item.id}` : '';
 }
 
 function matchesSearch(value, query) {
@@ -300,12 +363,76 @@ function matchesSearch(value, query) {
   return value.toLowerCase().includes(query);
 }
 
-function sortDocuments(items) {
-  return [...items].sort((a, b) => {
-    const sourceDiff = sourceForPath(a.path).localeCompare(sourceForPath(b.path));
-    if (sourceDiff !== 0) return sourceDiff;
-    return a.path.localeCompare(b.path);
-  });
+function timestamp(value) {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function documentScope(doc) {
+  return LOG_DOCUMENT_KINDS.has(doc.kind) ? 'logs' : 'documents';
+}
+
+function makeLogItem(log) {
+  return {
+    type: 'log',
+    id: log.id,
+    title: log.title || log.event || '未命名日志',
+    path: log.transparency?.path || 'logs.json',
+    scope: 'logs',
+    kindKey: 'managed_log',
+    kindLabel: '托管日志',
+    sourceKey: 'managed_logs',
+    sourceLabel: '托管日志',
+    time: log.updatedAt || log.createdAt,
+    searchText: [
+      log.title,
+      log.event,
+      log.content,
+      (log.tags || []).join(' '),
+      log.reportId,
+    ].filter(Boolean).join(' '),
+    record: log,
+  };
+}
+
+function makeDocumentItem(doc) {
+  const sourceKey = sourceForPath(doc.path);
+  return {
+    type: 'document',
+    id: doc.id,
+    title: doc.title || doc.path || '未命名文档',
+    path: doc.path,
+    scope: documentScope(doc),
+    kindKey: doc.kind || 'project_document',
+    kindLabel: kindLabel(doc.kind),
+    sourceKey,
+    sourceLabel: sourceLabel(sourceKey),
+    time: doc.updated_at || doc.last_seen_at || doc.last_indexed_at,
+    searchText: [
+      doc.title,
+      doc.path,
+      doc.kind,
+      kindLabel(doc.kind),
+      sourceLabel(sourceKey),
+    ].filter(Boolean).join(' '),
+    record: doc,
+  };
+}
+
+function scopeLabel(scope) {
+  return CONTENT_SCOPES.find((item) => item.key === scope)?.label || '全部';
+}
+
+function listTitle(scope) {
+  if (scope === 'logs') return '日志列表';
+  if (scope === 'documents') return '文档列表';
+  return '全部记录';
+}
+
+function emptyMessage(scope) {
+  if (scope === 'logs') return '当前筛选条件下没有日志。';
+  if (scope === 'documents') return '当前筛选条件下没有文档。';
+  return '当前筛选条件下没有日志或文档。';
 }
 
 export default function Logs() {
@@ -315,9 +442,10 @@ export default function Logs() {
   const [scannedAt, setScannedAt] = useState(null);
   const [loading, setLoading] = useState(true);
   const [rescaning, setRescaning] = useState(false);
-  const [activeView, setActiveView] = useState('documents');
-  const [sourceFilter, setSourceFilter] = useState('all');
-  const [kindFilter, setKindFilter] = useState('all');
+  const [contentScope, setContentScope] = useState('all');
+  const [groupMode, setGroupMode] = useState('type');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [sortDirection, setSortDirection] = useState('desc');
   const [selected, setSelected] = useState(null);
   const [activeDocument, setActiveDocument] = useState(null);
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -362,70 +490,66 @@ export default function Logs() {
     [documents]
   );
 
-  const baseDocuments = activeView === 'logs' ? logDocuments : workDocuments;
+  const allItems = useMemo(
+    () => [
+      ...logs.map(makeLogItem),
+      ...documents.map(makeDocumentItem),
+    ],
+    [documents, logs]
+  );
 
-  const sourceOptions = useMemo(() => {
-    const knownSources = new Map();
-    (harness?.sources || []).forEach((source) => {
-      knownSources.set(source.path, { ...source, count: 0 });
-    });
-    baseDocuments.forEach((doc) => {
-      const source = sourceForPath(doc.path);
-      const current = knownSources.get(source) || {
-        id: source,
-        path: source,
-        kind: 'project_document',
-        count: 0,
-      };
-      knownSources.set(source, { ...current, count: (current.count || 0) + 1 });
-    });
-    return Array.from(knownSources.values()).sort((a, b) => a.path.localeCompare(b.path));
-  }, [baseDocuments, harness]);
+  const scopedItems = useMemo(() => (
+    contentScope === 'all'
+      ? allItems
+      : allItems.filter((item) => item.scope === contentScope)
+  ), [allItems, contentScope]);
 
-  const kindOptions = useMemo(() => {
+  const categoryOptions = useMemo(() => {
     const counts = new Map();
-    baseDocuments.forEach((doc) => {
-      counts.set(doc.kind, (counts.get(doc.kind) || 0) + 1);
+    scopedItems.forEach((item) => {
+      const key = groupMode === 'type' ? item.kindKey : item.sourceKey;
+      const label = groupMode === 'type' ? item.kindLabel : item.sourceLabel;
+      const current = counts.get(key) || { key, label, count: 0 };
+      counts.set(key, { ...current, count: current.count + 1 });
     });
-    return Array.from(counts.entries())
-      .map(([kind, count]) => ({ kind, count }))
-      .sort((a, b) => kindLabel(a.kind).localeCompare(kindLabel(b.kind)));
-  }, [baseDocuments]);
+    return Array.from(counts.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [groupMode, scopedItems]);
 
-  const filteredDocuments = useMemo(() => {
+  const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return sortDocuments(baseDocuments.filter((doc) => {
-      const sourceMatches = sourceFilter === 'all' || sourceForPath(doc.path) === sourceFilter;
-      const kindMatches = kindFilter === 'all' || doc.kind === kindFilter;
-      const searchMatches = matchesSearch(`${doc.title} ${doc.path} ${kindLabel(doc.kind)}`, query);
-      return sourceMatches && kindMatches && searchMatches;
-    }));
-  }, [baseDocuments, kindFilter, search, sourceFilter]);
-
-  const filteredLogs = useMemo(() => {
-    if (activeView !== 'logs' || sourceFilter !== 'all' || kindFilter !== 'all') return [];
-    const query = search.trim().toLowerCase();
-    return logs
-      .filter((log) => matchesSearch(`${log.title} ${log.event || ''} ${(log.tags || []).join(' ')}`, query))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [activeView, kindFilter, logs, search, sourceFilter]);
-
-  const listItems = useMemo(() => {
-    const logItems = filteredLogs.map((log) => ({ type: 'log', id: log.id }));
-    const docItems = filteredDocuments.map((doc) => ({ type: 'document', id: doc.id }));
-    return activeView === 'logs' ? [...logItems, ...docItems] : docItems;
-  }, [activeView, filteredDocuments, filteredLogs]);
+    return scopedItems
+      .filter((item) => {
+        const categoryKey = groupMode === 'type' ? item.kindKey : item.sourceKey;
+        const categoryMatches = categoryFilter === 'all' || categoryKey === categoryFilter;
+        const searchMatches = matchesSearch(item.searchText, query);
+        return categoryMatches && searchMatches;
+      })
+      .sort((a, b) => {
+        const timeDiff = sortDirection === 'asc'
+          ? timestamp(a.time) - timestamp(b.time)
+          : timestamp(b.time) - timestamp(a.time);
+        if (timeDiff !== 0) return timeDiff;
+        return a.title.localeCompare(b.title);
+      });
+  }, [categoryFilter, groupMode, scopedItems, search, sortDirection]);
 
   useEffect(() => {
-    if (listItems.length === 0) {
+    if (categoryFilter === 'all') return;
+    if (!categoryOptions.some((item) => item.key === categoryFilter)) {
+      setCategoryFilter('all');
+    }
+  }, [categoryFilter, categoryOptions]);
+
+  useEffect(() => {
+    if (filteredItems.length === 0) {
       if (selected) setSelected(null);
       return;
     }
 
-    if (!selected || !listItems.some((item) => itemKey(item) === itemKey(selected))) {
-      setSelected(listItems[0]);
+    if (!selected || !filteredItems.some((item) => itemKey(item) === itemKey(selected))) {
+      setSelected({ type: filteredItems[0].type, id: filteredItems[0].id });
     }
-  }, [listItems, selected]);
+  }, [filteredItems, selected]);
 
   useEffect(() => {
     let canceled = false;
@@ -449,9 +573,11 @@ export default function Logs() {
     return () => { canceled = true; };
   }, [selected?.type, selected?.id]);
 
-  const activeLog = selected?.type === 'log'
-    ? logs.find((log) => log.id === selected.id)
+  const selectedItem = selected
+    ? allItems.find((item) => item.type === selected.type && item.id === selected.id)
     : null;
+
+  const activeLog = selectedItem?.type === 'log' ? selectedItem.record : null;
 
   const handleRescan = async () => {
     setRescaning(true);
@@ -468,20 +594,21 @@ export default function Logs() {
     }
   };
 
-  const handleViewChange = (view) => {
-    setActiveView(view);
-    setSourceFilter('all');
-    setKindFilter('all');
-    setSearch('');
+  const handleScopeChange = (scope) => {
+    setContentScope(scope);
+    setCategoryFilter('all');
   };
 
-  const currentDocumentCount = activeView === 'logs'
-    ? logDocuments.length
-    : workDocuments.length;
+  const handleGroupModeChange = (mode) => {
+    setGroupMode(mode);
+    setCategoryFilter('all');
+  };
 
-  const totalVisible = activeView === 'logs'
-    ? filteredLogs.length + filteredDocuments.length
-    : filteredDocuments.length;
+  const totalLogCount = logs.length + logDocuments.length;
+  const totalDocumentCount = workDocuments.length;
+  const totalVisible = filteredItems.length;
+  const classificationLabel = groupMode === 'type' ? '类型' : '来源';
+  const sortLabel = sortDirection === 'desc' ? '时间倒序' : '时间正序';
 
   if (loading) {
     return (
@@ -497,14 +624,14 @@ export default function Logs() {
         <div style={STYLES.navHeader}>
           <div style={STYLES.title}>日志与文档</div>
           <div style={STYLES.summary}>
-            {logs.length} 条托管日志 · {workDocuments.length} 份工作文档 · {logDocuments.length} 份项目记忆/日志文件
+            {totalLogCount} 条日志 · {totalDocumentCount} 份文档 · 当前显示 {totalVisible}
             {scannedAt ? ` · 最近扫描 ${formatDate(scannedAt)}` : ''}
           </div>
         </div>
 
         <input
           type="text"
-          placeholder={`搜索${VIEW_COPY[activeView].label}...`}
+          placeholder={`搜索${scopeLabel(contentScope)}...`}
           style={STYLES.search}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -512,118 +639,107 @@ export default function Logs() {
 
         <div style={STYLES.navScroll}>
           <div style={STYLES.group}>
-            <div style={STYLES.groupTitle}>视图</div>
-            {Object.entries(VIEW_COPY).map(([view, copy]) => (
-              <button
-                key={view}
-                type="button"
-                style={STYLES.navButton(activeView === view)}
-                onClick={() => handleViewChange(view)}
-              >
-                <span>{copy.label}</span>
-                <span style={STYLES.count}>{view === 'logs' ? logs.length + logDocuments.length : workDocuments.length}</span>
-              </button>
-            ))}
+            <div style={STYLES.groupTitle}>内容</div>
+            <div style={STYLES.segmented}>
+              {CONTENT_SCOPES.map((scope) => (
+                <button
+                  key={scope.key}
+                  type="button"
+                  style={STYLES.segmentButton(contentScope === scope.key)}
+                  onClick={() => handleScopeChange(scope.key)}
+                >
+                  {scope.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div style={STYLES.group}>
-            <div style={STYLES.groupTitle}>来源</div>
-            <button
-              type="button"
-              style={STYLES.navButton(sourceFilter === 'all')}
-              onClick={() => setSourceFilter('all')}
-            >
-              <span>全部来源</span>
-              <span style={STYLES.count}>{currentDocumentCount}</span>
-            </button>
-            {sourceOptions.map((source) => (
-              <button
-                type="button"
-                key={source.path}
-                style={STYLES.navButton(sourceFilter === source.path)}
-                onClick={() => setSourceFilter(source.path)}
-              >
-                <span>{sourceLabel(source.path)}</span>
-                <span style={STYLES.count}>{source.count || 0}</span>
-              </button>
-            ))}
+            <div style={STYLES.groupTitle}>分类方式</div>
+            <div style={STYLES.segmented}>
+              {GROUP_MODES.map((mode) => (
+                <button
+                  key={mode.key}
+                  type="button"
+                  style={STYLES.segmentButton(groupMode === mode.key)}
+                  onClick={() => handleGroupModeChange(mode.key)}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div style={STYLES.group}>
-            <div style={STYLES.groupTitle}>类型</div>
+            <div style={STYLES.groupTitle}>{classificationLabel}</div>
             <button
               type="button"
-              style={STYLES.navButton(kindFilter === 'all')}
-              onClick={() => setKindFilter('all')}
+              style={STYLES.navButton(categoryFilter === 'all')}
+              onClick={() => setCategoryFilter('all')}
             >
-              <span>全部类型</span>
-              <span style={STYLES.count}>{currentDocumentCount}</span>
+              <span>全部{classificationLabel}</span>
+              <span style={STYLES.count}>{scopedItems.length}</span>
             </button>
-            {kindOptions.map((item) => (
+            {categoryOptions.map((item) => (
               <button
                 type="button"
-                key={item.kind}
-                style={STYLES.navButton(kindFilter === item.kind)}
-                onClick={() => setKindFilter(item.kind)}
+                key={item.key}
+                style={STYLES.navButton(categoryFilter === item.key)}
+                onClick={() => setCategoryFilter(item.key)}
               >
-                <span>{kindLabel(item.kind)}</span>
+                <span>{item.label}</span>
                 <span style={STYLES.count}>{item.count}</span>
               </button>
             ))}
           </div>
 
           <div style={STYLES.group}>
-            <div style={STYLES.resultHeader}>
-              <div style={STYLES.resultTitle}>{VIEW_COPY[activeView].title}</div>
-              <div style={STYLES.count}>显示 {totalVisible}</div>
+            <div style={STYLES.listHeader}>
+              <div>
+                <div style={STYLES.resultTitle}>{listTitle(contentScope)}</div>
+                <div style={STYLES.count}>显示 {totalVisible}</div>
+              </div>
+              <button
+                type="button"
+                style={STYLES.sortButton}
+                onClick={() => setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc')}
+              >
+                {sortLabel}
+              </button>
             </div>
 
             {totalVisible === 0 ? (
-              <div style={STYLES.emptyState}>{VIEW_COPY[activeView].empty}</div>
+              <div style={STYLES.emptyState}>{emptyMessage(contentScope)}</div>
             ) : (
-              <>
-                {activeView === 'logs' && filteredLogs.map((log) => (
-                  <button
-                    type="button"
-                    key={log.id}
-                    style={STYLES.item(selected?.type === 'log' && selected?.id === log.id)}
-                    onClick={() => setSelected({ type: 'log', id: log.id })}
-                  >
-                    <div style={STYLES.itemTitle}>{log.title}</div>
-                    <div style={STYLES.itemMeta}>
-                      <span style={STYLES.badge(log.type === 'auto' ? 'auto' : 'neutral')}>
-                        {log.type === 'auto' ? '自动' : '手动'}
-                      </span>
-                      <span>{formatDateShort(log.createdAt)}</span>
-                      {log.event && <span>{log.event}</span>}
-                    </div>
-                  </button>
-                ))}
-
-                {filteredDocuments.map((doc) => (
-                  <button
-                    type="button"
-                    key={doc.id}
-                    style={STYLES.item(selected?.type === 'document' && selected?.id === doc.id)}
-                    onClick={() => setSelected({ type: 'document', id: doc.id })}
-                  >
-                    <div style={STYLES.itemTitle}>{doc.title}</div>
-                    <div style={STYLES.itemPath}>{doc.path}</div>
-                    <div style={STYLES.itemMeta}>
-                      <span style={STYLES.badge()}>{kindLabel(doc.kind)}</span>
-                      <span>{sourceLabel(sourceForPath(doc.path))}</span>
-                      <span>{formatSize(doc.size)}</span>
-                    </div>
-                  </button>
-                ))}
-              </>
+              filteredItems.map((item) => (
+                <button
+                  type="button"
+                  key={itemKey(item)}
+                  style={STYLES.item(itemKey(selected) === itemKey(item))}
+                  onClick={() => setSelected({ type: item.type, id: item.id })}
+                >
+                  <div style={STYLES.itemTopline}>
+                    <div style={STYLES.itemTitle}>{item.title}</div>
+                    <span style={STYLES.badge(item.type === 'log' ? 'log' : 'neutral')}>
+                      {item.type === 'log' ? '日志' : '文档'}
+                    </span>
+                  </div>
+                  <div style={STYLES.itemPath}>{item.path}</div>
+                  <div style={STYLES.itemMeta}>
+                    <span>{item.kindLabel}</span>
+                    {item.sourceLabel !== item.kindLabel && <span>{item.sourceLabel}</span>}
+                    <span>{formatDateShort(item.time)}</span>
+                    {item.type === 'document' && <span>{formatSize(item.record.size)}</span>}
+                  </div>
+                </button>
+              ))
             )}
           </div>
         </div>
 
         <button
           type="button"
-          style={{ ...STYLES.rescanButton, opacity: rescaning ? 0.7 : 1 }}
+          style={{ ...STYLES.sortButton, width: '100%', opacity: rescaning ? 0.7 : 1 }}
           onClick={handleRescan}
           disabled={rescaning}
         >
@@ -651,30 +767,39 @@ export default function Logs() {
         )}
 
         {activeLog && (
-          <div>
-            <div style={STYLES.logTitle}>{activeLog.title}</div>
-            <div style={STYLES.logMeta}>
-              <span>{formatDate(activeLog.createdAt)}</span>
-              {activeLog.event && <span>· 事件：{activeLog.event}</span>}
+          <div style={STYLES.logShell}>
+            <header style={STYLES.logHeader}>
+              <div style={STYLES.logTitleBlock}>
+                <div style={STYLES.logTitle}>{activeLog.title}</div>
+                <div style={STYLES.logMeta}>
+                  <span>{formatDate(activeLog.createdAt)}</span>
+                  <span>{activeLog.type === 'auto' ? '自动记录' : '手动记录'}</span>
+                  {activeLog.event && <span>事件：{activeLog.event}</span>}
+                  {(activeLog.tags || []).map((tag) => (
+                    <span key={tag}>{tag}</span>
+                  ))}
+                </div>
+              </div>
               {activeLog.reportId && (
-                <span>
-                  · 关联汇报：<Link to={`/reports?report=${encodeURIComponent(activeLog.reportId)}`}>{activeLog.reportId}</Link>
-                </span>
+                <Link to={`/reports?report=${encodeURIComponent(activeLog.reportId)}`} style={STYLES.sortButton}>
+                  查看关联汇报
+                </Link>
               )}
-              {(activeLog.tags || []).map((tag) => (
-                <span key={tag}>· {tag}</span>
-              ))}
-            </div>
+            </header>
             <div style={STYLES.logBody}>
-              此条目来自 Skill 托管日志。后续日志写入会优先接入项目已有 harness；
-              只有项目没有合适位置时才使用托管日志作为 fallback。
+              <div style={STYLES.logContentBox}>
+                {activeLog.content || '这条日志没有补充内容。'}
+              </div>
+              <div style={{ marginTop: 'var(--vd-space-4)', color: 'var(--vd-text-tertiary)', fontSize: 'var(--vd-font-size-xs)' }}>
+                来源：{activeLog.transparency?.path || 'logs.json'}
+              </div>
             </div>
           </div>
         )}
 
         {!selected && (
           <div style={STYLES.contentEmpty}>
-            选择左侧导航中的条目查看详情
+            选择左侧列表中的条目查看详情
           </div>
         )}
       </main>
