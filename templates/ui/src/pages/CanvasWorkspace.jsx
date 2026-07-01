@@ -1152,7 +1152,6 @@ export default function CanvasWorkspace() {
   const saveTimer = useRef(null);
   const mounted = useRef(false);
   const completionToolActive = useRef(false);
-  const completionClick = useRef(null);
   const knownShapeIds = useRef(new Set());
   const pendingCanvasEvent = useRef(null);
 
@@ -1561,34 +1560,6 @@ export default function CanvasWorkspace() {
     };
   }
 
-  function completionRequestAnnotatedEvent(editor, activeWorkspace, shapeId) {
-    if (!activeWorkspace) return null;
-    const shape = editor?.getShape?.(shapeId);
-    const bounds = getShapePageBounds(editor, shapeId);
-    const promptText = shape?.meta?.vd_prompt || shapeText(shape);
-    return {
-      type: 'completion_request_annotated',
-      actor: 'user',
-      summary: promptText ? `更新补全矩形批注：${promptText}` : '清空补全矩形批注。',
-      target: {
-        kind: 'completion_request',
-        workspace_id: activeWorkspace.id,
-        shape_id: String(shapeId),
-        bounds,
-      },
-      commands: [
-        {
-          op: 'annotate_completion_request',
-          prompt: promptText,
-          shape_id: String(shapeId),
-          bounds,
-        },
-      ],
-      created_shape_ids: [],
-      mutated_shape_ids: [String(shapeId)],
-    };
-  }
-
   function queueCanvasSnapshotSave(editor, eventFactory, delay = 800) {
     if (eventFactory !== undefined) pendingCanvasEvent.current = eventFactory;
     window.clearTimeout(saveTimer.current);
@@ -1602,32 +1573,25 @@ export default function CanvasWorkspace() {
     }, delay);
   }
 
-  function completionRequestPatch(shape, promptText) {
-    const hasPromptUpdate = typeof promptText === 'string';
-    const prompt = hasPromptUpdate ? promptText.trim() : shape?.meta?.vd_prompt || '';
+  function completionRequestPatch(shape) {
     const now = new Date().toISOString();
-    const props = {
-      ...(shape?.props || {}),
-      geo: 'rectangle',
-      color: 'violet',
-      fill: 'semi',
-      dash: 'solid',
-    };
-    if (hasPromptUpdate) {
-      props.richText = toRichText(prompt ? `补全请求\n\n${prompt}` : '');
-    }
     return {
       id: shape.id,
       type: 'geo',
-      props,
+      props: {
+        ...(shape?.props || {}),
+        geo: 'rectangle',
+        color: 'violet',
+        fill: 'semi',
+        dash: 'solid',
+      },
       meta: {
         ...(shape.meta || {}),
         vd_kind: 'completion_request',
-        vd_prompt: prompt,
+        vd_prompt: shape.meta?.vd_prompt || '',
         vd_status: shape.meta?.vd_status || 'open',
         vd_created_by: shape.meta?.vd_created_by || 'user',
         vd_created_at: shape.meta?.vd_created_at || now,
-        ...(hasPromptUpdate ? { vd_updated_at: now } : {}),
       },
     };
   }
@@ -1642,7 +1606,7 @@ export default function CanvasWorkspace() {
     editor.updateShapes([completionRequestPatch(shape)]);
     editor.setSelectedShapes?.([shapeId]);
     refreshHtmlComponents(editor);
-    markToolMessage('已绘制补全矩形。双击它可添加批注。');
+    markToolMessage('已绘制补全矩形。双击矩形即可直接输入批注。');
     return true;
   }
 
@@ -1657,68 +1621,6 @@ export default function CanvasWorkspace() {
     if (geoShape) return applyNewCompletionRequestShape(editor, geoShape);
     setCompletionToolMode(false);
     return false;
-  }
-
-  function completionRequestAtDoubleClick(editor, event) {
-    const point = typeof editor?.screenToPage === 'function'
-      ? editor.screenToPage({ x: event.clientX, y: event.clientY })
-      : null;
-    const selectedShape = readSelectedShapeIds(editor)
-      .map((shapeId) => editor?.getShape?.(shapeId))
-      .find((shape) => {
-        if (!isCompletionRequestShape(shape)) return false;
-        const bounds = getShapePageBounds(editor, shape.id);
-        return !point || boundsContainPoint(bounds, point, 8);
-      });
-    if (selectedShape) return selectedShape;
-    if (!point) return null;
-    const shapes = currentPageShapes(editor);
-    for (let index = shapes.length - 1; index >= 0; index -= 1) {
-      const shape = shapes[index];
-      if (!isCompletionRequestShape(shape)) continue;
-      const bounds = getShapePageBounds(editor, shape.id);
-      if (boundsContainPoint(bounds, point, 8)) return shape;
-    }
-    return null;
-  }
-
-  function openCompletionRequestAnnotationPrompt(editor, event, shape) {
-    if (!shape) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
-    const nextPrompt = window.prompt('给这个补全矩形添加批注：', shape.meta?.vd_prompt || '');
-    if (nextPrompt === null) return;
-    const shapeId = shape.id;
-    pendingCanvasEvent.current = (latestEditor, activeWorkspace) => (
-      completionRequestAnnotatedEvent(latestEditor, activeWorkspace, shapeId)
-    );
-    editor.updateShapes([completionRequestPatch(shape, nextPrompt)]);
-    editor.setSelectedShapes?.([shapeId]);
-    refreshHtmlComponents(editor);
-    markToolMessage(nextPrompt.trim() ? '已更新补全矩形批注。' : '已清空补全矩形批注。');
-    queueCanvasSnapshotSave(editor, undefined, 120);
-  }
-
-  function handleCompletionRequestDoubleClick(editor, event) {
-    openCompletionRequestAnnotationPrompt(editor, event, completionRequestAtDoubleClick(editor, event));
-  }
-
-  function handleCompletionRequestPointerDown(editor, event) {
-    if (event.button && event.button !== 0) return;
-    const shape = completionRequestAtDoubleClick(editor, event);
-    if (!shape) {
-      completionClick.current = null;
-      return;
-    }
-    const now = Date.now();
-    const shapeId = String(shape.id);
-    const lastClick = completionClick.current;
-    completionClick.current = { shapeId, at: now };
-    if (lastClick?.shapeId === shapeId && now - lastClick.at < 480) {
-      completionClick.current = null;
-      openCompletionRequestAnnotationPrompt(editor, event, shape);
-    }
   }
 
   function handleSelectCompletionRequestTool() {
@@ -2046,16 +1948,13 @@ export default function CanvasWorkspace() {
     const handleResize = () => refreshHtmlComponents(editor);
     window.addEventListener('resize', handleResize);
     const container = editor.getContainer?.();
-    const handleDoubleClick = (event) => handleCompletionRequestDoubleClick(editor, event);
-    const handleCompletionPointerDown = (event) => handleCompletionRequestPointerDown(editor, event);
+    // 补全矩形的批注走 tldraw 原生双击文字编辑，无需自定义双击拦截。
     const handleToolbarPointerDown = (event) => {
       if (!completionToolActive.current) return;
       const target = event.target;
       if (target?.closest?.('[data-testid="tools.vd-completion-rectangle"]')) return;
       if (target?.closest?.('.tlui-main-toolbar')) setCompletionToolMode(false);
     };
-    container?.addEventListener('dblclick', handleDoubleClick, true);
-    container?.addEventListener('pointerdown', handleCompletionPointerDown, true);
     document.addEventListener('pointerdown', handleToolbarPointerDown, true);
     const unsubscribe = editor.store.listen(() => {
       if (!mounted.current) return;
@@ -2068,13 +1967,10 @@ export default function CanvasWorkspace() {
       mounted.current = false;
       editorRef.current = null;
       setCompletionToolMode(false);
-      completionClick.current = null;
       knownShapeIds.current = new Set();
       pendingCanvasEvent.current = null;
       setHtmlComponents([]);
       window.removeEventListener('resize', handleResize);
-      container?.removeEventListener('dblclick', handleDoubleClick, true);
-      container?.removeEventListener('pointerdown', handleCompletionPointerDown, true);
       document.removeEventListener('pointerdown', handleToolbarPointerDown, true);
       unsubscribe?.();
     };
