@@ -346,6 +346,12 @@ export async function updateCanvasWorkspaceSnapshot(workspaceId, { snapshot, sem
   return res.json();
 }
 
+export async function fetchCanvasWorkspaceContext(workspaceId) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}/context`);
+  await ensureOk(res, `Failed to fetch canvas workspace context ${workspaceId}`);
+  return res.json();
+}
+
 export async function addCanvasWorkspaceFeedback(workspaceId, feedback) {
   const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}/feedback`, {
     method: 'POST',
@@ -353,6 +359,14 @@ export async function addCanvasWorkspaceFeedback(workspaceId, feedback) {
     body: JSON.stringify(feedback),
   });
   await ensureOk(res, 'Failed to add canvas workspace feedback');
+  return res.json();
+}
+
+export async function fetchScaffolds(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const url = query ? `${BASE}/api/scaffolds?${query}` : `${BASE}/api/scaffolds`;
+  const res = await fetch(url);
+  await ensureOk(res, 'Failed to fetch scaffolds');
   return res.json();
 }
 

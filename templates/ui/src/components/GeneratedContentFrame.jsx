@@ -39,6 +39,7 @@ export default function GeneratedContentFrame({
   defaultHeight = 420,
   minHeight,
   fitContainer = false,
+  transparent = false,
 }) {
   const iframeRef = useRef(null);
   const [height, setHeight] = useState(0);
@@ -130,6 +131,7 @@ export default function GeneratedContentFrame({
       sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
       style={{
         ...styles.iframe,
+        background: transparent ? 'transparent' : styles.iframe.background,
         height: fitContainer ? '100%' : (height > 0 ? `${height}px` : `${defaultHeight}px`),
         minHeight: fitContainer ? undefined : (minHeight || undefined),
       }}

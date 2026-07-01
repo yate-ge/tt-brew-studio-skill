@@ -1053,6 +1053,7 @@ function setupRoutes(app, dataDir, options = {}) {
   const projectFeedbackPath = path.join(dataRoot, 'feedback.json');
   const projectReportsPath = path.join(dataRoot, 'reports');
   const projectCanvasWorkspacesPath = path.join(dataRoot, 'canvas-workspaces');
+  const projectScaffoldsPath = path.join(dataRoot, 'scaffolds');
   const skillManagedLogsPath = path.join(dataRoot, 'logs');
   const skillManagedDocumentsPath = path.join(dataRoot, 'documents');
 
@@ -1104,6 +1105,7 @@ function setupRoutes(app, dataDir, options = {}) {
   // Ensure V3 data dirs/files exist
   fs.mkdirSync(projectReportsPath, { recursive: true });
   fs.mkdirSync(projectCanvasWorkspacesPath, { recursive: true });
+  fs.mkdirSync(projectScaffoldsPath, { recursive: true });
   fs.mkdirSync(skillManagedLogsPath, { recursive: true });
   fs.mkdirSync(skillManagedDocumentsPath, { recursive: true });
   if (!fs.existsSync(projectLogsPath)) { fs.writeFileSync(projectLogsPath, '[]', 'utf8'); }
@@ -2076,80 +2078,9 @@ function setupRoutes(app, dataDir, options = {}) {
         mode: 'tldraw',
         tldraw_snapshot: null,
         assets: [],
-        canvas_regions: [
-          { id: 'agent-zone', role: 'agent', title: 'Agent 工作区', description: '方案、推理、素材整理和设计说明。' },
-          { id: 'user-zone', role: 'user', title: '用户反馈区', description: '用户批注、补充素材、圈选区域和问题。' },
-          { id: 'shared-decision-zone', role: 'shared', title: '共享决策区', description: '对齐结论、决策项和后续动作。' },
-        ],
-        seed_nodes: [
-          {
-            id: 'report-goal',
-            role: 'agent',
-            title: title || '画布汇报目标',
-            body: '说明本次画布汇报要对齐的目标、上下文和需要用户确认的范围。',
-            x: -360,
-            y: 0,
-            w: 300,
-            h: 160,
-            color: 'blue',
-          },
-          {
-            id: 'agent-brief',
-            role: 'agent',
-            title: 'Agent 产出区',
-            body: '放置 agent 已完成的产出、核心判断、推理过程和设计说明。',
-            x: 0,
-            y: 0,
-            w: 320,
-            h: 190,
-            color: 'blue',
-          },
-          {
-            id: 'inspiration',
-            role: 'agent',
-            title: '灵感与素材',
-            body: '收集参考、截图、链接和用户补充的信息。',
-            x: 380,
-            y: 0,
-            w: 320,
-            h: 190,
-            color: 'yellow',
-          },
-          {
-            id: 'direction-work',
-            role: 'agent',
-            title: '方案推进区',
-            body: '组织设计方向、脑暴分支、取舍依据、风险和待验证问题。',
-            x: 0,
-            y: 260,
-            w: 320,
-            h: 190,
-            color: 'orange',
-          },
-          {
-            id: 'feedback',
-            role: 'user',
-            title: '用户反馈区',
-            body: '用户可以圈选区域、批注或补充新的想法。',
-            x: 380,
-            y: 260,
-            w: 320,
-            h: 190,
-            color: 'green',
-          },
-          {
-            id: 'decision',
-            role: 'shared',
-            title: '共享决策区',
-            body: '沉淀需要确认的结论、取舍和下一步动作。',
-            x: 760,
-            y: 0,
-            w: 320,
-            h: 190,
-            color: 'violet',
-          },
-        ],
-        node_feedback_targets: ['report-goal', 'agent-brief', 'inspiration', 'direction-work', 'feedback', 'decision'],
+        canvas_regions: [],
+        seed_nodes: [],
+        node_feedback_targets: [],
         prompt: '在无限画布中放置方案、素材、批注和待决策点。',
       };
     }
@@ -2514,16 +2445,18 @@ function setupRoutes(app, dataDir, options = {}) {
   function defaultCanvasSemanticIndex() {
     return {
       version: 2,
-      zones: [
-        { id: 'agent-zone', role: 'agent', title: 'Agent 工作区' },
-        { id: 'user-zone', role: 'user', title: '用户反馈区' },
-        { id: 'shared-zone', role: 'shared', title: '共享决策区' },
-      ],
+      zones: [],
       sections: [],
       nodes: [],
       assets: [],
       annotations: [],
+      completion_requests: [],
+      scaffold_instances: [],
+      widget_instances: [],
+      artifact_links: [],
+      layout_reviews: [],
       relationships: [],
+      edit_summary: null,
       updated_at: null,
     };
   }
@@ -2540,8 +2473,112 @@ function setupRoutes(app, dataDir, options = {}) {
       nodes: Array.isArray(index.nodes) ? index.nodes : [],
       assets: Array.isArray(index.assets) ? index.assets : [],
       annotations: Array.isArray(index.annotations) ? index.annotations : [],
+      completion_requests: Array.isArray(index.completion_requests) ? index.completion_requests : [],
+      scaffold_instances: Array.isArray(index.scaffold_instances) ? index.scaffold_instances : [],
+      widget_instances: Array.isArray(index.widget_instances) ? index.widget_instances : [],
+      artifact_links: Array.isArray(index.artifact_links) ? index.artifact_links : [],
+      layout_reviews: Array.isArray(index.layout_reviews) ? index.layout_reviews : [],
       relationships: Array.isArray(index.relationships) ? index.relationships : [],
+      edit_summary: index.edit_summary && typeof index.edit_summary === 'object' ? index.edit_summary : null,
     };
+  }
+
+  function mergeCanvasLayoutReviews(...reviewLists) {
+    const byId = new Map();
+    for (const list of reviewLists) {
+      const items = Array.isArray(list) ? list : (list ? [list] : []);
+      for (const review of items) {
+        if (review && typeof review === 'object' && review.id) {
+          byId.set(review.id, review);
+        }
+      }
+    }
+    return Array.from(byId.values()).slice(-20);
+  }
+
+  function boundsChanged(prev = {}, next = {}) {
+    return ['x', 'y', 'w', 'h'].some((key) => Math.round(Number(prev?.[key] || 0)) !== Math.round(Number(next?.[key] || 0)));
+  }
+
+  function summarizeSemanticDiff(previousIndex, nextIndex) {
+    const previous = normalizeCanvasSemanticIndex(previousIndex);
+    const next = normalizeCanvasSemanticIndex(nextIndex);
+    const previousNodes = new Map((previous.nodes || []).map((node) => [node.shape_id, node]));
+    const nextNodes = new Map((next.nodes || []).map((node) => [node.shape_id, node]));
+    const added = [];
+    const modified = [];
+    const moved_or_resized = [];
+    const deleted = [];
+
+    for (const [shapeId, node] of nextNodes.entries()) {
+      const before = previousNodes.get(shapeId);
+      if (!before) {
+        added.push({
+          shape_id: shapeId,
+          kind: node.kind,
+          title: node.title,
+          authored_by: node.meta?.vd_created_by || node.meta?.vd_author || 'unknown',
+        });
+        continue;
+      }
+      const textChanged = (before.text || '') !== (node.text || '')
+        || (before.title || '') !== (node.title || '')
+        || before.kind !== node.kind
+        || before.section_id !== node.section_id;
+      const stateChanged = JSON.stringify(before.meta?.vd_widget_state || null)
+        !== JSON.stringify(node.meta?.vd_widget_state || null);
+      if (textChanged || stateChanged) {
+        modified.push({
+          shape_id: shapeId,
+          kind: node.kind,
+          title: node.title,
+          authored_by: node.meta?.vd_last_edited_by || node.meta?.vd_created_by || 'unknown',
+          changed: [
+            textChanged ? 'content' : null,
+            stateChanged ? 'widget_state' : null,
+          ].filter(Boolean),
+        });
+      }
+      if (boundsChanged(before.bounds || before, node.bounds || node)) {
+        moved_or_resized.push({
+          shape_id: shapeId,
+          kind: node.kind,
+          title: node.title,
+        });
+      }
+    }
+
+    for (const [shapeId, node] of previousNodes.entries()) {
+      if (!nextNodes.has(shapeId)) {
+        deleted.push({
+          shape_id: shapeId,
+          kind: node.kind,
+          title: node.title,
+        });
+      }
+    }
+
+    return {
+      version: 1,
+      generated_at: new Date().toISOString(),
+      previous_updated_at: previous.updated_at || null,
+      next_updated_at: next.updated_at || null,
+      counts: {
+        added: added.length,
+        modified: modified.length,
+        moved_or_resized: moved_or_resized.length,
+        deleted: deleted.length,
+      },
+      added,
+      modified,
+      moved_or_resized,
+      deleted,
+    };
+  }
+
+  function hasSemanticDiff(diff) {
+    const counts = diff?.counts || {};
+    return ['added', 'modified', 'moved_or_resized', 'deleted'].some((key) => Number(counts[key] || 0) > 0);
   }
 
   function normalizeCanvasWorkspace(workspace) {
@@ -2653,6 +2690,15 @@ function setupRoutes(app, dataDir, options = {}) {
     return readJSONArray(canvasFeedbackFile(workspaceId));
   }
 
+  function openCanvasFeedback(workspaceId) {
+    return readCanvasFeedback(workspaceId).filter((item) => item.handled === false || item.status === 'tracked');
+  }
+
+  function openCompletionRequests(workspace) {
+    return (normalizeCanvasSemanticIndex(workspace?.semantic_index).completion_requests || [])
+      .filter((item) => !item.status || item.status === 'open' || item.status === 'in_progress');
+  }
+
   function publicCanvasWorkspace(workspace, { includeDetail = false } = {}) {
     const normalized = normalizeCanvasWorkspace(workspace);
     if (!normalized) return null;
@@ -2680,6 +2726,11 @@ function setupRoutes(app, dataDir, options = {}) {
       actor: event.actor || 'agent',
       summary: event.summary || '',
       target: event.target || null,
+      commands: Array.isArray(event.commands) ? event.commands : undefined,
+      created_shape_ids: Array.isArray(event.created_shape_ids) ? event.created_shape_ids : undefined,
+      mutated_shape_ids: Array.isArray(event.mutated_shape_ids) ? event.mutated_shape_ids : undefined,
+      semantic_diff: event.semantic_diff && typeof event.semantic_diff === 'object' ? event.semantic_diff : undefined,
+      meta: event.meta && typeof event.meta === 'object' ? event.meta : undefined,
       created_at: event.created_at || now,
       createdAt: event.createdAt || event.created_at || now,
     };
@@ -2747,6 +2798,176 @@ function setupRoutes(app, dataDir, options = {}) {
     });
     return workspace;
   }
+
+  const DEFAULT_SCAFFOLDS = [
+    {
+      id: 'scaffold_inspiration_wall',
+      type: 'template',
+      scope: 'project',
+      title: '灵感墙',
+      stage: 'exploration',
+      description: '用于头脑风暴：包含主题区、灵感 sticky notes、聚类区和用户补充区。',
+      agent_note: '当前处于探索阶段，我会先放一个灵感墙和一批启发 sticky notes，方便你删改、移动和继续扩展。',
+      structure: [
+        { kind: 'section', client_id: 'inspiration', title: '灵感墙', bounds: { x: 0, y: 0, w: 1180, h: 820 } },
+      ],
+      seed_content: [
+        { kind: 'sticky_note', text: '机会点\n\n把模糊想法转成可操作的画布区域。', color: 'yellow', bounds: { x: 56, y: 300, w: 200, h: 200 } },
+        { kind: 'sticky_note', text: '参考方向\n\n先给半成品，让用户直接改，而不是只给空模板。', color: 'yellow', bounds: { x: 288, y: 300, w: 200, h: 200 } },
+        { kind: 'sticky_note', text: '待验证\n\n哪些内容应该进入正式 artifact？', color: 'yellow', bounds: { x: 520, y: 300, w: 200, h: 200 } },
+        { kind: 'shape', text: '用户补充区\n\n把你的想法、素材或反例拖到这里。', color: 'green', bounds: { x: 56, y: 560, w: 520, h: 160 } },
+        { kind: 'shape', text: '聚类 / 选择区\n\n把相近便签移动到一起，圈出值得继续展开的方向。', color: 'violet', bounds: { x: 608, y: 560, w: 520, h: 160 } },
+      ],
+      interaction_slots: [
+        { title: '添加你的想法', bounds: { x: 80, y: 600, w: 400, h: 96 } },
+      ],
+      next_actions: ['补充 sticky notes', '聚类相近想法', '选择 3 个方向继续展开'],
+    },
+    {
+      id: 'scaffold_definition_board',
+      type: 'template',
+      scope: 'project',
+      title: '需求定义板',
+      stage: 'definition',
+      description: '用于把开放需求收束成目标、约束、用户、成功标准和待确认问题。',
+      agent_note: '当前需要定义问题边界，我会放一张需求定义板，并预留用户确认与改写的位置。',
+      structure: [
+        { kind: 'section', client_id: 'definition', title: '需求定义', bounds: { x: 0, y: 0, w: 1180, h: 680 } },
+      ],
+      seed_content: [
+        { kind: 'shape', text: '目标\n\n这次协作最终要帮助用户完成什么？', color: 'blue', bounds: { x: 48, y: 96, w: 240, h: 160 } },
+        { kind: 'shape', text: '用户 / 场景\n\n谁会使用？在什么情境下使用？', color: 'green', bounds: { x: 324, y: 96, w: 240, h: 160 } },
+        { kind: 'shape', text: '约束\n\n技术、时间、风格、数据边界。', color: 'orange', bounds: { x: 600, y: 96, w: 240, h: 160 } },
+        { kind: 'shape', text: '成功标准\n\n怎样判断这次产出是好的？', color: 'violet', bounds: { x: 876, y: 96, w: 240, h: 160 } },
+        { kind: 'sticky_note', text: '待确认：优先做 MVP 还是完整系统设计？', color: 'yellow', bounds: { x: 48, y: 340, w: 240, h: 140 } },
+        { kind: 'sticky_note', text: '待确认：哪些内容必须进入第一版验收？', color: 'yellow', bounds: { x: 324, y: 340, w: 240, h: 140 } },
+      ],
+      interaction_slots: [
+        { title: '用户改写目标', bounds: { x: 48, y: 520, w: 520, h: 96 } },
+      ],
+      next_actions: ['确认目标', '标记必须项', '生成实施计划'],
+    },
+    {
+      id: 'widget_priority_picker',
+      type: 'widget',
+      scope: 'project',
+      title: '优先级选择器',
+      stage: 'review',
+      description: '透明背景的轻量 HTML widget，用于让用户快速选择下一步优先级。',
+      agent_note: '我会放一个可交互的优先级选择器，用户选择会作为 widget 状态和反馈进入上下文。',
+      sizing: {
+        mode: 'content_intrinsic',
+        min_width: 260,
+        max_width: 520,
+        min_height: 140,
+        max_height: 320,
+      },
+      state: {},
+      input_schema: {},
+      output_schema: {
+        priority: 'string',
+        note: 'string',
+      },
+      html: `<section style="display:inline-block;padding:12px;font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033);background:transparent">
+  <style>
+    html,body{margin:0;background:transparent}
+    .picker{display:inline-flex;flex-direction:column;gap:10px;min-width:260px;max-width:520px;padding:14px;border:1px solid rgba(124,58,237,.28);border-radius:8px;background:rgba(255,255,255,.86);box-shadow:0 8px 24px rgba(15,23,42,.12)}
+    .title{font-size:14px;font-weight:700;line-height:1.3}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    button{min-height:32px;border:1px solid rgba(124,58,237,.32);border-radius:7px;background:#fff;color:#6d28d9;font:inherit;font-size:13px;padding:6px 10px;cursor:pointer}
+  </style>
+  <div class="picker">
+    <div class="title">下一步优先做什么？</div>
+    <div class="actions">
+      <button data-vd-feedback-action="priority_define" data-vd-feedback-label="先定义需求" data-vd-feedback-item-id="priority-picker">定义需求</button>
+      <button data-vd-feedback-action="priority_create" data-vd-feedback-label="先做初稿" data-vd-feedback-item-id="priority-picker">做初稿</button>
+      <button data-vd-feedback-action="priority_review" data-vd-feedback-label="先评审取舍" data-vd-feedback-item-id="priority-picker">评审取舍</button>
+    </div>
+  </div>
+</section>`,
+    },
+  ];
+
+  function scaffoldIndexPath() {
+    return path.join(projectScaffoldsPath, 'index.json');
+  }
+
+  function normalizeScaffold(scaffold) {
+    if (!scaffold || typeof scaffold !== 'object') return null;
+    const now = new Date().toISOString();
+    return {
+      id: scaffold.id || generateId('scf'),
+      type: scaffold.type === 'widget' ? 'widget' : 'template',
+      scope: 'project',
+      title: scaffold.title || '未命名脚手架',
+      stage: scaffold.stage || 'exploration',
+      description: scaffold.description || '',
+      agent_note: scaffold.agent_note || '',
+      structure: Array.isArray(scaffold.structure) ? scaffold.structure : [],
+      seed_content: Array.isArray(scaffold.seed_content) ? scaffold.seed_content : [],
+      interaction_slots: Array.isArray(scaffold.interaction_slots) ? scaffold.interaction_slots : [],
+      next_actions: Array.isArray(scaffold.next_actions) ? scaffold.next_actions : [],
+      html: typeof scaffold.html === 'string' ? scaffold.html : '',
+      state: scaffold.state && typeof scaffold.state === 'object' ? scaffold.state : {},
+      input_schema: scaffold.input_schema && typeof scaffold.input_schema === 'object' ? scaffold.input_schema : {},
+      output_schema: scaffold.output_schema && typeof scaffold.output_schema === 'object' ? scaffold.output_schema : {},
+      sizing: scaffold.sizing && typeof scaffold.sizing === 'object' ? scaffold.sizing : null,
+      created_at: scaffold.created_at || now,
+      updated_at: scaffold.updated_at || now,
+    };
+  }
+
+  function readScaffolds() {
+    const stored = readJSONObject(scaffoldIndexPath());
+    const projectItems = Array.isArray(stored?.scaffolds) ? stored.scaffolds.map(normalizeScaffold).filter(Boolean) : [];
+    const byId = new Map(DEFAULT_SCAFFOLDS.map((item) => [item.id, normalizeScaffold(item)]));
+    for (const item of projectItems) byId.set(item.id, item);
+    return Array.from(byId.values());
+  }
+
+  async function writeScaffolds(scaffolds) {
+    const now = new Date().toISOString();
+    const normalized = scaffolds.map(normalizeScaffold).filter(Boolean);
+    await writeJSON(scaffoldIndexPath(), {
+      version: 1,
+      scope: 'project',
+      scaffolds: normalized,
+      updated_at: now,
+    });
+    return normalized;
+  }
+
+  app.get('/api/scaffolds', (req, res) => {
+    try {
+      let scaffolds = readScaffolds();
+      const { type, stage } = req.query;
+      if (type) scaffolds = scaffolds.filter((item) => item.type === type);
+      if (stage) scaffolds = scaffolds.filter((item) => item.stage === stage);
+      res.json({ type: 'project_scaffold_library', scope: 'project', scaffolds, total: scaffolds.length });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/scaffolds', async (req, res) => {
+    try {
+      const body = req.body || {};
+      if (!body.title) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'title is required' } });
+      }
+      const scaffolds = readScaffolds().filter((item) => item.id !== body.id);
+      const scaffold = normalizeScaffold({
+        ...body,
+        id: body.id || generateId('scf'),
+        created_at: body.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      await writeScaffolds([...scaffolds, scaffold]);
+      res.status(201).json(scaffold);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
 
   app.get('/api/canvas-workspaces', (req, res) => {
     try {
@@ -2861,6 +3082,27 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
+  app.get('/api/canvas-workspaces/:id/context', (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      res.json({
+        type: 'canvas_workspace_agent_context',
+        inspect_required_before_write: true,
+        workspace: publicCanvasWorkspace(workspace),
+        snapshot: readCanvasSnapshot(workspace.id),
+        semantic_index: workspace.semantic_index,
+        events: readCanvasEvents(workspace.id),
+        open_feedback: openCanvasFeedback(workspace.id),
+        open_completion_requests: openCompletionRequests(workspace),
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
   app.put('/api/canvas-workspaces/:id', async (req, res) => {
     try {
       const workspace = readCanvasWorkspace(req.params.id);
@@ -2916,18 +3158,37 @@ function setupRoutes(app, dataDir, options = {}) {
         return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
       }
       const now = new Date().toISOString();
+      const previousIndex = workspace.semantic_index;
+      const normalizedNextIndexBase = semanticIndex && typeof semanticIndex === 'object'
+        ? normalizeCanvasSemanticIndex({ ...semanticIndex, updated_at: now })
+        : workspace.semantic_index;
+      const eventReview = event?.meta?.scaffold_review || null;
+      const normalizedNextIndex = {
+        ...normalizedNextIndexBase,
+        layout_reviews: mergeCanvasLayoutReviews(
+          previousIndex?.layout_reviews,
+          normalizedNextIndexBase?.layout_reviews,
+          eventReview,
+        ),
+      };
+      const semanticDiff = summarizeSemanticDiff(previousIndex, normalizedNextIndex);
+      const nextSemanticIndex = {
+        ...normalizedNextIndex,
+        edit_summary: hasSemanticDiff(semanticDiff) ? semanticDiff : normalizedNextIndex.edit_summary || null,
+      };
       await writeJSON(canvasSnapshotFile(workspace.id), snapshot);
       const saved = await writeCanvasWorkspace({
         ...workspace,
-        semantic_index: semanticIndex && typeof semanticIndex === 'object'
-          ? normalizeCanvasSemanticIndex({ ...semanticIndex, updated_at: now })
-          : workspace.semantic_index,
+        semantic_index: nextSemanticIndex,
         updated_at: now,
         updatedAt: now,
         last_used_at: now,
       }, { makeActive: true });
       if (event) {
-        await appendCanvasEvent(workspace.id, event);
+        await appendCanvasEvent(workspace.id, {
+          ...event,
+          semantic_diff: hasSemanticDiff(semanticDiff) ? semanticDiff : event.semantic_diff,
+        });
       }
       broadcast('canvas_workspace_updated', canvasWorkspaceSummary(saved));
       res.json(publicCanvasWorkspace(saved, { includeDetail: true }));

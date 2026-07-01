@@ -57,6 +57,7 @@ Canvas workspaces are stored under:
 .visual-delivery/data/canvas-workspaces/{WORKSPACE_ID}/events.json
 .visual-delivery/data/canvas-workspaces/{WORKSPACE_ID}/feedback.json
 .visual-delivery/data/canvas-workspaces/{WORKSPACE_ID}/assets/
+.visual-delivery/data/scaffolds/index.json
 ```
 
 Core shape:
@@ -72,11 +73,7 @@ Core shape:
   "context": {},
   "semantic_index": {
     "version": 2,
-    "zones": [
-      { "id": "agent-zone", "role": "agent", "title": "Agent 工作区" },
-      { "id": "user-zone", "role": "user", "title": "用户反馈区" },
-      { "id": "shared-zone", "role": "shared", "title": "共享决策区" }
-    ],
+    "zones": [],
     "sections": [],
     "nodes": [
       {
@@ -103,7 +100,13 @@ Core shape:
     ],
     "assets": [],
     "annotations": [],
+    "completion_requests": [],
+    "scaffold_instances": [],
+    "widget_instances": [],
+    "artifact_links": [],
+    "layout_reviews": [],
     "relationships": [],
+    "edit_summary": null,
     "updated_at": "ISO timestamp"
   },
   "selection_policy": {
@@ -135,6 +138,95 @@ Use `tldraw` as the embedded canvas SDK. It provides React integration,
 editor APIs, shapes, assets, snapshots, local persistence, and optional sync.
 Store `getSnapshot(editor.store)` as the source of truth and store a parallel
 `semantic_index` for agent reasoning.
+
+## Collaboration Scaffolds
+
+Scaffolds are project-private reusable co-creation packages. They are not only
+empty templates. A scaffold may include:
+
+- `structure`: sections, lanes, matrices, flows, or other canvas layout.
+- `seed_content`: agent-provided sticky notes, prompts, hypotheses, examples,
+  draft copy, options, or initial diagrams.
+- `interaction_slots`: places reserved for user edits, notes, or decisions.
+- `widgets`: embedded tools that support the current creative step.
+- `next_actions`: suggested actions such as cluster, vote, expand, review, or
+  turn a region into an artifact.
+- `agent_note`: a short explanation of why the scaffold fits the current stage.
+
+Scaffolds live under `.visual-delivery/data/scaffolds/` and are scoped to the
+current project in the MVP. The canvas UI exposes them from the in-canvas
+toolbar's Scaffold Library.
+
+Widget scaffolds use `html_component` with transparent-background iframe HTML
+and JSON-like `state`, `input_schema`, `output_schema`, and `sizing` metadata.
+The first implementation uses HTML iframe + state metadata rather than a full
+widget SDK. Widget sizing should follow intrinsic content with min/max bounds,
+and widget HTML should avoid fixed oversized opaque backgrounds.
+
+## Completion Requests
+
+A completion request is a purple glowing rectangle created by the user from the
+canvas toolbar. It is a bounded instruction to the agent:
+
+```json
+{
+  "kind": "completion_request",
+  "shape_id": "shape:...",
+  "status": "open|in_progress|completed|dismissed",
+  "prompt": "请在这里补充三种视觉方向",
+  "bounds": { "x": 0, "y": 0, "w": 640, "h": 360 },
+  "created_by": "user",
+  "resolved_by_event_id": null
+}
+```
+
+The MVP supports rectangle-based completion requests only. Selection-based
+rewrite or reconstruction requests are represented as ordinary annotations.
+
+## Scaffold Layout Review
+
+After a scaffold is created or modified, Visual Delivery should review the
+rendered layout before treating the scaffold as complete. The MVP records a
+programmatic review in both the canvas event and `semantic_index.layout_reviews`:
+
+```json
+{
+  "id": "layout_review_...",
+  "type": "scaffold_layout_review",
+  "scaffold_id": "scaffold_inspiration_wall",
+  "section_id": "shape:...",
+  "status": "passed|needs_adjustment",
+  "checks": {
+    "overlap_count": 0,
+    "out_of_section_count": 0,
+    "unreadable_count": 0,
+    "sticky_note_wrong_type_count": 0,
+    "section_contains_children": true,
+    "min_readable_size_ok": true,
+    "sticky_note_types_ok": true
+  },
+  "repairs": []
+}
+```
+
+When screenshot tooling is available, the agent should also inspect a screenshot
+of the focused scaffold and adjust the layout if it is crowded, clipped,
+unreadable, off-screen, or semantically mismatched.
+
+## Agent Inspect Requirement
+
+Before any agent writes to a canvas workspace, it must read:
+
+```text
+GET /api/canvas-workspaces/{WORKSPACE_ID}/context
+```
+
+The context payload contains the current `snapshot`, `semantic_index`, `events`,
+`open_feedback`, and `open_completion_requests`. Agent writes must then save
+the updated snapshot and semantic index through
+`PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot` and include a command
+batch event. The server records a semantic diff in `semantic_index.edit_summary`
+and in the event when an event is supplied.
 
 Use Cowart as a product and workflow reference rather than a runtime dependency.
 Cowart validates the direction: local tldraw canvas, project-local persistence,
@@ -242,6 +334,20 @@ fields: `text`, `shape`, `bounds`. Optional fields: `section_id`, `color`,
 `meta.vd_kind = "html_component"` and mirror the same `html` into
 `semantic_index.nodes[]` as `kind = "html_component"`.
 
+`add_collaboration_scaffold`
+: Add a scaffold package that may include structure, seed content, interaction
+slots, widgets, and next actions. Required fields: `scaffold_id`, `title`,
+`stage`, `bounds`. Optional fields: `includes_seed_content`, `agent_note`.
+
+`review_scaffold_layout`
+: Record layout review after scaffold creation or mutation. Required fields:
+`scaffold_id`, `status`, `checks`. Optional fields: `repairs`.
+
+`add_completion_request`
+: Add the user's purple bounded completion request. Required fields: `prompt`,
+`bounds`. The semantic index mirrors the request into
+`completion_requests[]`.
+
 `add_table`
 : Add row/column data as a first-class semantic object. Required fields:
 `columns`, `rows`, `bounds`. Current renderers may fall back to grouped tldraw
@@ -276,6 +382,7 @@ Use semantic kinds consistently even when the renderer uses a tldraw fallback:
 | `shape` | `geo` | Diagram nodes, states, options, decisions |
 | `connector` | `arrow` | Flow, dependency, evidence, reference link |
 | `html_component` | tldraw placeholder + iframe overlay | Interactive HTML widget anchored on the canvas |
+| `completion_request` | violet geo rectangle | User asks agent to fill or revise a bounded region |
 | `table` | grouped shapes / future table renderer | Row-column data |
 | `code_block` | styled text / future code renderer | Code with language metadata |
 | `label` | ellipse/geo | Short callout marker |

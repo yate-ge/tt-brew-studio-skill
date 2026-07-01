@@ -1,6 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Tldraw, createShapeId, getSnapshot, loadSnapshot, toRichText } from 'tldraw';
+import {
+  DefaultNavigationPanel,
+  DefaultToolbar,
+  DefaultToolbarContent,
+  DefaultColorStyle,
+  DefaultFillStyle,
+  GeoShapeGeoStyle,
+  Tldraw,
+  TldrawUiButtonIcon,
+  TldrawUiToolbar,
+  TldrawUiToolbarButton,
+  createShapeId,
+  getSnapshot,
+  loadSnapshot,
+  toRichText,
+} from 'tldraw';
 import 'tldraw/tldraw.css';
 import {
   activateCanvasWorkspace,
@@ -8,6 +23,7 @@ import {
   createCanvasWorkspace,
   fetchCanvasWorkspace,
   fetchCanvasWorkspaces,
+  fetchScaffolds,
   updateCanvasWorkspaceSnapshot,
 } from '../lib/api';
 import { useDesignTokens } from '../hooks/useDesignTokens';
@@ -16,19 +32,21 @@ import GeneratedContentFrame from '../components/GeneratedContentFrame';
 const SECTION_PADDING = 64;
 const DEFAULT_SECTION_SIZE = { w: 960, h: 640 };
 const SECTION_DUPLICATE_OFFSET = { x: 160, y: 120 };
-const DEFAULT_HTML_COMPONENT_SIZE = { w: 520, h: 340 };
-const HTML_COMPONENT_HEADER_HEIGHT = 34;
-const DEFAULT_CANVAS_HTML_COMPONENT = `<section style="padding:20px;font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033);background:#fff">
+const DEFAULT_HTML_COMPONENT_SIZE = { w: 360, h: 220 };
+const DEFAULT_COMPLETION_SIZE = { w: 520, h: 300 };
+const DEFAULT_CANVAS_HTML_COMPONENT = `<section style="display:inline-block;padding:12px;font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033);background:transparent">
   <style>
-    .vd-card{border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:10px;padding:16px;background:var(--vds-colors-surface,#f8fafc)}
-    .vd-title{margin:0 0 6px;font-size:18px;line-height:1.2}
+    html,body{margin:0;background:transparent}
+    .vd-card{display:inline-flex;flex-direction:column;gap:10px;min-width:260px;max-width:520px;border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:8px;padding:14px;background:rgba(255,255,255,.86);box-shadow:0 8px 24px rgba(15,23,42,.12)}
+    .vd-title{margin:0;font-size:16px;line-height:1.25}
     .vd-copy{margin:0 0 14px;color:var(--vds-colors-text-secondary,#667085);font-size:13px;line-height:1.55}
     .vd-actions{display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--vds-colors-border,#d8e0ea);padding-top:12px}
     .vd-input{width:140px;padding:6px 9px;border:1px solid var(--vds-colors-border,#d0d5dd);border-radius:8px;font:inherit;font-size:13px}
+    button{min-height:32px;border-radius:7px}
   </style>
   <article class="vd-card">
-    <h3 class="vd-title">HTML 组件</h3>
-    <p class="vd-copy">这是一个画布内嵌 HTML 组件。Agent 可以把自定义控件、图表、模拟器或选择器写入这里。</p>
+    <h3 class="vd-title">Widget</h3>
+    <p class="vd-copy">透明背景、内容自适应的画布内嵌 widget。</p>
     <div class="vd-actions">
       <button data-vd-feedback-action="accept_component" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component">接受</button>
       <button data-vd-feedback-action="adjust_component" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component">调整</button>
@@ -65,12 +83,42 @@ function isHtmlComponentShape(shape) {
   return shape?.meta?.vd_kind === 'html_component';
 }
 
+function isCompletionRequestShape(shape) {
+  return shape?.meta?.vd_kind === 'completion_request';
+}
+
+function shapeAuthorship(shape) {
+  const meta = shape?.meta || {};
+  return {
+    created_by: meta.vd_created_by || meta.vd_author || 'user',
+    last_edited_by: meta.vd_last_edited_by || meta.vd_created_by || meta.vd_author || 'user',
+    created_at: meta.vd_created_at || null,
+    updated_at: meta.vd_updated_at || null,
+  };
+}
+
 function getShapePageBounds(editor, shapeOrId) {
   try {
     return compactBounds(editor?.getShapePageBounds?.(shapeOrId));
   } catch {
     return null;
   }
+}
+
+function currentPageShapes(editor) {
+  return editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+}
+
+function shapeIdSet(editor) {
+  return new Set(currentPageShapes(editor).map((shape) => String(shape.id)));
+}
+
+function boundsContainPoint(bounds, point, padding = 0) {
+  if (!bounds || !point) return false;
+  return point.x >= bounds.x - padding
+    && point.x <= bounds.x + bounds.w + padding
+    && point.y >= bounds.y - padding
+    && point.y <= bounds.y + bounds.h + padding;
 }
 
 function compactBounds(bounds) {
@@ -91,7 +139,12 @@ function collectPlainText(value) {
   if (typeof value === 'object') {
     if (typeof value.text === 'string') return value.text;
     if (typeof value.content === 'string') return value.content;
-    return Object.values(value).map(collectPlainText).filter(Boolean).join(' ');
+    if (Array.isArray(value.content)) return collectPlainText(value.content);
+    return Object.entries(value)
+      .filter(([key]) => !['type', 'attrs', 'marks'].includes(key))
+      .map(([, entryValue]) => collectPlainText(entryValue))
+      .filter(Boolean)
+      .join(' ');
   }
   return '';
 }
@@ -150,12 +203,43 @@ function describeShape(shape, editor = null) {
       h: shape.props?.h,
       asset_id: null,
       alt_text: '',
+      authorship: shapeAuthorship(shape),
       meta,
     };
   }
+  if (isCompletionRequestShape(shape)) {
+    const metaPrompt = typeof meta.vd_prompt === 'string' ? meta.vd_prompt.trim() : '';
+    const promptText = metaPrompt || text;
+    return {
+      shape_id: String(shape.id),
+      kind: 'completion_request',
+      type: 'completion_request',
+      title: promptText || '补全请求',
+      text: promptText,
+      prompt: promptText,
+      status: meta.vd_status || 'open',
+      parent_id: shape.parentId ? String(shape.parentId) : null,
+      section_id: section ? String(section.id) : null,
+      section_title: section?.props?.name || null,
+      child_shape_ids: [],
+      child_count: 0,
+      bounds: editor ? getShapePageBounds(editor, shape.id) : null,
+      x: shape.x,
+      y: shape.y,
+      w: shape.props?.w,
+      h: shape.props?.h,
+      asset_id: null,
+      alt_text: '',
+      authorship: shapeAuthorship(shape),
+      meta,
+    };
+  }
+  const semanticKind = isCanvasSectionShape(shape)
+    ? 'canvas_section'
+    : (shape.type === 'note' || meta.vd_kind === 'sticky_note' ? 'sticky_note' : (meta.vd_kind || 'canvas_node'));
   return {
     shape_id: String(shape.id),
-    kind: isCanvasSectionShape(shape) ? 'canvas_section' : 'canvas_node',
+    kind: semanticKind,
     type: shape.type || 'shape',
     title: text.split(/\s+/).slice(0, 8).join(' ') || shape.type || 'shape',
     text,
@@ -171,6 +255,7 @@ function describeShape(shape, editor = null) {
     h: shape.props?.h,
     asset_id: shape.props?.assetId || null,
     alt_text: shape.props?.altText || shape.meta?.alt_text || '',
+    authorship: shapeAuthorship(shape),
     meta: shape.meta || {},
   };
 }
@@ -221,9 +306,33 @@ function htmlComponentOverlaysFromEditor(editor) {
   });
 }
 
+function authoredOverlaysFromEditor(editor) {
+  const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+  return shapes
+    .filter((shape) => !isCanvasSectionShape(shape))
+    .map((shape) => {
+      const bounds = getShapePageBounds(editor, shape.id);
+      if (!bounds) return null;
+      const topLeft = pagePointToViewport(editor, { x: bounds.x, y: bounds.y });
+      const bottomRight = pagePointToViewport(editor, { x: bounds.x + bounds.w, y: bounds.y + bounds.h });
+      const authorship = shapeAuthorship(shape);
+      return {
+        shapeId: String(shape.id),
+        kind: shape.meta?.vd_kind || 'canvas_node',
+        author: authorship.last_edited_by || authorship.created_by || 'user',
+        x: Math.min(topLeft.x, bottomRight.x),
+        y: Math.min(topLeft.y, bottomRight.y),
+        w: Math.max(12, Math.abs(bottomRight.x - topLeft.x)),
+        h: Math.max(12, Math.abs(bottomRight.y - topLeft.y)),
+      };
+    })
+    .filter(Boolean);
+}
+
 function semanticIndexFromEditor(editor, workspace) {
   const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
   const sections = shapes.filter(isCanvasSectionShape).map((shape) => describeShape(shape, editor));
+  const nodes = shapes.map((shape) => describeShape(shape, editor));
   const relationships = [];
   for (const section of sections) {
     for (const childId of section.child_shape_ids || []) {
@@ -234,16 +343,20 @@ function semanticIndexFromEditor(editor, workspace) {
       });
     }
   }
+  const layoutReviewsById = new Map();
+  (workspace?.semantic_index?.layout_reviews || []).forEach((review) => {
+    if (review?.id) layoutReviewsById.set(review.id, review);
+  });
+  shapes.forEach((shape) => {
+    const review = shape?.meta?.vd_layout_review;
+    if (review?.id) layoutReviewsById.set(review.id, review);
+  });
   return {
     version: 2,
     workspace_id: workspace?.id,
-    zones: workspace?.semantic_index?.zones || [
-      { id: 'agent-zone', role: 'agent', title: 'Agent 工作区' },
-      { id: 'user-zone', role: 'user', title: '用户反馈区' },
-      { id: 'shared-zone', role: 'shared', title: '共享决策区' },
-    ],
+    zones: workspace?.semantic_index?.zones || [],
     sections,
-    nodes: shapes.map((shape) => describeShape(shape, editor)),
+    nodes,
     assets: shapes.filter(isImageLikeShape).map((shape) => ({
       shape_id: String(shape.id),
       asset_id: shape.props?.assetId || null,
@@ -251,7 +364,38 @@ function semanticIndexFromEditor(editor, workspace) {
       section_id: nearestCanvasSection(editor, shape)?.id || null,
       bounds: getShapePageBounds(editor, shape.id),
     })),
-    annotations: [],
+    annotations: workspace?.semantic_index?.annotations || [],
+    completion_requests: nodes.filter((node) => node.kind === 'completion_request'),
+    scaffold_instances: nodes
+      .filter((node) => node.meta?.vd_scaffold_id)
+      .map((node) => ({
+        shape_id: node.shape_id,
+        scaffold_id: node.meta.vd_scaffold_id,
+        scaffold_title: node.meta.vd_scaffold_title || '',
+        stage: node.meta.vd_stage || '',
+        bounds: node.bounds,
+      })),
+    widget_instances: nodes
+      .filter((node) => node.kind === 'html_component')
+      .map((node) => ({
+        shape_id: node.shape_id,
+        component_id: node.component_id,
+        title: node.title,
+        state: node.meta?.vd_widget_state || {},
+        input_schema: node.meta?.vd_input_schema || {},
+        output_schema: node.meta?.vd_output_schema || {},
+        sizing: node.meta?.vd_sizing || null,
+        bounds: node.bounds,
+      })),
+    artifact_links: nodes
+      .filter((node) => node.meta?.vd_artifact_url)
+      .map((node) => ({
+        shape_id: node.shape_id,
+        title: node.title,
+        url: node.meta.vd_artifact_url,
+        target_type: node.meta.vd_artifact_type || 'visual_delivery_page',
+      })),
+    layout_reviews: Array.from(layoutReviewsById.values()).slice(-20),
     relationships,
     updated_at: new Date().toISOString(),
   };
@@ -330,103 +474,346 @@ function resizablePatch(shape, nextSize) {
   return Object.keys(props).length > 0 ? props : undefined;
 }
 
+function insetBounds(bounds, padding = 0) {
+  if (!bounds) return null;
+  return {
+    x: bounds.x + padding,
+    y: bounds.y + padding,
+    w: Math.max(0, bounds.w - padding * 2),
+    h: Math.max(0, bounds.h - padding * 2),
+  };
+}
+
+function boundsContain(outer, inner, tolerance = 2) {
+  if (!outer || !inner) return false;
+  return inner.x >= outer.x - tolerance
+    && inner.y >= outer.y - tolerance
+    && inner.x + inner.w <= outer.x + outer.w + tolerance
+    && inner.y + inner.h <= outer.y + outer.h + tolerance;
+}
+
+function boundsOverlap(a, b, padding = 10) {
+  if (!a || !b) return false;
+  return a.x < b.x + b.w + padding
+    && a.x + a.w + padding > b.x
+    && a.y < b.y + b.h + padding
+    && a.y + a.h + padding > b.y;
+}
+
+function unionBounds(boundsList) {
+  const items = boundsList.filter(Boolean);
+  if (items.length === 0) return null;
+  const minX = Math.min(...items.map((bounds) => bounds.x));
+  const minY = Math.min(...items.map((bounds) => bounds.y));
+  const maxX = Math.max(...items.map((bounds) => bounds.x + bounds.w));
+  const maxY = Math.max(...items.map((bounds) => bounds.y + bounds.h));
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function readableMinimumForShape(shape) {
+  if (shape?.type === 'note') return { w: 150, h: 150 };
+  if (shape?.type === 'text') return { w: 120, h: 32 };
+  return { w: 96, h: 48 };
+}
+
+function auditScaffoldLayout(editor, { sectionId, childIds, scaffold }) {
+  const section = editor?.getShape?.(sectionId);
+  const sectionBounds = getShapePageBounds(editor, sectionId);
+  const innerSectionBounds = insetBounds(sectionBounds, 24);
+  const childRecords = (childIds || [])
+    .map((shapeId) => {
+      const shape = editor?.getShape?.(shapeId);
+      const bounds = shape ? getShapePageBounds(editor, shapeId) : null;
+      return shape && bounds ? { shapeId: String(shapeId), shape, bounds } : null;
+    })
+    .filter(Boolean);
+
+  const overlapPairs = [];
+  for (let i = 0; i < childRecords.length; i += 1) {
+    for (let j = i + 1; j < childRecords.length; j += 1) {
+      const a = childRecords[i];
+      const b = childRecords[j];
+      if (boundsOverlap(a.bounds, b.bounds, 8)) {
+        overlapPairs.push([a.shapeId, b.shapeId]);
+      }
+    }
+  }
+
+  const outOfSection = childRecords
+    .filter((item) => sectionBounds && !boundsContain(innerSectionBounds || sectionBounds, item.bounds, 4))
+    .map((item) => item.shapeId);
+
+  const unreadable = childRecords
+    .filter((item) => {
+      const minimum = readableMinimumForShape(item.shape);
+      return item.bounds.w < minimum.w || item.bounds.h < minimum.h;
+    })
+    .map((item) => item.shapeId);
+
+  const stickyRecords = childRecords.filter((item) => item.shape?.meta?.vd_kind === 'sticky_note' || item.shape?.type === 'note');
+  const stickyNoteWrongType = stickyRecords.filter((item) => item.shape.type !== 'note').map((item) => item.shapeId);
+  const childBounds = unionBounds(childRecords.map((item) => item.bounds));
+  const passed = !!section
+    && overlapPairs.length === 0
+    && outOfSection.length === 0
+    && unreadable.length === 0
+    && stickyNoteWrongType.length === 0;
+
+  return {
+    id: `layout_review_${Date.now()}`,
+    type: 'scaffold_layout_review',
+    scaffold_id: scaffold?.id || null,
+    scaffold_title: scaffold?.title || null,
+    section_id: sectionId ? String(sectionId) : null,
+    status: passed ? 'passed' : 'needs_adjustment',
+    created_at: new Date().toISOString(),
+    checks: {
+      section_exists: !!section,
+      child_count: childRecords.length,
+      overlap_count: overlapPairs.length,
+      out_of_section_count: outOfSection.length,
+      unreadable_count: unreadable.length,
+      sticky_note_count: stickyRecords.length,
+      sticky_note_wrong_type_count: stickyNoteWrongType.length,
+      section_contains_children: outOfSection.length === 0,
+      min_readable_size_ok: unreadable.length === 0,
+      sticky_note_types_ok: stickyNoteWrongType.length === 0,
+    },
+    details: {
+      overlap_pairs: overlapPairs,
+      out_of_section_shape_ids: outOfSection,
+      unreadable_shape_ids: unreadable,
+      sticky_note_wrong_type_shape_ids: stickyNoteWrongType,
+      section_bounds: sectionBounds,
+      child_bounds: childBounds,
+    },
+  };
+}
+
+function fitSectionToChildren(editor, sectionId, childIds, padding = 56) {
+  const section = editor?.getShape?.(sectionId);
+  if (!section) return false;
+  const sectionBounds = getShapePageBounds(editor, sectionId);
+  const childBounds = unionBounds((childIds || []).map((shapeId) => getShapePageBounds(editor, shapeId)));
+  if (!sectionBounds || !childBounds) return false;
+  const neededRight = childBounds.x + childBounds.w + padding;
+  const neededBottom = childBounds.y + childBounds.h + padding;
+  const currentRight = sectionBounds.x + sectionBounds.w;
+  const currentBottom = sectionBounds.y + sectionBounds.h;
+  const nextW = Math.max(section.props?.w || sectionBounds.w, neededRight - sectionBounds.x);
+  const nextH = Math.max(section.props?.h || sectionBounds.h, neededBottom - sectionBounds.y);
+  if (nextW === section.props?.w && nextH === section.props?.h) return false;
+  editor.updateShapes([{
+    id: section.id,
+    type: 'frame',
+    props: {
+      ...section.props,
+      w: Math.round(nextW),
+      h: Math.round(nextH),
+    },
+    meta: {
+      ...(section.meta || {}),
+      vd_layout_repaired_at: new Date().toISOString(),
+      vd_layout_repair: 'fit_section_to_children',
+    },
+  }]);
+  return true;
+}
+
+function scaffoldChildKind(shape) {
+  const kind = shape?.meta?.vd_kind || '';
+  if (kind) return kind;
+  if (shape?.type === 'note') return 'sticky_note';
+  return 'shape';
+}
+
+function updateShapeLayout(editor, shape, layout, timestamp) {
+  if (!shape) return null;
+  const nextProps = { ...(shape.props || {}) };
+  if (shape.type === 'note') {
+    nextProps.scale = Math.max(0.75, Math.min(1.3, Number(layout.w || 200) / 200));
+  } else {
+    nextProps.w = Math.round(layout.w);
+    nextProps.h = Math.round(layout.h);
+    if (Object.hasOwn(nextProps, 'growY')) nextProps.growY = 0;
+  }
+  return {
+    id: shape.id,
+    type: shape.type,
+    x: Math.round(layout.x),
+    y: Math.round(layout.y),
+    props: nextProps,
+    meta: {
+      ...(shape.meta || {}),
+      vd_layout_reflowed_at: timestamp,
+    },
+  };
+}
+
+function reflowScaffoldChildren(editor, sectionId, childIds) {
+  const section = editor?.getShape?.(sectionId);
+  if (!section) return [];
+  const sectionW = Math.max(1120, Number(section.props?.w || DEFAULT_SECTION_SIZE.w));
+  const sectionH = Math.max(760, Number(section.props?.h || DEFAULT_SECTION_SIZE.h));
+  const children = (childIds || [])
+    .map((shapeId) => editor?.getShape?.(shapeId))
+    .filter(Boolean);
+  if (children.length === 0) return [];
+
+  const outer = 56;
+  const gap = 32;
+  const rightColumnW = 240;
+  const timestamp = new Date().toISOString();
+  const nextActions = children.filter((shape) => scaffoldChildKind(shape) === 'next_action');
+  const agentNotes = children.filter((shape) => scaffoldChildKind(shape) === 'agent_note');
+  const stickyNotes = children.filter((shape) => scaffoldChildKind(shape) === 'sticky_note');
+  const contentShapes = children.filter((shape) => {
+    const kind = scaffoldChildKind(shape);
+    return kind !== 'next_action' && kind !== 'agent_note' && kind !== 'sticky_note';
+  });
+  const updates = [];
+  let maxBottom = outer;
+
+  const nextColumnX = nextActions.length > 0 ? Math.max(outer, sectionW - rightColumnW - outer) : sectionW;
+  agentNotes.forEach((shape, index) => {
+    const layout = {
+      x: outer,
+      y: outer + index * 176,
+      w: Math.min(560, Math.max(360, nextColumnX - outer - gap)),
+      h: 152,
+    };
+    updates.push(updateShapeLayout(editor, shape, layout, timestamp));
+    maxBottom = Math.max(maxBottom, layout.y + layout.h);
+  });
+
+  nextActions.forEach((shape, index) => {
+    const layout = {
+      x: nextColumnX,
+      y: 120 + index * 126,
+      w: rightColumnW,
+      h: 96,
+    };
+    updates.push(updateShapeLayout(editor, shape, layout, timestamp));
+    maxBottom = Math.max(maxBottom, layout.y + layout.h);
+  });
+
+  const stickyStartY = Math.max(agentNotes.length > 0 ? 276 : 128, maxBottom + 36);
+  const stickySize = 200;
+  const stickyAreaW = Math.max(stickySize, (nextActions.length > 0 ? nextColumnX - gap : sectionW - outer) - outer);
+  const stickyCols = Math.max(1, Math.min(3, Math.floor((stickyAreaW + gap) / (stickySize + gap))));
+  stickyNotes.forEach((shape, index) => {
+    const col = index % stickyCols;
+    const row = Math.floor(index / stickyCols);
+    const layout = {
+      x: outer + col * (stickySize + gap),
+      y: stickyStartY + row * (stickySize + gap),
+      w: stickySize,
+      h: stickySize,
+    };
+    updates.push(updateShapeLayout(editor, shape, layout, timestamp));
+    maxBottom = Math.max(maxBottom, layout.y + layout.h);
+  });
+
+  const contentStartY = Math.max(560, maxBottom + 48);
+  const contentCols = Math.max(1, Math.min(2, contentShapes.length));
+  const contentW = contentCols === 1
+    ? Math.min(520, sectionW - outer * 2)
+    : Math.max(320, (sectionW - outer * 2 - gap) / 2);
+  contentShapes.forEach((shape, index) => {
+    const col = index % contentCols;
+    const row = Math.floor(index / contentCols);
+    const layout = {
+      x: outer + col * (contentW + gap),
+      y: contentStartY + row * 200,
+      w: contentW,
+      h: 160,
+    };
+    updates.push(updateShapeLayout(editor, shape, layout, timestamp));
+    maxBottom = Math.max(maxBottom, layout.y + layout.h);
+  });
+
+  const neededH = Math.max(sectionH, maxBottom + outer);
+  updates.push({
+    id: section.id,
+    type: section.type,
+    props: {
+      ...(section.props || {}),
+      w: Math.round(sectionW),
+      h: Math.round(neededH),
+    },
+    meta: {
+      ...(section.meta || {}),
+      vd_layout_repaired_at: timestamp,
+      vd_layout_repair: 'reflow_scaffold_children',
+    },
+  });
+  const validUpdates = updates.filter(Boolean);
+  editor.updateShapes(validUpdates);
+  return validUpdates.map((shape) => String(shape.id));
+}
+
+function recordScaffoldReview(editor, sectionId, review) {
+  const section = editor?.getShape?.(sectionId);
+  if (!section || !review) return false;
+  editor.updateShapes([{
+    id: section.id,
+    type: section.type,
+    meta: {
+      ...(section.meta || {}),
+      vd_layout_review: review,
+    },
+  }]);
+  return true;
+}
+
+function reviewAndRepairScaffoldLayout(editor, { sectionId, childIds, scaffold }) {
+  const before = auditScaffoldLayout(editor, { sectionId, childIds, scaffold });
+  const mutatedShapeIds = [];
+  const repairs = [];
+  if (before.checks.out_of_section_count > 0) {
+    const fitted = fitSectionToChildren(editor, sectionId, childIds);
+    if (fitted) {
+      repairs.push('fit_section_to_children');
+      mutatedShapeIds.push(String(sectionId));
+    }
+  }
+  if (before.checks.overlap_count > 0 || before.checks.unreadable_count > 0) {
+    const reflowedIds = reflowScaffoldChildren(editor, sectionId, childIds);
+    if (reflowedIds.length > 0) {
+      repairs.push('reflow_scaffold_children');
+      mutatedShapeIds.push(...reflowedIds);
+    }
+  }
+  const repaired = repairs.length > 0;
+  const after = repaired ? auditScaffoldLayout(editor, { sectionId, childIds, scaffold }) : before;
+  const review = {
+    ...after,
+    initial_status: before.status,
+    repaired,
+    repairs,
+    mutated_shape_ids: Array.from(new Set(mutatedShapeIds)),
+    before_checks: before.checks,
+  };
+  recordScaffoldReview(editor, sectionId, review);
+  return review;
+}
+
 function seedWorkspace(editor) {
   const existingShapes = editor.getCurrentPageShapes?.() || [];
   if (existingShapes.length > 0) return;
-  const sections = [
-    {
-      id: createShapeId('vd-agent-section'),
-      type: 'frame',
-      x: 0,
-      y: 0,
-      props: { name: 'Agent 工作区', w: 360, h: 220, color: 'blue' },
-      meta: { vd_kind: 'section', vd_role: 'agent' },
-    },
-    {
-      id: createShapeId('vd-user-section'),
-      type: 'frame',
-      x: 430,
-      y: 0,
-      props: { name: '用户反馈区', w: 360, h: 220, color: 'green' },
-      meta: { vd_kind: 'section', vd_role: 'user' },
-    },
-    {
-      id: createShapeId('vd-shared-section'),
-      type: 'frame',
-      x: 215,
-      y: 300,
-      props: { name: '共享决策区', w: 360, h: 220, color: 'violet' },
-      meta: { vd_kind: 'section', vd_role: 'shared' },
-    },
-  ];
-  editor.createShapes(sections);
-  editor.createShapes([
-    {
-      id: createShapeId('vd-agent-brief'),
-      type: 'geo',
-      x: 32,
-      y: 56,
-      props: {
-        geo: 'rectangle',
-        w: 296,
-        h: 126,
-        fill: 'solid',
-        color: 'blue',
-        richText: toRichText('Agent 工作区\n\n方案、素材、推理过程和设计说明。'),
-      },
-    },
-    {
-      id: createShapeId('vd-user-brief'),
-      type: 'geo',
-      x: 462,
-      y: 56,
-      props: {
-        geo: 'rectangle',
-        w: 296,
-        h: 126,
-        fill: 'solid',
-        color: 'green',
-        richText: toRichText('用户反馈区\n\n圈选、批注、补充素材和修改意见。'),
-      },
-    },
-    {
-      id: createShapeId('vd-shared-brief'),
-      type: 'geo',
-      x: 247,
-      y: 356,
-      props: {
-        geo: 'rectangle',
-        w: 296,
-        h: 126,
-        fill: 'solid',
-        color: 'violet',
-        richText: toRichText('共享决策区\n\n结论、取舍、下一步动作。'),
-      },
-    },
-  ]);
-  editor.reparentShapes([createShapeId('vd-agent-brief')], createShapeId('vd-agent-section'));
-  editor.reparentShapes([createShapeId('vd-user-brief')], createShapeId('vd-user-section'));
-  editor.reparentShapes([createShapeId('vd-shared-brief')], createShapeId('vd-shared-section'));
-  editor.sendToBack?.(sections.map((section) => section.id));
   editor.zoomToFit?.();
 }
 
 function CanvasHtmlComponentOverlay({ component, tokens, onSelect, onFeedback }) {
-  const bodyHeight = Math.max(80, component.h - HTML_COMPONENT_HEADER_HEIGHT);
+  const bodyHeight = Math.max(80, component.h);
   return (
     <div
       data-vd-canvas-html-component={component.componentId}
       style={STYLES.htmlComponentOverlay(component)}
     >
-      <div style={STYLES.htmlComponentChrome}>
-        <div style={STYLES.htmlComponentTitleWrap}>
-          <span style={STYLES.htmlComponentTitle}>{component.title}</span>
-          {component.description && <span style={STYLES.htmlComponentDescription}>{component.description}</span>}
-        </div>
-        <button type="button" style={STYLES.htmlComponentSelectButton} onClick={() => onSelect(component)}>
-          选中
-        </button>
-      </div>
+      <button type="button" style={STYLES.htmlComponentSelectButton} onClick={() => onSelect(component)}>
+        选中
+      </button>
       <div style={STYLES.htmlComponentBody(bodyHeight, component.interactive)}>
         <GeneratedContentFrame
           html={component.html}
@@ -436,6 +823,7 @@ function CanvasHtmlComponentOverlay({ component, tokens, onSelect, onFeedback })
           title={component.title}
           defaultHeight={bodyHeight}
           fitContainer
+          transparent
         />
       </div>
     </div>
@@ -445,7 +833,7 @@ function CanvasHtmlComponentOverlay({ component, tokens, onSelect, onFeedback })
 const STYLES = {
   page: {
     display: 'grid',
-    gridTemplateColumns: 'clamp(240px, 20vw, 320px) minmax(0, 1fr)',
+    gridTemplateColumns: 'clamp(220px, 18vw, 300px) minmax(0, 1fr)',
     gap: 'var(--vd-space-4)',
     minHeight: 'calc(100dvh - 32px)',
     width: '100%',
@@ -580,25 +968,6 @@ const STYLES = {
     cursor: 'pointer',
     whiteSpace: 'nowrap',
   },
-  toolButton: {
-    border: '1px solid var(--vd-border-default)',
-    borderRadius: 'var(--vd-radius-md)',
-    background: 'var(--vd-page-bg)',
-    color: 'var(--vd-text-secondary)',
-    padding: '7px 10px',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  toolButtonPrimary: {
-    border: '1px solid var(--vd-primary-border)',
-    borderRadius: 'var(--vd-radius-md)',
-    background: 'var(--vd-primary-bg)',
-    color: 'var(--vd-primary)',
-    padding: '7px 10px',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    fontWeight: 'var(--vd-font-weight-semibold)',
-  },
   canvasArea: {
     flex: 1,
     minHeight: 560,
@@ -608,6 +977,84 @@ const STYLES = {
   },
   canvasAreaFullscreen: {
     minHeight: 0,
+  },
+  canvasToolPopover: {
+    position: 'absolute',
+    bottom: 72,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 380,
+    width: 'min(360px, calc(100% - 24px))',
+    maxHeight: 'min(360px, calc(100% - 120px))',
+    display: 'flex',
+    flexDirection: 'column',
+    border: '1px solid rgba(148, 163, 184, .34)',
+    borderRadius: 8,
+    background: 'rgba(255, 255, 255, .98)',
+    boxShadow: '0 16px 36px rgba(15, 23, 42, .18)',
+    pointerEvents: 'auto',
+    overflow: 'hidden',
+  },
+  canvasToolPopoverHeader: {
+    padding: '10px 12px',
+    borderBottom: '1px solid var(--vd-border-subtle)',
+  },
+  canvasToolPopoverTitle: {
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  },
+  canvasToolPopoverMeta: {
+    marginTop: 3,
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+  },
+  canvasToolPopoverList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    padding: 8,
+    overflowY: 'auto',
+  },
+  canvasScaffoldItem: {
+    width: '100%',
+    border: '1px solid var(--vd-border-default)',
+    borderRadius: 8,
+    background: 'var(--vd-page-bg)',
+    color: 'var(--vd-text-primary)',
+    padding: 10,
+    textAlign: 'left',
+    cursor: 'pointer',
+  },
+  canvasScaffoldTitle: {
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  },
+  canvasScaffoldDescription: {
+    marginTop: 5,
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+    lineHeight: 1.45,
+  },
+  canvasScaffoldAction: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: 30,
+    marginTop: 10,
+    padding: '5px 9px',
+    border: '1px solid var(--vd-color-primary-border, rgba(37, 99, 235, 0.28))',
+    borderRadius: 7,
+    color: 'var(--vd-color-primary, #2563eb)',
+    background: 'var(--vd-color-primary-soft, rgba(37, 99, 235, 0.08))',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+  },
+  sourceHighlightPanel: {
+    position: 'absolute',
+    left: 0,
+    bottom: 46,
+    zIndex: 'var(--tl-layer-panels)',
+    pointerEvents: 'all',
   },
   htmlOverlayLayer: {
     position: 'absolute',
@@ -624,51 +1071,15 @@ const STYLES = {
     minWidth: 120,
     minHeight: 96,
     pointerEvents: 'auto',
-    display: 'flex',
-    flexDirection: 'column',
-    border: '1px solid rgba(37, 99, 235, 0.42)',
-    borderRadius: 8,
-    overflow: 'hidden',
-    background: '#fff',
-    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.14)',
+    background: 'transparent',
   }),
-  htmlComponentChrome: {
-    height: HTML_COMPONENT_HEADER_HEIGHT,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    padding: '0 8px 0 10px',
-    borderBottom: '1px solid rgba(148, 163, 184, 0.32)',
-    background: 'rgba(248, 250, 252, 0.96)',
-  },
-  htmlComponentTitleWrap: {
-    minWidth: 0,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-  },
-  htmlComponentTitle: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    color: '#172033',
-    fontSize: 12,
-    fontWeight: 700,
-  },
-  htmlComponentDescription: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    color: '#667085',
-    fontSize: 11,
-  },
   htmlComponentSelectButton: {
+    position: 'absolute',
+    top: -28,
+    right: 0,
     border: '1px solid rgba(37, 99, 235, 0.32)',
     borderRadius: 6,
-    background: '#fff',
+    background: 'rgba(255,255,255,.92)',
     color: '#2563eb',
     fontSize: 11,
     padding: '3px 7px',
@@ -678,8 +1089,38 @@ const STYLES = {
   htmlComponentBody: (height, interactive) => ({
     height,
     minHeight: 80,
-    background: '#fff',
+    background: 'transparent',
     pointerEvents: interactive ? 'auto' : 'none',
+  }),
+  highlightOverlay: (item) => {
+    const isAgent = item.author === 'agent';
+    const isMixed = item.author === 'mixed';
+    const isCompletion = item.kind === 'completion_request';
+    const color = isCompletion || isAgent ? '124, 58, 237' : isMixed ? '14, 165, 233' : '245, 158, 11';
+    return {
+      position: 'absolute',
+      left: item.x,
+      top: item.y,
+      width: item.w,
+      height: item.h,
+      border: `2px solid rgba(${color}, .72)`,
+      background: `rgba(${color}, .12)`,
+      boxShadow: isCompletion ? `0 0 0 4px rgba(${color}, .12), 0 0 22px rgba(${color}, .42)` : 'none',
+      borderRadius: 8,
+      pointerEvents: 'none',
+    };
+  },
+  completionRequestOverlay: (item) => ({
+    position: 'absolute',
+    left: item.x,
+    top: item.y,
+    width: item.w,
+    height: item.h,
+    border: '2px solid rgba(124, 58, 237, .84)',
+    background: 'rgba(124, 58, 237, .12)',
+    boxShadow: '0 0 0 4px rgba(124, 58, 237, .12), 0 0 24px rgba(124, 58, 237, .42)',
+    borderRadius: 8,
+    pointerEvents: 'none',
   }),
   empty: {
     padding: 'var(--vd-space-6)',
@@ -702,12 +1143,22 @@ export default function CanvasWorkspace() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [toolMessage, setToolMessage] = useState('');
   const [htmlComponents, setHtmlComponents] = useState([]);
+  const [authoredOverlays, setAuthoredOverlays] = useState([]);
+  const [previewMode, setPreviewMode] = useState('normal');
+  const [scaffolds, setScaffolds] = useState([]);
+  const [scaffoldPickerOpen, setScaffoldPickerOpen] = useState(false);
+  const [completionToolReady, setCompletionToolReady] = useState(false);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const mounted = useRef(false);
+  const completionToolActive = useRef(false);
+  const completionClick = useRef(null);
+  const knownShapeIds = useRef(new Set());
+  const pendingCanvasEvent = useRef(null);
 
   function refreshHtmlComponents(editor = editorRef.current) {
     setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
+    setAuthoredOverlays(editor ? authoredOverlaysFromEditor(editor) : []);
   }
 
   async function loadList(preferredId = selectedId) {
@@ -723,7 +1174,12 @@ export default function CanvasWorkspace() {
   useEffect(() => {
     let canceled = false;
     setLoading(true);
-    loadList()
+    Promise.all([
+      loadList(),
+      fetchScaffolds().then((data) => {
+        if (!canceled) setScaffolds(data.scaffolds || []);
+      }),
+    ])
       .then(() => {
         if (!canceled) setLoading(false);
       })
@@ -737,6 +1193,7 @@ export default function CanvasWorkspace() {
     if (!selectedId) {
       setWorkspace(null);
       setHtmlComponents([]);
+      setScaffoldPickerOpen(false);
       return;
     }
     let canceled = false;
@@ -793,7 +1250,17 @@ export default function CanvasWorkspace() {
     try {
       const saved = await updateCanvasWorkspaceSnapshot(nextWorkspace.id, {
         snapshot: getSnapshot(editor.store),
-        semantic_index: semanticIndexFromEditor(editor, nextWorkspace),
+        semantic_index: (() => {
+          const index = semanticIndexFromEditor(editor, nextWorkspace);
+          const review = event?.meta?.scaffold_review;
+          if (review) {
+            index.layout_reviews = [
+              ...((index.layout_reviews || []).filter((item) => item.id !== review.id)),
+              review,
+            ].slice(-20);
+          }
+          return index;
+        })(),
         event,
       });
       setWorkspace(saved);
@@ -808,6 +1275,129 @@ export default function CanvasWorkspace() {
 
   function markToolMessage(message) {
     setToolMessage(message);
+  }
+
+  function currentViewportOrigin(editor, offset = { x: 96, y: 96 }) {
+    const viewport = editor?.getViewportPageBounds?.();
+    return {
+      x: Math.round((viewport?.x || 0) + offset.x),
+      y: Math.round((viewport?.y || 0) + offset.y),
+    };
+  }
+
+  function nextOpenCanvasOrigin(editor) {
+    const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+    const contentBounds = shapes
+      .map((shape) => getShapePageBounds(editor, shape.id))
+      .filter(Boolean);
+    if (contentBounds.length === 0) return currentViewportOrigin(editor);
+    const maxX = Math.max(...contentBounds.map((bounds) => bounds.x + bounds.w));
+    const minY = Math.min(...contentBounds.map((bounds) => bounds.y));
+    return {
+      x: Math.round(maxX + 160),
+      y: Math.round(minY),
+    };
+  }
+
+  function makeCanvasShape({ id, x, y, w, h, text, color = 'blue', kind = 'shape', scaffold = null }) {
+    if (kind === 'sticky_note') {
+      return {
+        id,
+        type: 'note',
+        x: Math.round(x),
+        y: Math.round(y),
+        props: {
+          color,
+          labelColor: 'black',
+          size: 'm',
+          font: 'draw',
+          fontSizeAdjustment: null,
+          align: 'middle',
+          verticalAlign: 'middle',
+          growY: 0,
+          url: '',
+          richText: toRichText(text || ''),
+          scale: Math.max(0.75, Math.min(1.25, Number(w || 200) / 200)),
+          textFirstEditedBy: null,
+        },
+        meta: {
+          vd_kind: 'sticky_note',
+          vd_created_by: 'agent',
+          vd_created_at: new Date().toISOString(),
+          ...(scaffold ? {
+            vd_scaffold_id: scaffold.id,
+            vd_scaffold_title: scaffold.title,
+            vd_stage: scaffold.stage,
+          } : {}),
+        },
+      };
+    }
+    return {
+      id,
+      type: 'geo',
+      x: Math.round(x),
+      y: Math.round(y),
+      props: {
+        geo: 'rectangle',
+        w: Math.round(w),
+        h: Math.round(h),
+        fill: 'solid',
+        color,
+        richText: toRichText(text || ''),
+      },
+      meta: {
+        vd_kind: kind,
+        vd_created_by: 'agent',
+        vd_created_at: new Date().toISOString(),
+        ...(scaffold ? {
+          vd_scaffold_id: scaffold.id,
+          vd_scaffold_title: scaffold.title,
+          vd_stage: scaffold.stage,
+        } : {}),
+      },
+    };
+  }
+
+  function createHtmlComponentShape({ shapeId, title, description, html, bounds, scaffold = null }) {
+    return {
+      id: shapeId,
+      type: 'geo',
+      x: Math.round(bounds.x),
+      y: Math.round(bounds.y),
+      props: {
+        geo: 'rectangle',
+        w: Math.round(bounds.w),
+        h: Math.round(bounds.h),
+        fill: 'none',
+        color: 'violet',
+        richText: toRichText(`${title}\n\nWidget 占位。真实内容由透明 iframe 渲染。`),
+      },
+      meta: {
+        vd_kind: 'html_component',
+        vd_title: title,
+        vd_description: description || '画布内嵌 widget',
+        vd_component_id: String(shapeId),
+        vd_html: html || DEFAULT_CANVAS_HTML_COMPONENT,
+        vd_created_by: scaffold ? 'agent' : 'user',
+        vd_created_at: new Date().toISOString(),
+        vd_interactive: true,
+        vd_widget_state: scaffold?.state || {},
+        vd_input_schema: scaffold?.input_schema || {},
+        vd_output_schema: scaffold?.output_schema || {},
+        vd_sizing: scaffold?.sizing || {
+          mode: 'content_intrinsic',
+          min_width: 240,
+          max_width: 720,
+          min_height: 120,
+          max_height: 640,
+        },
+        ...(scaffold ? {
+          vd_scaffold_id: scaffold.id,
+          vd_scaffold_title: scaffold.title,
+          vd_stage: scaffold.stage,
+        } : {}),
+      },
+    };
   }
 
   function htmlComponentPlacementBounds(editor) {
@@ -839,47 +1429,37 @@ export default function CanvasWorkspace() {
     };
   }
 
-  function handleAddHtmlComponent() {
+  function handleAddHtmlComponent(scaffold = null) {
     const editor = editorRef.current;
     if (!editor || !workspace) return;
     const { section, bounds } = htmlComponentPlacementBounds(editor);
     const shapeId = createShapeId(`vd-html-component-${Date.now()}`);
-    const title = 'HTML 组件';
+    const title = scaffold?.title || 'HTML 组件';
+    const sizing = scaffold?.sizing || {};
+    const finalBounds = {
+      ...bounds,
+      w: Math.round(Math.min(sizing.max_width || bounds.w, Math.max(sizing.min_width || 240, bounds.w))),
+      h: Math.round(Math.min(sizing.max_height || bounds.h, Math.max(sizing.min_height || 120, bounds.h))),
+    };
     editor.createShapes([
-      {
-        id: shapeId,
-        type: 'geo',
-        x: Math.round(bounds.x),
-        y: Math.round(bounds.y),
-        props: {
-          geo: 'rectangle',
-          w: Math.round(bounds.w),
-          h: Math.round(bounds.h),
-          fill: 'solid',
-          color: 'light-blue',
-          richText: toRichText(`${title}\n\n内嵌 HTML 组件占位。真实组件由画布 overlay 渲染。`),
-        },
-        meta: {
-          vd_kind: 'html_component',
-          vd_title: title,
-          vd_description: '画布内嵌 HTML 组件',
-          vd_component_id: String(shapeId),
-          vd_html: DEFAULT_CANVAS_HTML_COMPONENT,
-          vd_created_by: 'user',
-          vd_created_at: new Date().toISOString(),
-          vd_interactive: true,
-        },
-      },
+      createHtmlComponentShape({
+        shapeId,
+        title,
+        description: scaffold?.description || '画布内嵌 HTML 组件',
+        html: scaffold?.html || DEFAULT_CANVAS_HTML_COMPONENT,
+        bounds: finalBounds,
+        scaffold,
+      }),
     ]);
     if (section) editor.reparentShapes?.([shapeId], section.id);
     editor.setSelectedShapes?.([shapeId]);
     refreshHtmlComponents(editor);
-    markToolMessage(section ? `已在 ${section.props?.name || 'Section'} 中添加 HTML 组件。` : '已添加 HTML 组件。');
+    markToolMessage(section ? `已在 ${section.props?.name || 'Section'} 中添加 ${title}。` : `已添加 ${title}。`);
     window.clearTimeout(saveTimer.current);
     saveSnapshot(editor, workspace, {
-      type: 'user_command',
-      actor: 'user',
-      summary: '添加画布 HTML 组件。',
+      type: scaffold ? 'agent_command_batch' : 'user_command',
+      actor: scaffold ? 'agent' : 'user',
+      summary: scaffold ? `从脚手架库添加 widget：${title}。${scaffold.agent_note || ''}` : '添加画布 HTML 组件。',
       target: {
         kind: 'html_component',
         workspace_id: workspace.id,
@@ -892,7 +1472,8 @@ export default function CanvasWorkspace() {
           title,
           shape_id: String(shapeId),
           section_id: section ? String(section.id) : null,
-          bounds,
+          bounds: finalBounds,
+          scaffold_id: scaffold?.id || null,
         },
       ],
       created_shape_ids: [String(shapeId)],
@@ -945,6 +1526,357 @@ export default function CanvasWorkspace() {
     } catch {
       markToolMessage('HTML 组件反馈保存失败。');
     }
+  }
+
+  function setCompletionToolMode(active) {
+    completionToolActive.current = active;
+    setCompletionToolReady(active);
+  }
+
+  function completionRequestDrawnEvent(editor, activeWorkspace, shapeId) {
+    if (!activeWorkspace) return null;
+    const shape = editor?.getShape?.(shapeId);
+    const bounds = getShapePageBounds(editor, shapeId);
+    const promptText = shape?.meta?.vd_prompt || shapeText(shape);
+    return {
+      type: 'completion_request_created',
+      actor: 'user',
+      summary: promptText ? `绘制补全矩形：${promptText}` : '绘制补全矩形。',
+      target: {
+        kind: 'completion_request',
+        workspace_id: activeWorkspace.id,
+        shape_id: String(shapeId),
+        bounds,
+      },
+      commands: [
+        {
+          op: 'add_completion_request',
+          prompt: promptText,
+          shape_id: String(shapeId),
+          bounds,
+        },
+      ],
+      created_shape_ids: [String(shapeId)],
+      mutated_shape_ids: [],
+    };
+  }
+
+  function completionRequestAnnotatedEvent(editor, activeWorkspace, shapeId) {
+    if (!activeWorkspace) return null;
+    const shape = editor?.getShape?.(shapeId);
+    const bounds = getShapePageBounds(editor, shapeId);
+    const promptText = shape?.meta?.vd_prompt || shapeText(shape);
+    return {
+      type: 'completion_request_annotated',
+      actor: 'user',
+      summary: promptText ? `更新补全矩形批注：${promptText}` : '清空补全矩形批注。',
+      target: {
+        kind: 'completion_request',
+        workspace_id: activeWorkspace.id,
+        shape_id: String(shapeId),
+        bounds,
+      },
+      commands: [
+        {
+          op: 'annotate_completion_request',
+          prompt: promptText,
+          shape_id: String(shapeId),
+          bounds,
+        },
+      ],
+      created_shape_ids: [],
+      mutated_shape_ids: [String(shapeId)],
+    };
+  }
+
+  function queueCanvasSnapshotSave(editor, eventFactory, delay = 800) {
+    if (eventFactory !== undefined) pendingCanvasEvent.current = eventFactory;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      const queuedEvent = pendingCanvasEvent.current;
+      pendingCanvasEvent.current = null;
+      const event = typeof queuedEvent === 'function'
+        ? queuedEvent(editor, workspace)
+        : queuedEvent;
+      saveSnapshot(editor, workspace, event || null);
+    }, delay);
+  }
+
+  function completionRequestPatch(shape, promptText) {
+    const hasPromptUpdate = typeof promptText === 'string';
+    const prompt = hasPromptUpdate ? promptText.trim() : shape?.meta?.vd_prompt || '';
+    const now = new Date().toISOString();
+    const props = {
+      ...(shape?.props || {}),
+      geo: 'rectangle',
+      color: 'violet',
+      fill: 'semi',
+      dash: 'solid',
+    };
+    if (hasPromptUpdate) {
+      props.richText = toRichText(prompt ? `补全请求\n\n${prompt}` : '');
+    }
+    return {
+      id: shape.id,
+      type: 'geo',
+      props,
+      meta: {
+        ...(shape.meta || {}),
+        vd_kind: 'completion_request',
+        vd_prompt: prompt,
+        vd_status: shape.meta?.vd_status || 'open',
+        vd_created_by: shape.meta?.vd_created_by || 'user',
+        vd_created_at: shape.meta?.vd_created_at || now,
+        ...(hasPromptUpdate ? { vd_updated_at: now } : {}),
+      },
+    };
+  }
+
+  function applyNewCompletionRequestShape(editor, shape) {
+    if (!editor || !shape || shape.type !== 'geo') return false;
+    const shapeId = shape.id;
+    setCompletionToolMode(false);
+    pendingCanvasEvent.current = (latestEditor, activeWorkspace) => (
+      completionRequestDrawnEvent(latestEditor, activeWorkspace, shapeId)
+    );
+    editor.updateShapes([completionRequestPatch(shape)]);
+    editor.setSelectedShapes?.([shapeId]);
+    refreshHtmlComponents(editor);
+    markToolMessage('已绘制补全矩形。双击它可添加批注。');
+    return true;
+  }
+
+  function processCompletionToolShapeChanges(editor) {
+    const shapes = currentPageShapes(editor);
+    const previousIds = knownShapeIds.current;
+    const nextIds = new Set(shapes.map((shape) => String(shape.id)));
+    const createdShapes = shapes.filter((shape) => !previousIds.has(String(shape.id)));
+    knownShapeIds.current = nextIds;
+    if (!completionToolActive.current || createdShapes.length === 0) return false;
+    const geoShape = createdShapes.find((shape) => shape.type === 'geo');
+    if (geoShape) return applyNewCompletionRequestShape(editor, geoShape);
+    setCompletionToolMode(false);
+    return false;
+  }
+
+  function completionRequestAtDoubleClick(editor, event) {
+    const point = typeof editor?.screenToPage === 'function'
+      ? editor.screenToPage({ x: event.clientX, y: event.clientY })
+      : null;
+    const selectedShape = readSelectedShapeIds(editor)
+      .map((shapeId) => editor?.getShape?.(shapeId))
+      .find((shape) => {
+        if (!isCompletionRequestShape(shape)) return false;
+        const bounds = getShapePageBounds(editor, shape.id);
+        return !point || boundsContainPoint(bounds, point, 8);
+      });
+    if (selectedShape) return selectedShape;
+    if (!point) return null;
+    const shapes = currentPageShapes(editor);
+    for (let index = shapes.length - 1; index >= 0; index -= 1) {
+      const shape = shapes[index];
+      if (!isCompletionRequestShape(shape)) continue;
+      const bounds = getShapePageBounds(editor, shape.id);
+      if (boundsContainPoint(bounds, point, 8)) return shape;
+    }
+    return null;
+  }
+
+  function openCompletionRequestAnnotationPrompt(editor, event, shape) {
+    if (!shape) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+    const nextPrompt = window.prompt('给这个补全矩形添加批注：', shape.meta?.vd_prompt || '');
+    if (nextPrompt === null) return;
+    const shapeId = shape.id;
+    pendingCanvasEvent.current = (latestEditor, activeWorkspace) => (
+      completionRequestAnnotatedEvent(latestEditor, activeWorkspace, shapeId)
+    );
+    editor.updateShapes([completionRequestPatch(shape, nextPrompt)]);
+    editor.setSelectedShapes?.([shapeId]);
+    refreshHtmlComponents(editor);
+    markToolMessage(nextPrompt.trim() ? '已更新补全矩形批注。' : '已清空补全矩形批注。');
+    queueCanvasSnapshotSave(editor, undefined, 120);
+  }
+
+  function handleCompletionRequestDoubleClick(editor, event) {
+    openCompletionRequestAnnotationPrompt(editor, event, completionRequestAtDoubleClick(editor, event));
+  }
+
+  function handleCompletionRequestPointerDown(editor, event) {
+    if (event.button && event.button !== 0) return;
+    const shape = completionRequestAtDoubleClick(editor, event);
+    if (!shape) {
+      completionClick.current = null;
+      return;
+    }
+    const now = Date.now();
+    const shapeId = String(shape.id);
+    const lastClick = completionClick.current;
+    completionClick.current = { shapeId, at: now };
+    if (lastClick?.shapeId === shapeId && now - lastClick.at < 480) {
+      completionClick.current = null;
+      openCompletionRequestAnnotationPrompt(editor, event, shape);
+    }
+  }
+
+  function handleSelectCompletionRequestTool() {
+    const editor = editorRef.current;
+    if (!editor || !workspace) return;
+    setScaffoldPickerOpen(false);
+    setCompletionToolMode(true);
+    try {
+      editor.run(() => {
+        editor.setStyleForNextShapes?.(GeoShapeGeoStyle, 'rectangle');
+        editor.setStyleForNextShapes?.(DefaultColorStyle, 'violet');
+        editor.setStyleForNextShapes?.(DefaultFillStyle, 'semi');
+        editor.setCurrentTool?.('geo');
+      });
+    } catch {
+      editor.setCurrentTool?.('geo');
+    }
+    markToolMessage('拖拽添加紫色补全矩形，完成后双击添加批注。');
+  }
+
+  function handleInsertScaffold(scaffold) {
+    const editor = editorRef.current;
+    if (!editor || !workspace || !scaffold) return;
+    setCompletionToolMode(false);
+    setScaffoldPickerOpen(false);
+    if (scaffold.type === 'widget') {
+      handleAddHtmlComponent(scaffold);
+      return;
+    }
+    const origin = nextOpenCanvasOrigin(editor);
+    const sectionSpec = scaffold.structure?.find((item) => item.kind === 'section');
+    const sectionBounds = sectionSpec?.bounds || { x: 0, y: 0, w: DEFAULT_SECTION_SIZE.w, h: DEFAULT_SECTION_SIZE.h };
+    const sectionId = createShapeId(`vd-scaffold-${scaffold.id}-${Date.now()}`);
+    const createdIds = [String(sectionId)];
+    const shapes = [
+      {
+        id: sectionId,
+        type: 'frame',
+        x: origin.x + Math.round(sectionBounds.x || 0),
+        y: origin.y + Math.round(sectionBounds.y || 0),
+        props: {
+          name: sectionSpec?.title || scaffold.title,
+          w: Math.round(sectionBounds.w || DEFAULT_SECTION_SIZE.w),
+          h: Math.round(sectionBounds.h || DEFAULT_SECTION_SIZE.h),
+          color: 'violet',
+        },
+        meta: {
+          vd_kind: 'section',
+          vd_created_by: 'agent',
+          vd_created_at: new Date().toISOString(),
+          vd_scaffold_id: scaffold.id,
+          vd_scaffold_title: scaffold.title,
+          vd_stage: scaffold.stage,
+        },
+      },
+    ];
+
+    const childIds = [];
+    if (scaffold.agent_note) {
+      const noteId = createShapeId(`vd-agent-note-${Date.now()}`);
+      childIds.push(noteId);
+      createdIds.push(String(noteId));
+      shapes.push(makeCanvasShape({
+        id: noteId,
+        x: origin.x + 40,
+        y: origin.y + 40,
+        w: 360,
+        h: 92,
+        text: `Agent 说明\n\n${scaffold.agent_note}`,
+        color: 'violet',
+        kind: 'agent_note',
+        scaffold,
+      }));
+    }
+
+    (scaffold.seed_content || []).forEach((item, index) => {
+      const bounds = item.bounds || { x: 48 + index * 240, y: 160, w: 220, h: 140 };
+      const shapeId = createShapeId(`vd-${scaffold.id}-${index}-${Date.now()}`);
+      childIds.push(shapeId);
+      createdIds.push(String(shapeId));
+      shapes.push(makeCanvasShape({
+        id: shapeId,
+        x: origin.x + Math.round(bounds.x || 0),
+        y: origin.y + Math.round(bounds.y || 0),
+        w: bounds.w || 220,
+        h: bounds.h || 140,
+        text: item.text,
+        color: item.color || (item.kind === 'sticky_note' ? 'yellow' : 'blue'),
+        kind: item.kind || 'canvas_node',
+        scaffold,
+      }));
+    });
+
+    (scaffold.next_actions || []).forEach((action, index) => {
+      const shapeId = createShapeId(`vd-next-action-${index}-${Date.now()}`);
+      childIds.push(shapeId);
+      createdIds.push(String(shapeId));
+      shapes.push(makeCanvasShape({
+        id: shapeId,
+        x: origin.x + 820,
+        y: origin.y + 96 + index * 88,
+        w: 240,
+        h: 64,
+        text: `下一步\n${action}`,
+        color: 'light-blue',
+        kind: 'next_action',
+        scaffold,
+      }));
+    });
+
+    editor.createShapes(shapes);
+    if (childIds.length > 0) editor.reparentShapes?.(childIds, sectionId);
+    editor.sendToBack?.([sectionId]);
+    const scaffoldReview = reviewAndRepairScaffoldLayout(editor, { sectionId, childIds, scaffold });
+    editor.setSelectedShapes?.([sectionId]);
+    editor.zoomToSelection?.();
+    refreshHtmlComponents(editor);
+    markToolMessage(scaffoldReview.status === 'passed'
+      ? `已添加脚手架：${scaffold.title}，布局检查通过。`
+      : `已添加脚手架：${scaffold.title}，布局仍需调整。`);
+    window.clearTimeout(saveTimer.current);
+    saveSnapshot(editor, workspace, {
+      type: 'agent_command_batch',
+      actor: 'agent',
+      summary: `添加协作脚手架：${scaffold.title}。${scaffold.agent_note || ''} 布局检查：${scaffoldReview.status}。`,
+      target: {
+        kind: 'canvas_workspace',
+        workspace_id: workspace.id,
+        scaffold_id: scaffold.id,
+      },
+      commands: [
+        {
+          op: 'add_collaboration_scaffold',
+          scaffold_id: scaffold.id,
+          title: scaffold.title,
+          stage: scaffold.stage,
+          includes_seed_content: (scaffold.seed_content || []).length > 0,
+          bounds: {
+            x: origin.x + Math.round(sectionBounds.x || 0),
+            y: origin.y + Math.round(sectionBounds.y || 0),
+            w: sectionBounds.w || DEFAULT_SECTION_SIZE.w,
+            h: sectionBounds.h || DEFAULT_SECTION_SIZE.h,
+          },
+        },
+        {
+          op: 'review_scaffold_layout',
+          scaffold_id: scaffold.id,
+          status: scaffoldReview.status,
+          checks: scaffoldReview.checks,
+          repairs: scaffoldReview.repairs,
+        },
+      ],
+      created_shape_ids: createdIds,
+      mutated_shape_ids: scaffoldReview.mutated_shape_ids || (scaffoldReview.repaired ? [String(sectionId)] : []),
+      meta: {
+        scaffold_review: scaffoldReview,
+      },
+    });
   }
 
   function handleCreateSection() {
@@ -1109,24 +2041,103 @@ export default function CanvasWorkspace() {
       seedWorkspace(editor);
     }
     refreshHtmlComponents(editor);
+    knownShapeIds.current = shapeIdSet(editor);
     mounted.current = true;
     const handleResize = () => refreshHtmlComponents(editor);
     window.addEventListener('resize', handleResize);
+    const container = editor.getContainer?.();
+    const handleDoubleClick = (event) => handleCompletionRequestDoubleClick(editor, event);
+    const handleCompletionPointerDown = (event) => handleCompletionRequestPointerDown(editor, event);
+    const handleToolbarPointerDown = (event) => {
+      if (!completionToolActive.current) return;
+      const target = event.target;
+      if (target?.closest?.('[data-testid="tools.vd-completion-rectangle"]')) return;
+      if (target?.closest?.('.tlui-main-toolbar')) setCompletionToolMode(false);
+    };
+    container?.addEventListener('dblclick', handleDoubleClick, true);
+    container?.addEventListener('pointerdown', handleCompletionPointerDown, true);
+    document.addEventListener('pointerdown', handleToolbarPointerDown, true);
     const unsubscribe = editor.store.listen(() => {
       if (!mounted.current) return;
+      processCompletionToolShapeChanges(editor);
       refreshHtmlComponents(editor);
-      window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => saveSnapshot(editor), 800);
+      queueCanvasSnapshotSave(editor);
     });
     return () => {
       window.clearTimeout(saveTimer.current);
       mounted.current = false;
       editorRef.current = null;
+      setCompletionToolMode(false);
+      completionClick.current = null;
+      knownShapeIds.current = new Set();
+      pendingCanvasEvent.current = null;
       setHtmlComponents([]);
       window.removeEventListener('resize', handleResize);
+      container?.removeEventListener('dblclick', handleDoubleClick, true);
+      container?.removeEventListener('pointerdown', handleCompletionPointerDown, true);
+      document.removeEventListener('pointerdown', handleToolbarPointerDown, true);
       unsubscribe?.();
     };
   }
+
+  const tldrawComponents = useMemo(() => {
+    function VisualDeliveryToolbar() {
+      return (
+        <DefaultToolbar>
+          <TldrawUiToolbarButton
+            type="tool"
+            title="补全矩形"
+            data-testid="tools.vd-completion-rectangle"
+            data-value="vd-completion-rectangle"
+            isActive={completionToolReady}
+            onClick={handleSelectCompletionRequestTool}
+          >
+            <TldrawUiButtonIcon icon="geo-rectangle" />
+          </TldrawUiToolbarButton>
+          <TldrawUiToolbarButton
+            type="tool"
+            title="脚手架"
+            data-testid="tools.vd-scaffold-library"
+            data-value="vd-scaffold-library"
+            isActive={scaffoldPickerOpen}
+            onClick={() => {
+              setCompletionToolMode(false);
+              setScaffoldPickerOpen((value) => !value);
+            }}
+          >
+            <TldrawUiButtonIcon icon="pack" />
+          </TldrawUiToolbarButton>
+          <DefaultToolbarContent />
+        </DefaultToolbar>
+      );
+    }
+
+    function VisualDeliveryNavigationPanel() {
+      return (
+        <>
+          <DefaultNavigationPanel />
+          <div style={STYLES.sourceHighlightPanel}>
+            <TldrawUiToolbar orientation="horizontal" label="来源高亮">
+              <TldrawUiToolbarButton
+                type="icon"
+                title={previewMode === 'highlight' ? '普通预览' : '来源高亮'}
+                data-testid="navigation.vd-source-highlight"
+                isActive={previewMode === 'highlight'}
+                onClick={() => setPreviewMode((mode) => (mode === 'highlight' ? 'normal' : 'highlight'))}
+              >
+                <TldrawUiButtonIcon small icon="highlight" />
+              </TldrawUiToolbarButton>
+            </TldrawUiToolbar>
+          </div>
+        </>
+      );
+    }
+
+    return {
+      Toolbar: VisualDeliveryToolbar,
+      NavigationPanel: VisualDeliveryNavigationPanel,
+    };
+  }, [completionToolReady, previewMode, scaffoldPickerOpen, workspace]);
 
   if (loading) {
     return <div style={STYLES.empty}>正在读取画布工作区...</div>;
@@ -1180,18 +2191,6 @@ export default function CanvasWorkspace() {
                 </div>
               </div>
               <div style={STYLES.headerActions}>
-                <button type="button" style={STYLES.toolButtonPrimary} onClick={handleCreateSection}>
-                  创建 Section
-                </button>
-                <button type="button" style={STYLES.toolButtonPrimary} onClick={handleAddHtmlComponent}>
-                  添加 HTML 组件
-                </button>
-                <button type="button" style={STYLES.toolButton} onClick={handleDuplicateSection}>
-                  复制 Section
-                </button>
-                <button type="button" style={STYLES.toolButton} onClick={handleOrganizeSection}>
-                  整理 Section
-                </button>
                 <button type="button" style={STYLES.ghostButton} onClick={() => setIsFullscreen((value) => !value)}>
                   {isFullscreen ? '退出全屏' : '全屏查看'}
                 </button>
@@ -1204,8 +2203,51 @@ export default function CanvasWorkspace() {
               <div style={STYLES.empty}>正在加载画布...</div>
             ) : (
               <div style={{ ...STYLES.canvasArea, ...(isFullscreen ? STYLES.canvasAreaFullscreen : {}) }}>
-                <Tldraw key={workspace.id} persistenceKey={`vd-canvas-workspace-${workspace.id}`} onMount={handleMount} />
+                <Tldraw
+                  key={workspace.id}
+                  persistenceKey={`vd-canvas-workspace-${workspace.id}`}
+                  components={tldrawComponents}
+                  onMount={handleMount}
+                />
+                {scaffoldPickerOpen && (
+                  <div
+                    style={STYLES.canvasToolPopover}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onWheel={(event) => event.stopPropagation()}
+                  >
+                    <div style={STYLES.canvasToolPopoverHeader}>
+                      <div style={STYLES.canvasToolPopoverTitle}>脚手架库</div>
+                      <div style={STYLES.canvasToolPopoverMeta}>Templates / Widgets / Project variants</div>
+                    </div>
+                    <div style={STYLES.canvasToolPopoverList}>
+                      {scaffolds.length === 0 ? (
+                        <div style={STYLES.empty}>还没有脚手架。</div>
+                      ) : scaffolds.map((scaffold) => (
+                        <button
+                          type="button"
+                          key={scaffold.id}
+                          style={STYLES.canvasScaffoldItem}
+                          onClick={() => handleInsertScaffold(scaffold)}
+                        >
+                          <div style={STYLES.itemMeta}>
+                            <span>{scaffold.type}</span>
+                            <span>{scaffold.stage}</span>
+                          </div>
+                          <div style={STYLES.canvasScaffoldTitle}>{scaffold.title}</div>
+                          <div style={STYLES.canvasScaffoldDescription}>{scaffold.description}</div>
+                          <span style={STYLES.canvasScaffoldAction}>添加到画布</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div style={STYLES.htmlOverlayLayer}>
+                  {authoredOverlays.filter((item) => item.kind === 'completion_request').map((item) => (
+                    <div key={`completion-${item.shapeId}`} style={STYLES.completionRequestOverlay(item)} />
+                  ))}
+                  {previewMode === 'highlight' && authoredOverlays.filter((item) => item.kind !== 'completion_request').map((item) => (
+                    <div key={item.shapeId} style={STYLES.highlightOverlay(item)} />
+                  ))}
                   {htmlComponents.map((component) => (
                     <CanvasHtmlComponentOverlay
                       key={component.shapeId}

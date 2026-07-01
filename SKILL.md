@@ -217,13 +217,33 @@ Canvas workspace behavior:
   regions, and agent-readable canvas state.
 - Agent can continuously add material, organize ideas, place options, explain
   decisions, and advance product/design thinking on the canvas.
+- Agent should add collaboration scaffold packages when useful, not just empty
+  templates. A scaffold package may include structure, seed content, interaction
+  slots, widgets, next actions, and a short agent note explaining why this
+  scaffold fits the current stage.
 - User can annotate, add material, select regions, and submit feedback in the
   same canvas space.
+- The canvas toolbar exposes a project-private scaffold library inside the
+  canvas workspace. Saved scaffolds are scoped to the current project and may
+  be inserted as templates or widgets without leaving the canvas.
 - Use `html_component` canvas nodes when the board needs a localized interactive
   widget: calculators, comparison dashboards, small charts, simulators,
   decision pickers, or custom review controls. The tldraw shape is the
   position/size placeholder; the actual HTML lives in `semantic_index.nodes[]`
   and renders as a sandboxed iframe overlay inside the canvas.
+- First-version widgets use transparent-background HTML iframes plus JSON-like
+  state/schema metadata in shape `meta` and `semantic_index.widget_instances`.
+  Widget sizing should follow the internal content contract with min/max bounds;
+  avoid fixed oversized white boxes.
+- After creating or modifying a scaffold, run a layout review before presenting
+  the canvas as done. The review should check overlap, section containment,
+  sticky note shape types, readable sizes, viewport focus, and semantic
+  consistency. Record the result in the canvas event and
+  `semantic_index.layout_reviews`.
+- Users can create a purple glowing rectangular `completion_request` with a
+  prompt. The agent should fulfill content inside that region, then mark or
+  remove the request after saving the result. Selection-based rewrite requests
+  remain ordinary canvas annotations in the first version.
 - Use tldraw frame shapes as Visual Delivery canvas sections. A section is a
   named container with a visible top-left title; shapes reparented under that
   frame are treated as the section's children in the semantic index.
@@ -248,7 +268,7 @@ Canvas workspace behavior:
   the report content layout.
 - Persist both the raw tldraw snapshot and a semantic index so the agent can
   understand sections, child relationships, shapes, selections, image alt text,
-  annotations, and workspace history later.
+  annotations, completion requests, semantic diffs, and workspace history later.
 
 Canvas node semantics borrowed from FigJam:
 
@@ -266,6 +286,9 @@ Canvas node semantics borrowed from FigJam:
   component `html`, `title`, `description`, `bounds`, and backing `shape_id` in
   `semantic_index.nodes[]`; use a tldraw placeholder shape with
   `meta.vd_kind = "html_component"` as the spatial anchor.
+- `completion_request`: use for the user's purple rectangular request to fill
+  or modify a bounded canvas region. Store `prompt`, `status`, `bounds`, and
+  `shape_id` in `semantic_index.completion_requests`.
 - `table`, `code_block`, and `label`: treat as first-class semantic kinds even
   when their current renderer falls back to grouped tldraw shapes. Do not model
   tables as unrelated rectangles or code as plain body text in the semantic
@@ -274,12 +297,23 @@ Canvas node semantics borrowed from FigJam:
 Canvas write prompt:
 
 ```text
-Before writing to a canvas workspace, read the workspace detail and inspect
-`semantic_index`. If the task is additive, choose the active related section or
-create a new named section. Plan content as an ordered command batch. After
-modifying the tldraw snapshot, persist both `snapshot` and `semantic_index` via
-`PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot`, and include an `event`
-with `commands`, `created_shape_ids`, `mutated_shape_ids`, and a short summary.
+Before writing to a canvas workspace, read
+`GET /api/canvas-workspaces/{WORKSPACE_ID}/context`. Inspect the current
+`snapshot`, `semantic_index`, `events`, `open_feedback`, and
+`open_completion_requests`. If the task is additive, choose the active related
+section or create a new named section. Plan content as an ordered command batch.
+After modifying the tldraw snapshot, persist both `snapshot` and
+`semantic_index` via `PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot`, and
+include an `event` with `commands`, `created_shape_ids`, `mutated_shape_ids`,
+and a short summary. The server records a semantic diff in the saved semantic
+index/event so future turns can see what changed.
+
+For scaffold work, include `review_scaffold_layout` in the command batch and
+mirror the review into `semantic_index.layout_reviews`. If a rendered browser or
+screenshot tool is available, inspect a screenshot of the newly focused scaffold
+before telling the user it is ready. If the screenshot shows overlap,
+unreadable text, clipped content, off-screen placement, or a semantic mismatch,
+adjust or reflow the scaffold and verify again.
 ```
 
 Feedback targets:

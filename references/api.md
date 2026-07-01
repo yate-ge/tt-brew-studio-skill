@@ -9,6 +9,7 @@
 - [Settings APIs](#settings-apis)
 - [Locale APIs](#locale-apis)
 - [Report APIs](#report-apis)
+- [Scaffold APIs](#scaffold-apis)
 - [Canvas Workspaces](#canvas-workspaces)
 - [Harness and Documents APIs](#harness-and-documents-apis)
 - [File View](#file-view)
@@ -477,6 +478,83 @@ Request:
 }
 ```
 
+## Scaffold APIs
+
+Scaffolds are project-private collaboration packages. A scaffold can be a
+template or widget and may include structure, seed content, interaction slots,
+next actions, and an agent note explaining why it fits the current stage.
+
+### `GET /api/scaffolds`
+
+Query params:
+
+- `type = template|widget`
+- `stage = exploration|definition|concept|creation|review|delivery`
+
+Response:
+
+```json
+{
+  "type": "project_scaffold_library",
+  "scope": "project",
+  "scaffolds": [
+    {
+      "id": "scaffold_inspiration_wall",
+      "type": "template",
+      "scope": "project",
+      "title": "灵感墙",
+      "stage": "exploration",
+      "description": "用于头脑风暴...",
+      "agent_note": "当前处于探索阶段...",
+      "structure": [],
+      "seed_content": [],
+      "interaction_slots": [],
+      "next_actions": []
+    }
+  ],
+  "total": 1
+}
+```
+
+### `POST /api/scaffolds`
+
+Creates or replaces a project-private scaffold.
+
+```json
+{
+  "type": "template",
+  "title": "需求定义板",
+  "stage": "definition",
+  "description": "string",
+  "agent_note": "string",
+  "structure": [],
+  "seed_content": [],
+  "interaction_slots": [],
+  "next_actions": []
+}
+```
+
+Widget scaffolds use `type = "widget"` and may include:
+
+```json
+{
+  "html": "<section style=\"background:transparent\">...</section>",
+  "state": {},
+  "input_schema": {},
+  "output_schema": {},
+  "sizing": {
+    "mode": "content_intrinsic",
+    "min_width": 260,
+    "max_width": 520,
+    "min_height": 140,
+    "max_height": 320
+  }
+}
+```
+
+First-version widgets use transparent-background HTML iframe rendering plus
+JSON-style state/schema metadata. They do not require a full widget SDK.
+
 ## Canvas Workspaces
 
 Canvas workspaces are project-scoped persistent collaboration spaces stored
@@ -497,6 +575,33 @@ related workspace exists.
     "prompt": "Current user request"
   },
   "force_new": false
+}
+```
+
+### `GET /api/canvas-workspaces/:id/context`
+
+Agent-facing inspect endpoint. Agents must read this before writing to a canvas.
+
+Response:
+
+```json
+{
+  "type": "canvas_workspace_agent_context",
+  "inspect_required_before_write": true,
+  "workspace": { "id": "cw_...", "title": "协作画布" },
+  "snapshot": { "document": { "store": {} }, "session": {} },
+  "semantic_index": {},
+  "events": [],
+  "open_feedback": [],
+  "open_completion_requests": [
+    {
+      "kind": "completion_request",
+      "shape_id": "shape:...",
+      "status": "open",
+      "prompt": "请在这里补充三种视觉方向",
+      "bounds": { "x": 0, "y": 0, "w": 640, "h": 360 }
+    }
+  ]
 }
 ```
 
@@ -545,9 +650,15 @@ records both section summaries and `contains` relationships.
       }
     ],
     "annotations": [],
+    "completion_requests": [],
+    "scaffold_instances": [],
+    "widget_instances": [],
+    "artifact_links": [],
+    "layout_reviews": [],
     "relationships": [
       { "type": "contains", "from": "shape:section", "to": "shape:node" }
-    ]
+    ],
+    "edit_summary": null
   }
 }
 ```
@@ -583,10 +694,34 @@ agent turns can inspect it together with the snapshot and semantic index.
         "text": "Use the self-built tldraw canvas as the core runtime.",
         "color": "yellow",
         "bounds": { "x": 64, "y": 120, "w": 240, "h": 240 }
+      },
+      {
+        "op": "review_scaffold_layout",
+        "scaffold_id": "scaffold_inspiration_wall",
+        "status": "passed",
+        "checks": {
+          "overlap_count": 0,
+          "out_of_section_count": 0,
+          "unreadable_count": 0,
+          "sticky_note_wrong_type_count": 0
+        },
+        "repairs": []
       }
     ],
     "created_shape_ids": ["shape:..."],
-    "mutated_shape_ids": []
+    "mutated_shape_ids": [],
+    "meta": {
+      "scaffold_review": {
+        "type": "scaffold_layout_review",
+        "status": "passed",
+        "checks": {
+          "overlap_count": 0,
+          "out_of_section_count": 0,
+          "unreadable_count": 0,
+          "sticky_note_wrong_type_count": 0
+        }
+      }
+    }
   }
 }
 ```
@@ -604,6 +739,9 @@ Recommended command operations:
 | `add_shape` | Add a diagram node, option, process step, or state |
 | `add_connector` | Link two nodes and mirror the relationship in `semantic_index.relationships` |
 | `add_html_component` | Add a sandboxed iframe-backed HTML widget anchored by a tldraw placeholder shape |
+| `add_collaboration_scaffold` | Add a reusable project scaffold with structure, seed content, slots, widgets, and next actions |
+| `review_scaffold_layout` | Record the scaffold layout review result and mirror it into `semantic_index.layout_reviews` |
+| `add_completion_request` | Add a purple bounded user request and mirror it into `semantic_index.completion_requests` |
 | `add_table` | Add row-column data as a first-class semantic object |
 | `add_code_block` | Add code content with language metadata |
 | `add_label` | Add a numbered or lettered callout marker |
@@ -618,6 +756,30 @@ snapshot with `meta.vd_kind = "html_component"`, `meta.vd_title`, and
 `meta.vd_html`. Mirror the same content into `semantic_index.nodes[]` with
 `kind = "html_component"`. The canvas page renders the HTML in a sandboxed
 iframe overlay aligned to the placeholder shape's bounds.
+
+When the server receives a new semantic index, it compares it with the previous
+index and stores a semantic diff in `semantic_index.edit_summary`. If the
+request includes an event, the same diff is mirrored into `event.semantic_diff`.
+
+Completion requests are represented as special canvas nodes and mirrored into
+`semantic_index.completion_requests[]`:
+
+```json
+{
+  "kind": "completion_request",
+  "shape_id": "shape:...",
+  "status": "open",
+  "prompt": "请在这里补全方案卡",
+  "bounds": { "x": 64, "y": 96, "w": 520, "h": 300 }
+}
+```
+
+Scaffold layout reviews are recorded after scaffold insertion or mutation. The
+review checks overlap, section containment, minimum readable sizes, and whether
+sticky-note content used real sticky-note shapes. Store the review both in the
+event command batch and in `semantic_index.layout_reviews[]`; if screenshot
+tooling is available, inspect the rendered scaffold and adjust before reporting
+completion.
 
 ### `POST /api/reports/:id/feedback/draft`
 
