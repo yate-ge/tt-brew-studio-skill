@@ -4,15 +4,41 @@ import { Tldraw, createShapeId, getSnapshot, loadSnapshot, toRichText } from 'tl
 import 'tldraw/tldraw.css';
 import {
   activateCanvasWorkspace,
+  addCanvasWorkspaceFeedback,
   createCanvasWorkspace,
   fetchCanvasWorkspace,
   fetchCanvasWorkspaces,
   updateCanvasWorkspaceSnapshot,
 } from '../lib/api';
+import { useDesignTokens } from '../hooks/useDesignTokens';
+import GeneratedContentFrame from '../components/GeneratedContentFrame';
 
 const SECTION_PADDING = 64;
 const DEFAULT_SECTION_SIZE = { w: 960, h: 640 };
 const SECTION_DUPLICATE_OFFSET = { x: 160, y: 120 };
+const DEFAULT_HTML_COMPONENT_SIZE = { w: 520, h: 340 };
+const HTML_COMPONENT_HEADER_HEIGHT = 34;
+const DEFAULT_CANVAS_HTML_COMPONENT = `<section style="padding:20px;font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033);background:#fff">
+  <style>
+    .vd-card{border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:10px;padding:16px;background:var(--vds-colors-surface,#f8fafc)}
+    .vd-title{margin:0 0 6px;font-size:18px;line-height:1.2}
+    .vd-copy{margin:0 0 14px;color:var(--vds-colors-text-secondary,#667085);font-size:13px;line-height:1.55}
+    .vd-actions{display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--vds-colors-border,#d8e0ea);padding-top:12px}
+    .vd-input{width:140px;padding:6px 9px;border:1px solid var(--vds-colors-border,#d0d5dd);border-radius:8px;font:inherit;font-size:13px}
+  </style>
+  <article class="vd-card">
+    <h3 class="vd-title">HTML 组件</h3>
+    <p class="vd-copy">这是一个画布内嵌 HTML 组件。Agent 可以把自定义控件、图表、模拟器或选择器写入这里。</p>
+    <div class="vd-actions">
+      <button data-vd-feedback-action="accept_component" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component">接受</button>
+      <button data-vd-feedback-action="adjust_component" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component">调整</button>
+      <form data-vd-feedback-action="other_comment" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component" style="display:inline-flex;gap:6px;margin:0">
+        <input class="vd-input" name="text" placeholder="Other...">
+        <button type="submit">提交</button>
+      </form>
+    </div>
+  </article>
+</section>`;
 
 function formatDate(value) {
   if (!value) return '未更新';
@@ -33,6 +59,10 @@ function readSelectedShapeIds(editor) {
 
 function isCanvasSectionShape(shape) {
   return shape?.type === 'frame';
+}
+
+function isHtmlComponentShape(shape) {
+  return shape?.meta?.vd_kind === 'html_component';
 }
 
 function getShapePageBounds(editor, shapeOrId) {
@@ -68,7 +98,10 @@ function collectPlainText(value) {
 
 function shapeText(shape) {
   const props = shape?.props || {};
+  const meta = shape?.meta || {};
   return [
+    meta.vd_title,
+    meta.vd_description,
     props.text,
     props.name,
     props.url,
@@ -94,6 +127,32 @@ function describeShape(shape, editor = null) {
   const childIds = isCanvasSectionShape(shape) && editor?.getSortedChildIdsForParent
     ? editor.getSortedChildIdsForParent(shape.id).map(String)
     : [];
+  const meta = shape.meta || {};
+  if (isHtmlComponentShape(shape)) {
+    return {
+      shape_id: String(shape.id),
+      kind: 'html_component',
+      type: 'html_component',
+      title: meta.vd_title || text.split(/\s+/).slice(0, 8).join(' ') || 'HTML 组件',
+      text,
+      html: typeof meta.vd_html === 'string' ? meta.vd_html : '',
+      description: meta.vd_description || '',
+      component_id: meta.vd_component_id || String(shape.id),
+      parent_id: shape.parentId ? String(shape.parentId) : null,
+      section_id: section ? String(section.id) : null,
+      section_title: section?.props?.name || null,
+      child_shape_ids: [],
+      child_count: 0,
+      bounds: editor ? getShapePageBounds(editor, shape.id) : null,
+      x: shape.x,
+      y: shape.y,
+      w: shape.props?.w,
+      h: shape.props?.h,
+      asset_id: null,
+      alt_text: '',
+      meta,
+    };
+  }
   return {
     shape_id: String(shape.id),
     kind: isCanvasSectionShape(shape) ? 'canvas_section' : 'canvas_node',
@@ -118,6 +177,48 @@ function describeShape(shape, editor = null) {
 
 function isImageLikeShape(shape) {
   return shape?.type === 'image' || shape?.type === 'video';
+}
+
+function htmlComponentPageBounds(editor, shape) {
+  const bounds = getShapePageBounds(editor, shape.id);
+  if (bounds) return bounds;
+  return {
+    x: shape.x || 0,
+    y: shape.y || 0,
+    w: shape.props?.w || DEFAULT_HTML_COMPONENT_SIZE.w,
+    h: shape.props?.h || DEFAULT_HTML_COMPONENT_SIZE.h,
+  };
+}
+
+function pagePointToViewport(editor, point) {
+  if (typeof editor?.pageToViewport === 'function') return editor.pageToViewport(point);
+  return editor?.pageToScreen?.(point) || point;
+}
+
+function htmlComponentOverlaysFromEditor(editor) {
+  const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+  return shapes.filter(isHtmlComponentShape).map((shape) => {
+    const meta = shape.meta || {};
+    const bounds = htmlComponentPageBounds(editor, shape);
+    const topLeft = pagePointToViewport(editor, { x: bounds.x, y: bounds.y });
+    const bottomRight = pagePointToViewport(editor, { x: bounds.x + bounds.w, y: bounds.y + bounds.h });
+    const w = Math.max(120, Math.abs(bottomRight.x - topLeft.x));
+    const h = Math.max(96, Math.abs(bottomRight.y - topLeft.y));
+    return {
+      shapeId: String(shape.id),
+      componentId: meta.vd_component_id || String(shape.id),
+      title: meta.vd_title || 'HTML 组件',
+      description: meta.vd_description || '',
+      html: typeof meta.vd_html === 'string' ? meta.vd_html : '',
+      x: Math.min(topLeft.x, bottomRight.x),
+      y: Math.min(topLeft.y, bottomRight.y),
+      w,
+      h,
+      pageBounds: bounds,
+      zoom: editor?.getZoomLevel?.() || 1,
+      interactive: meta.vd_interactive !== false,
+    };
+  });
 }
 
 function semanticIndexFromEditor(editor, workspace) {
@@ -310,6 +411,37 @@ function seedWorkspace(editor) {
   editor.zoomToFit?.();
 }
 
+function CanvasHtmlComponentOverlay({ component, tokens, onSelect, onFeedback }) {
+  const bodyHeight = Math.max(80, component.h - HTML_COMPONENT_HEADER_HEIGHT);
+  return (
+    <div
+      data-vd-canvas-html-component={component.componentId}
+      style={STYLES.htmlComponentOverlay(component)}
+    >
+      <div style={STYLES.htmlComponentChrome}>
+        <div style={STYLES.htmlComponentTitleWrap}>
+          <span style={STYLES.htmlComponentTitle}>{component.title}</span>
+          {component.description && <span style={STYLES.htmlComponentDescription}>{component.description}</span>}
+        </div>
+        <button type="button" style={STYLES.htmlComponentSelectButton} onClick={() => onSelect(component)}>
+          选中
+        </button>
+      </div>
+      <div style={STYLES.htmlComponentBody(bodyHeight, component.interactive)}>
+        <GeneratedContentFrame
+          html={component.html}
+          tokens={tokens}
+          onAnnotation={(item) => onFeedback(component, item)}
+          onInteractive={(item) => onFeedback(component, item)}
+          title={component.title}
+          defaultHeight={bodyHeight}
+          fitContainer
+        />
+      </div>
+    </div>
+  );
+}
+
 const STYLES = {
   page: {
     display: 'grid',
@@ -471,10 +603,84 @@ const STYLES = {
     flex: 1,
     minHeight: 560,
     background: 'var(--vd-page-bg)',
+    position: 'relative',
+    overflow: 'hidden',
   },
   canvasAreaFullscreen: {
     minHeight: 0,
   },
+  htmlOverlayLayer: {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    zIndex: 20,
+  },
+  htmlComponentOverlay: (component) => ({
+    position: 'absolute',
+    left: component.x,
+    top: component.y,
+    width: component.w,
+    height: component.h,
+    minWidth: 120,
+    minHeight: 96,
+    pointerEvents: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    border: '1px solid rgba(37, 99, 235, 0.42)',
+    borderRadius: 8,
+    overflow: 'hidden',
+    background: '#fff',
+    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.14)',
+  }),
+  htmlComponentChrome: {
+    height: HTML_COMPONENT_HEADER_HEIGHT,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    padding: '0 8px 0 10px',
+    borderBottom: '1px solid rgba(148, 163, 184, 0.32)',
+    background: 'rgba(248, 250, 252, 0.96)',
+  },
+  htmlComponentTitleWrap: {
+    minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  htmlComponentTitle: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: '#172033',
+    fontSize: 12,
+    fontWeight: 700,
+  },
+  htmlComponentDescription: {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: '#667085',
+    fontSize: 11,
+  },
+  htmlComponentSelectButton: {
+    border: '1px solid rgba(37, 99, 235, 0.32)',
+    borderRadius: 6,
+    background: '#fff',
+    color: '#2563eb',
+    fontSize: 11,
+    padding: '3px 7px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  htmlComponentBody: (height, interactive) => ({
+    height,
+    minHeight: 80,
+    background: '#fff',
+    pointerEvents: interactive ? 'auto' : 'none',
+  }),
   empty: {
     padding: 'var(--vd-space-6)',
     color: 'var(--vd-text-tertiary)',
@@ -485,6 +691,7 @@ const STYLES = {
 
 export default function CanvasWorkspace() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const tokens = useDesignTokens();
   const [workspaces, setWorkspaces] = useState([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(null);
   const [selectedId, setSelectedId] = useState(searchParams.get('workspace') || null);
@@ -494,9 +701,14 @@ export default function CanvasWorkspace() {
   const [savingState, setSavingState] = useState('已保存');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [toolMessage, setToolMessage] = useState('');
+  const [htmlComponents, setHtmlComponents] = useState([]);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const mounted = useRef(false);
+
+  function refreshHtmlComponents(editor = editorRef.current) {
+    setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
+  }
 
   async function loadList(preferredId = selectedId) {
     const data = await fetchCanvasWorkspaces();
@@ -524,6 +736,7 @@ export default function CanvasWorkspace() {
   useEffect(() => {
     if (!selectedId) {
       setWorkspace(null);
+      setHtmlComponents([]);
       return;
     }
     let canceled = false;
@@ -574,13 +787,14 @@ export default function CanvasWorkspace() {
     await loadList(saved.id);
   }
 
-  async function saveSnapshot(editor, nextWorkspace = workspace) {
+  async function saveSnapshot(editor, nextWorkspace = workspace, event = null) {
     if (!editor || !nextWorkspace) return;
     setSavingState('保存中...');
     try {
       const saved = await updateCanvasWorkspaceSnapshot(nextWorkspace.id, {
         snapshot: getSnapshot(editor.store),
         semantic_index: semanticIndexFromEditor(editor, nextWorkspace),
+        event,
       });
       setWorkspace(saved);
       setSavingState('已保存');
@@ -594,6 +808,143 @@ export default function CanvasWorkspace() {
 
   function markToolMessage(message) {
     setToolMessage(message);
+  }
+
+  function htmlComponentPlacementBounds(editor) {
+    const selectedIds = readSelectedShapeIds(editor);
+    const activeSection = getActiveSection(editor, selectedIds);
+    if (activeSection) {
+      const sectionBounds = getShapePageBounds(editor, activeSection.id);
+      if (sectionBounds) {
+        return {
+          section: activeSection,
+          bounds: {
+            x: sectionBounds.x + 64,
+            y: sectionBounds.y + 96,
+            w: DEFAULT_HTML_COMPONENT_SIZE.w,
+            h: DEFAULT_HTML_COMPONENT_SIZE.h,
+          },
+        };
+      }
+    }
+    const viewport = editor?.getViewportPageBounds?.();
+    return {
+      section: null,
+      bounds: {
+        x: viewport ? viewport.x + 120 : 0,
+        y: viewport ? viewport.y + 120 : 0,
+        w: DEFAULT_HTML_COMPONENT_SIZE.w,
+        h: DEFAULT_HTML_COMPONENT_SIZE.h,
+      },
+    };
+  }
+
+  function handleAddHtmlComponent() {
+    const editor = editorRef.current;
+    if (!editor || !workspace) return;
+    const { section, bounds } = htmlComponentPlacementBounds(editor);
+    const shapeId = createShapeId(`vd-html-component-${Date.now()}`);
+    const title = 'HTML 组件';
+    editor.createShapes([
+      {
+        id: shapeId,
+        type: 'geo',
+        x: Math.round(bounds.x),
+        y: Math.round(bounds.y),
+        props: {
+          geo: 'rectangle',
+          w: Math.round(bounds.w),
+          h: Math.round(bounds.h),
+          fill: 'solid',
+          color: 'light-blue',
+          richText: toRichText(`${title}\n\n内嵌 HTML 组件占位。真实组件由画布 overlay 渲染。`),
+        },
+        meta: {
+          vd_kind: 'html_component',
+          vd_title: title,
+          vd_description: '画布内嵌 HTML 组件',
+          vd_component_id: String(shapeId),
+          vd_html: DEFAULT_CANVAS_HTML_COMPONENT,
+          vd_created_by: 'user',
+          vd_created_at: new Date().toISOString(),
+          vd_interactive: true,
+        },
+      },
+    ]);
+    if (section) editor.reparentShapes?.([shapeId], section.id);
+    editor.setSelectedShapes?.([shapeId]);
+    refreshHtmlComponents(editor);
+    markToolMessage(section ? `已在 ${section.props?.name || 'Section'} 中添加 HTML 组件。` : '已添加 HTML 组件。');
+    window.clearTimeout(saveTimer.current);
+    saveSnapshot(editor, workspace, {
+      type: 'user_command',
+      actor: 'user',
+      summary: '添加画布 HTML 组件。',
+      target: {
+        kind: 'html_component',
+        workspace_id: workspace.id,
+        shape_id: String(shapeId),
+        section_id: section ? String(section.id) : null,
+      },
+      commands: [
+        {
+          op: 'add_html_component',
+          title,
+          shape_id: String(shapeId),
+          section_id: section ? String(section.id) : null,
+          bounds,
+        },
+      ],
+      created_shape_ids: [String(shapeId)],
+      mutated_shape_ids: [],
+    });
+  }
+
+  function handleSelectHtmlComponent(component) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.setSelectedShapes?.([component.shapeId]);
+    markToolMessage(`已选中 HTML 组件：${component.title}`);
+  }
+
+  async function handleHtmlComponentFeedback(component, item) {
+    if (!workspace) return;
+    const payload = item?.payload || {};
+    const target = item?.target || {};
+    const action = payload.action || 'html_component_feedback';
+    const label = target.anchor || payload.label || component.title;
+    const note = payload.text || payload.fields?.text || payload.selected_text || '';
+    const content = item?.kind === 'annotation'
+      ? `HTML 组件批注：${note || label}`
+      : `HTML 组件反馈：${label} / ${action}`;
+    try {
+      const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
+        kind: 'html_component',
+        content,
+        author: 'user',
+        target: {
+          kind: 'html_component',
+          workspace_id: workspace.id,
+          shape_id: component.shapeId,
+          component_id: component.componentId,
+          component_title: component.title,
+          bounds: component.pageBounds,
+          action,
+          payload,
+        },
+      });
+      setWorkspace((current) => {
+        if (!current || current.id !== workspace.id) return current;
+        return {
+          ...current,
+          feedback: [...(current.feedback || []), feedback],
+          pending_feedback_count: (current.pending_feedback_count || 0) + 1,
+        };
+      });
+      markToolMessage('已记录 HTML 组件反馈。');
+    } catch {
+      markToolMessage('HTML 组件反馈保存失败。');
+    }
   }
 
   function handleCreateSection() {
@@ -757,9 +1108,13 @@ export default function CanvasWorkspace() {
     } else {
       seedWorkspace(editor);
     }
+    refreshHtmlComponents(editor);
     mounted.current = true;
+    const handleResize = () => refreshHtmlComponents(editor);
+    window.addEventListener('resize', handleResize);
     const unsubscribe = editor.store.listen(() => {
       if (!mounted.current) return;
+      refreshHtmlComponents(editor);
       window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => saveSnapshot(editor), 800);
     });
@@ -767,6 +1122,8 @@ export default function CanvasWorkspace() {
       window.clearTimeout(saveTimer.current);
       mounted.current = false;
       editorRef.current = null;
+      setHtmlComponents([]);
+      window.removeEventListener('resize', handleResize);
       unsubscribe?.();
     };
   }
@@ -826,6 +1183,9 @@ export default function CanvasWorkspace() {
                 <button type="button" style={STYLES.toolButtonPrimary} onClick={handleCreateSection}>
                   创建 Section
                 </button>
+                <button type="button" style={STYLES.toolButtonPrimary} onClick={handleAddHtmlComponent}>
+                  添加 HTML 组件
+                </button>
                 <button type="button" style={STYLES.toolButton} onClick={handleDuplicateSection}>
                   复制 Section
                 </button>
@@ -845,6 +1205,17 @@ export default function CanvasWorkspace() {
             ) : (
               <div style={{ ...STYLES.canvasArea, ...(isFullscreen ? STYLES.canvasAreaFullscreen : {}) }}>
                 <Tldraw key={workspace.id} persistenceKey={`vd-canvas-workspace-${workspace.id}`} onMount={handleMount} />
+                <div style={STYLES.htmlOverlayLayer}>
+                  {htmlComponents.map((component) => (
+                    <CanvasHtmlComponentOverlay
+                      key={component.shapeId}
+                      component={component}
+                      tokens={tokens}
+                      onSelect={handleSelectHtmlComponent}
+                      onFeedback={handleHtmlComponentFeedback}
+                    />
+                  ))}
+                </div>
               </div>
             )}
           </>

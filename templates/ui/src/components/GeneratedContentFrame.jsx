@@ -28,7 +28,18 @@ function injectIntoHTML(html, tokens, lang) {
   return `<!DOCTYPE html><html><head>${tokenStyle}</head><body>${html}${bridgeScript}</body></html>`;
 }
 
-export default function GeneratedContentFrame({ html, tokens, onAnnotation, onInteractive, onReplaceDraft, drafts }) {
+export default function GeneratedContentFrame({
+  html,
+  tokens,
+  onAnnotation,
+  onInteractive,
+  onReplaceDraft,
+  drafts,
+  title = 'Delivery content',
+  defaultHeight = 420,
+  minHeight,
+  fitContainer = false,
+}) {
   const iframeRef = useRef(null);
   const [height, setHeight] = useState(0);
   const prevDraftsRef = useRef([]);
@@ -117,8 +128,12 @@ export default function GeneratedContentFrame({ html, tokens, onAnnotation, onIn
       ref={iframeRef}
       srcDoc={srcdoc}
       sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-      style={{ ...styles.iframe, height: height > 0 ? `${height}px` : 'auto' }}
-      title="Delivery content"
+      style={{
+        ...styles.iframe,
+        height: fitContainer ? '100%' : (height > 0 ? `${height}px` : `${defaultHeight}px`),
+        minHeight: fitContainer ? undefined : (minHeight || undefined),
+      }}
+      title={title}
     />
   );
 }

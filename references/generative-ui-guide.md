@@ -2,6 +2,13 @@
 
 Rules for generating delivery page HTML. The agent produces a **complete, self-contained HTML page** rendered inside a sandboxed iframe.
 
+For a localized widget on a canvas workspace, use a canvas
+`html_component` node instead of creating a document report artifact. The
+component's tldraw shape is only the position/size anchor; the HTML lives in
+`semantic_index.nodes[]` and renders as a sandboxed iframe overlay on the
+canvas. Canvas HTML components may be either a complete HTML document or a bare
+fragment.
+
 ## HTML Structure
 
 Every generated page must be a full HTML document:
@@ -33,6 +40,18 @@ Every generated page must be a full HTML document:
   </script>
 </body>
 </html>
+```
+
+For canvas `html_component` nodes, a fragment is acceptable:
+
+```json
+{
+  "kind": "html_component",
+  "shape_id": "shape:html-component",
+  "title": "Risk slider",
+  "bounds": { "x": 64, "y": 96, "w": 520, "h": 340 },
+  "html": "<section style=\"padding:20px;font-family:system-ui,sans-serif\"><h3>Risk slider</h3><button data-vd-feedback-action=\"accept_risk\" data-vd-feedback-label=\"Risk slider\" data-vd-feedback-item-id=\"risk-slider\">Accept current risk</button></section>"
+}
 ```
 
 ## Core Philosophy

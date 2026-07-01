@@ -219,6 +219,11 @@ Canvas workspace behavior:
   decisions, and advance product/design thinking on the canvas.
 - User can annotate, add material, select regions, and submit feedback in the
   same canvas space.
+- Use `html_component` canvas nodes when the board needs a localized interactive
+  widget: calculators, comparison dashboards, small charts, simulators,
+  decision pickers, or custom review controls. The tldraw shape is the
+  position/size placeholder; the actual HTML lives in `semantic_index.nodes[]`
+  and renders as a sandboxed iframe overlay inside the canvas.
 - Use tldraw frame shapes as Visual Delivery canvas sections. A section is a
   named container with a visible top-left title; shapes reparented under that
   frame are treated as the section's children in the semantic index.
@@ -257,6 +262,10 @@ Canvas node semantics borrowed from FigJam:
 - `shape`: use for diagram nodes, states, options, and process steps.
 - `connector`: use for spatial relationships; record `from`, `to`, direction,
   line type, and optional label in `semantic_index.relationships`.
+- `html_component`: use for embedded interactive HTML widgets. Store the
+  component `html`, `title`, `description`, `bounds`, and backing `shape_id` in
+  `semantic_index.nodes[]`; use a tldraw placeholder shape with
+  `meta.vd_kind = "html_component"` as the spatial anchor.
 - `table`, `code_block`, and `label`: treat as first-class semantic kinds even
   when their current renderer falls back to grouped tldraw shapes. Do not model
   tables as unrelated rectangles or code as plain body text in the semantic
@@ -480,16 +489,20 @@ When the agent adds canvas content, ensure the content is meaningful:
   represented as `contains` relationships in `semantic_index.relationships`
 - preserve image alt text on image nodes and mirror it into
   `semantic_index.assets[].alt_text`
+- for embedded HTML widgets, create a tldraw placeholder shape with
+  `meta.vd_kind = "html_component"` and mirror `html`, `title`, `description`,
+  `shape_id`, and `bounds` into `semantic_index.nodes[]`
 - connect canvas nodes and selected regions to feedback targets when possible
 
 Canvas feedback targets should identify the reviewed object:
 
 ```json
 {
-  "kind": "canvas_workspace|canvas_section|canvas_node|canvas_selection",
+  "kind": "canvas_workspace|canvas_section|canvas_node|html_component|canvas_selection",
   "workspace_id": "cw_...",
   "section_id": "shape:...",
   "node_id": "agent-zone",
+  "component_id": "shape:html-component",
   "shape_ids": ["shape:..."],
   "bounds": { "x": 0, "y": 0, "w": 320, "h": 180 }
 }

@@ -524,7 +524,18 @@ records both section summaries and `contains` relationships.
         "bounds": { "x": 0, "y": 0, "w": 960, "h": 640 }
       }
     ],
-    "nodes": [],
+    "nodes": [
+      {
+        "kind": "html_component",
+        "shape_id": "shape:html-component",
+        "component_id": "shape:html-component",
+        "title": "Priority picker",
+        "description": "Interactive widget rendered on the canvas.",
+        "html": "<section><button data-vd-feedback-action=\"prioritize\" data-vd-feedback-label=\"Priority A\" data-vd-feedback-item-id=\"priority-a\">Prioritize A</button></section>",
+        "section_id": "shape:section",
+        "bounds": { "x": 64, "y": 96, "w": 520, "h": 340 }
+      }
+    ],
     "assets": [
       {
         "shape_id": "shape:image",
@@ -592,6 +603,7 @@ Recommended command operations:
 | `add_sticky` | Add one participant idea, feedback item, concern, or decision |
 | `add_shape` | Add a diagram node, option, process step, or state |
 | `add_connector` | Link two nodes and mirror the relationship in `semantic_index.relationships` |
+| `add_html_component` | Add a sandboxed iframe-backed HTML widget anchored by a tldraw placeholder shape |
 | `add_table` | Add row-column data as a first-class semantic object |
 | `add_code_block` | Add code content with language metadata |
 | `add_label` | Add a numbered or lettered callout marker |
@@ -600,6 +612,12 @@ Recommended command operations:
 
 The event command batch is an audit trail, not a separate source of truth. The
 same request must still persist the actual `snapshot` and `semantic_index`.
+
+For `add_html_component`, create or update a tldraw placeholder shape in the
+snapshot with `meta.vd_kind = "html_component"`, `meta.vd_title`, and
+`meta.vd_html`. Mirror the same content into `semantic_index.nodes[]` with
+`kind = "html_component"`. The canvas page renders the HTML in a sandboxed
+iframe overlay aligned to the placeholder shape's bounds.
 
 ### `POST /api/reports/:id/feedback/draft`
 
@@ -659,6 +677,19 @@ Common V4 template feedback targets:
     "node_id": "agent-zone",
     "section_id": "shape:section",
     "shape_id": "shape:..."
+  }
+}
+```
+
+```json
+{
+  "target": {
+    "kind": "html_component",
+    "workspace_id": "cw_...",
+    "shape_id": "shape:html-component",
+    "component_id": "shape:html-component",
+    "component_title": "Priority picker",
+    "bounds": { "x": 64, "y": 96, "w": 520, "h": 340 }
   }
 }
 ```

@@ -81,10 +81,11 @@ Core shape:
     "nodes": [
       {
         "shape_id": "shape:...",
-        "kind": "canvas_node",
-        "type": "geo|text|image|arrow",
+        "kind": "canvas_node|html_component",
+        "type": "geo|text|image|arrow|html_component",
         "title": "节点标题",
         "text": "agent-readable text",
+        "html": "<section>Optional HTML when kind is html_component</section>",
         "parent_id": "shape:section",
         "section_id": "shape:section",
         "section_title": "Agent 工作区",
@@ -234,6 +235,13 @@ fields: `text`, `shape`, `bounds`. Optional fields: `section_id`, `color`,
 `to_shape_id`. Optional fields: `label`, `direction`, `line_type`,
 `relationship_type`. Mirror the relation into `semantic_index.relationships`.
 
+`add_html_component`
+: Add an interactive HTML widget to the canvas. Required fields: `html`,
+`bounds`. Optional fields: `title`, `description`, `section_id`,
+`component_id`. Create a tldraw placeholder shape with
+`meta.vd_kind = "html_component"` and mirror the same `html` into
+`semantic_index.nodes[]` as `kind = "html_component"`.
+
 `add_table`
 : Add row/column data as a first-class semantic object. Required fields:
 `columns`, `rows`, `bounds`. Current renderers may fall back to grouped tldraw
@@ -267,6 +275,7 @@ Use semantic kinds consistently even when the renderer uses a tldraw fallback:
 | `sticky_note` | `note` or styled `geo` | One participant idea or feedback item |
 | `shape` | `geo` | Diagram nodes, states, options, decisions |
 | `connector` | `arrow` | Flow, dependency, evidence, reference link |
+| `html_component` | tldraw placeholder + iframe overlay | Interactive HTML widget anchored on the canvas |
 | `table` | grouped shapes / future table renderer | Row-column data |
 | `code_block` | styled text / future code renderer | Code with language metadata |
 | `label` | ellipse/geo | Short callout marker |
