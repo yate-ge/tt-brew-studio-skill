@@ -4,8 +4,12 @@ import {
   DefaultNavigationPanel,
   DefaultToolbar,
   DefaultToolbarContent,
+  ArrowShapeArrowheadEndStyle,
+  ArrowShapeKindStyle,
   DefaultColorStyle,
+  DefaultDashStyle,
   DefaultFillStyle,
+  DefaultSizeStyle,
   GeoShapeGeoStyle,
   FrameShapeUtil,
   Tldraw,
@@ -35,28 +39,47 @@ const DEFAULT_SECTION_SIZE = { w: 960, h: 640 };
 const SECTION_DUPLICATE_OFFSET = { x: 160, y: 120 };
 const DEFAULT_HTML_COMPONENT_SIZE = { w: 360, h: 220 };
 const DEFAULT_COMPLETION_SIZE = { w: 520, h: 300 };
-const DEFAULT_CANVAS_HTML_COMPONENT = `<section style="display:inline-block;padding:12px;font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033);background:transparent">
+const ANNOTATION_PURPLE = '#7c3aed';
+// Default widget doubles as the canonical Tier 3 exemplar: a fragment (no
+// html/head/body) that uses window.vd for state + structured output. The
+// runtime owns transparency, intrinsic sizing, and scaling.
+const DEFAULT_CANVAS_HTML_COMPONENT = `<section class="vd-card" style="display:inline-flex;flex-direction:column;gap:10px;min-width:260px;max-width:480px;border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:10px;padding:14px 16px;background:rgba(255,255,255,.9);box-shadow:0 8px 24px rgba(15,23,42,.10);font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033)">
   <style>
-    html,body{margin:0;background:transparent}
-    .vd-card{display:inline-flex;flex-direction:column;gap:10px;min-width:260px;max-width:520px;border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:8px;padding:14px;background:rgba(255,255,255,.86);box-shadow:0 8px 24px rgba(15,23,42,.12)}
-    .vd-title{margin:0;font-size:16px;line-height:1.25}
-    .vd-copy{margin:0 0 14px;color:var(--vds-colors-text-secondary,#667085);font-size:13px;line-height:1.55}
-    .vd-actions{display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid var(--vds-colors-border,#d8e0ea);padding-top:12px}
-    .vd-input{width:140px;padding:6px 9px;border:1px solid var(--vds-colors-border,#d0d5dd);border-radius:8px;font:inherit;font-size:13px}
-    button{min-height:32px;border-radius:7px}
+    .vd-card h3{margin:0;font-size:15px;line-height:1.3}
+    .vd-card p{margin:0;font-size:12px;color:var(--vds-colors-text-secondary,#667085);line-height:1.5}
+    .vd-card button{font:inherit;font-size:13px;border:1px solid var(--vds-colors-border,#d0d5dd);border-radius:8px;background:var(--vds-colors-surface,#f8fafc);padding:6px 12px;cursor:pointer}
+    .vd-card button:hover{border-color:var(--vds-colors-primary,#3b82f6);color:var(--vds-colors-primary,#3b82f6)}
   </style>
-  <article class="vd-card">
-    <h3 class="vd-title">Widget</h3>
-    <p class="vd-copy">透明背景、内容自适应的画布内嵌 widget。</p>
-    <div class="vd-actions">
-      <button data-vd-feedback-action="accept_component" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component">接受</button>
-      <button data-vd-feedback-action="adjust_component" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component">调整</button>
-      <form data-vd-feedback-action="other_comment" data-vd-feedback-label="HTML 组件" data-vd-feedback-item-id="canvas-html-component" style="display:inline-flex;gap:6px;margin:0">
-        <input class="vd-input" name="text" placeholder="Other...">
-        <button type="submit">提交</button>
-      </form>
-    </div>
-  </article>
+  <h3>快速立场检查</h3>
+  <p>点击表达你的立场，计数会保留在画布上。</p>
+  <div id="stance-row" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  <script>
+    (function(){
+      var STANCES = ['同意', '保留', '反对'];
+      function render(){
+        var s = vd.state.get();
+        var tallies = s.tallies || {};
+        var row = document.getElementById('stance-row');
+        row.innerHTML = '';
+        STANCES.forEach(function(label){
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = label + '（' + (tallies[label] || 0) + '）';
+          btn.addEventListener('click', function(){
+            var cur = vd.state.get();
+            var next = Object.assign({}, cur.tallies || {});
+            next[label] = (next[label] || 0) + 1;
+            vd.state.set({ tallies: next });
+            vd.emit('stance_cast', { stance: label, tallies: next });
+            render();
+          });
+          row.appendChild(btn);
+        });
+      }
+      vd.state.subscribe(render);
+      render();
+    })();
+  </script>
 </section>`;
 
 function formatDate(value) {
@@ -86,6 +109,17 @@ function isHtmlComponentShape(shape) {
 
 function isCompletionRequestShape(shape) {
   return shape?.meta?.vd_kind === 'completion_request';
+}
+
+function isAnnotationArrowShape(shape) {
+  return shape?.type === 'arrow' && shape?.meta?.vd_kind === 'annotation_arrow';
+}
+
+function targetKindForShape(shape) {
+  if (isCanvasSectionShape(shape)) return 'canvas_section';
+  if (isHtmlComponentShape(shape)) return 'html_component';
+  if (isImageLikeShape(shape)) return 'canvas_asset';
+  return 'canvas_node';
 }
 
 function shapeAuthorship(shape) {
@@ -288,8 +322,14 @@ function htmlComponentOverlaysFromEditor(editor) {
     const bounds = htmlComponentPageBounds(editor, shape);
     const topLeft = pagePointToViewport(editor, { x: bounds.x, y: bounds.y });
     const bottomRight = pagePointToViewport(editor, { x: bounds.x + bounds.w, y: bounds.y + bounds.h });
-    const w = Math.max(120, Math.abs(bottomRight.x - topLeft.x));
-    const h = Math.max(96, Math.abs(bottomRight.y - topLeft.y));
+    const w = Math.max(24, Math.abs(bottomRight.x - topLeft.x));
+    const h = Math.max(16, Math.abs(bottomRight.y - topLeft.y));
+    const intrinsic = meta.vd_intrinsic_size
+      && Number.isFinite(meta.vd_intrinsic_size.w)
+      && Number.isFinite(meta.vd_intrinsic_size.h)
+      && meta.vd_intrinsic_size.w > 0
+      ? meta.vd_intrinsic_size
+      : { w: bounds.w, h: bounds.h };
     return {
       shapeId: String(shape.id),
       componentId: meta.vd_component_id || String(shape.id),
@@ -303,6 +343,17 @@ function htmlComponentOverlaysFromEditor(editor) {
       pageBounds: bounds,
       zoom: editor?.getZoomLevel?.() || 1,
       interactive: meta.vd_interactive !== false,
+      // Widget contract fields (references/canvas-widgets.md)
+      state: meta.vd_widget_state || {},
+      stateVersion: meta.vd_state_version || 0,
+      stateActor: meta.vd_state_actor || 'user',
+      outputSchema: meta.vd_output_schema || {},
+      sizing: meta.vd_sizing || {},
+      widgetVersion: meta.vd_widget_version || 1,
+      intrinsic,
+      // Uniform scale: shape resize × canvas zoom in one factor, so widget
+      // content scales like an image instead of reflowing.
+      scale: intrinsic.w > 0 ? w / intrinsic.w : 1,
     };
   });
 }
@@ -330,6 +381,87 @@ function authoredOverlaysFromEditor(editor) {
     .filter(Boolean);
 }
 
+function annotationsFromShapes(editor, shapes) {
+  const annotations = [];
+  for (const shape of shapes) {
+    const bounds = getShapePageBounds(editor, shape.id);
+    const shapeId = String(shape.id);
+    const target = {
+      kind: targetKindForShape(shape),
+      shape_ids: [shapeId],
+      shape_id: shapeId,
+      bounds,
+    };
+    const stored = Array.isArray(shape.meta?.vd_annotations) ? shape.meta.vd_annotations : [];
+    stored.forEach((item) => {
+      if (!item?.id) return;
+      annotations.push({
+        ...item,
+        shape_id: shapeId,
+        target: item.target || target,
+        bounds: item.bounds || bounds,
+      });
+    });
+    if (isAnnotationArrowShape(shape)) {
+      annotations.push({
+        id: shape.meta?.vd_annotation_id || shapeId,
+        type: 'annotation_arrow',
+        kind: 'annotation_arrow',
+        shape_id: shapeId,
+        target,
+        text: shapeText(shape),
+        status: shape.meta?.vd_annotation_status || 'open',
+        flagged: true,
+        created_by: shape.meta?.vd_created_by || 'user',
+        created_at: shape.meta?.vd_created_at || null,
+        bounds,
+      });
+    }
+  }
+  return annotations;
+}
+
+function selectionAnnotationTargetFromEditor(editor) {
+  const shapeIds = readSelectedShapeIds(editor);
+  if (shapeIds.length === 0) return null;
+  const shapes = shapeIds.map((shapeId) => editor?.getShape?.(shapeId)).filter(Boolean);
+  if (shapes.length === 0) return null;
+  const bounds = compactBounds(editor?.getSelectionPageBounds?.())
+    || unionBounds(shapes.map((shape) => getShapePageBounds(editor, shape.id)));
+  if (!bounds) return null;
+  const topLeft = pagePointToViewport(editor, { x: bounds.x, y: bounds.y });
+  const bottomRight = pagePointToViewport(editor, { x: bounds.x + bounds.w, y: bounds.y + bounds.h });
+  const x = Math.min(topLeft.x, bottomRight.x);
+  const y = Math.min(topLeft.y, bottomRight.y);
+  const w = Math.max(12, Math.abs(bottomRight.x - topLeft.x));
+  const h = Math.max(12, Math.abs(bottomRight.y - topLeft.y));
+  const container = editor?.getContainer?.();
+  const containerW = container?.clientWidth || 1200;
+  const containerH = container?.clientHeight || 720;
+  const popoverW = 320;
+  const popoverH = 170;
+  const left = Math.max(12, Math.min(x, containerW - popoverW - 12));
+  const below = y + h + 12;
+  const top = below + popoverH < containerH ? below : Math.max(12, y - popoverH - 12);
+  const descriptions = shapes.map((shape) => describeShape(shape, editor));
+  const primary = descriptions[0];
+  const annotationCount = shapes.reduce((count, shape) => (
+    count + (Array.isArray(shape.meta?.vd_annotations) ? shape.meta.vd_annotations.length : 0)
+  ), 0);
+  return {
+    key: shapeIds.map(String).sort().join('|'),
+    shapeIds: shapeIds.map(String),
+    shapes,
+    descriptions,
+    title: shapes.length > 1 ? `${shapes.length} 个对象` : (primary?.title || '画布对象'),
+    kind: shapes.length > 1 ? 'canvas_selection' : targetKindForShape(shapes[0]),
+    pageBounds: bounds,
+    overlay: { x, y, w, h },
+    popover: { x: left, y: top },
+    annotationCount,
+  };
+}
+
 function semanticIndexFromEditor(editor, workspace) {
   const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
   const sections = shapes.filter(isCanvasSectionShape).map((shape) => describeShape(shape, editor));
@@ -352,6 +484,13 @@ function semanticIndexFromEditor(editor, workspace) {
     const review = shape?.meta?.vd_layout_review;
     if (review?.id) layoutReviewsById.set(review.id, review);
   });
+  const annotationsById = new Map();
+  (workspace?.semantic_index?.annotations || []).forEach((annotation) => {
+    if (annotation?.id) annotationsById.set(annotation.id, annotation);
+  });
+  annotationsFromShapes(editor, shapes).forEach((annotation) => {
+    if (annotation?.id) annotationsById.set(annotation.id, annotation);
+  });
   return {
     version: 2,
     workspace_id: workspace?.id,
@@ -365,7 +504,7 @@ function semanticIndexFromEditor(editor, workspace) {
       section_id: nearestCanvasSection(editor, shape)?.id || null,
       bounds: getShapePageBounds(editor, shape.id),
     })),
-    annotations: workspace?.semantic_index?.annotations || [],
+    annotations: Array.from(annotationsById.values()).slice(-200),
     completion_requests: nodes.filter((node) => node.kind === 'completion_request'),
     scaffold_instances: nodes
       .filter((node) => node.meta?.vd_scaffold_id)
@@ -379,13 +518,21 @@ function semanticIndexFromEditor(editor, workspace) {
     widget_instances: nodes
       .filter((node) => node.kind === 'html_component')
       .map((node) => ({
+        id: node.meta?.vd_ir_id || node.component_id,
         shape_id: node.shape_id,
         component_id: node.component_id,
         title: node.title,
+        section_id: node.section_id,
+        template_id: node.meta?.vd_widget_template || null,
+        version: node.meta?.vd_widget_version || 1,
         state: node.meta?.vd_widget_state || {},
+        state_version: node.meta?.vd_state_version || 0,
+        state_actor: node.meta?.vd_state_actor || 'user',
         input_schema: node.meta?.vd_input_schema || {},
         output_schema: node.meta?.vd_output_schema || {},
         sizing: node.meta?.vd_sizing || null,
+        intrinsic_size: node.meta?.vd_intrinsic_size || null,
+        review: node.meta?.vd_widget_review || null,
         bounds: node.bounds,
       })),
     artifact_links: nodes
@@ -902,8 +1049,20 @@ function seedWorkspace(editor) {
   editor.zoomToFit?.();
 }
 
-function CanvasHtmlComponentOverlay({ component, tokens, onSelect, onFeedback }) {
-  const bodyHeight = Math.max(80, component.h);
+function CanvasHtmlComponentOverlay({
+  component,
+  tokens,
+  workspaceId,
+  onSelect,
+  onFeedback,
+  onWidgetStatePatch,
+  onWidgetEvent,
+  onWidgetSize,
+  onWidgetReady,
+  onWidgetError,
+  onWidgetDrag,
+  onBorderDragStart,
+}) {
   return (
     <div
       data-vd-canvas-html-component={component.componentId}
@@ -912,19 +1071,98 @@ function CanvasHtmlComponentOverlay({ component, tokens, onSelect, onFeedback })
       <button type="button" style={STYLES.htmlComponentSelectButton} onClick={() => onSelect(component)}>
         选中
       </button>
-      <div style={STYLES.htmlComponentBody(bodyHeight, component.interactive)}>
+      <div style={STYLES.htmlComponentBody(component.h, component.interactive)}>
         <GeneratedContentFrame
           html={component.html}
           tokens={tokens}
           onAnnotation={(item) => onFeedback(component, item)}
           onInteractive={(item) => onFeedback(component, item)}
           title={component.title}
-          defaultHeight={bodyHeight}
-          fitContainer
           transparent
+          widget={{
+            componentId: component.componentId,
+            shapeId: component.shapeId,
+            workspaceId,
+            title: component.title,
+            state: component.state,
+            stateActor: component.stateActor,
+            stateVersion: component.stateVersion,
+            outputSchema: component.outputSchema,
+            sizing: component.sizing,
+          }}
+          intrinsicSize={component.intrinsic}
+          scale={component.scale}
+          onWidgetStatePatch={(data) => onWidgetStatePatch(component, data)}
+          onWidgetEvent={(data) => onWidgetEvent(component, data)}
+          onWidgetSize={(size) => onWidgetSize(component, size)}
+          onWidgetReady={() => onWidgetReady(component)}
+          onWidgetError={(err) => onWidgetError(component, err)}
+          onWidgetDrag={(data) => onWidgetDrag(component, data)}
         />
       </div>
+      {['top', 'right', 'bottom', 'left'].map((edge) => (
+        <div
+          key={edge}
+          data-vd-widget-drag-edge={edge}
+          style={STYLES.widgetDragEdge(edge)}
+          onPointerDown={(e) => onBorderDragStart(component, e)}
+        />
+      ))}
     </div>
+  );
+}
+
+function CanvasAnnotationPopover({
+  target,
+  text,
+  flagged,
+  submitting,
+  onTextChange,
+  onFlagChange,
+  onSubmit,
+  onClose,
+}) {
+  if (!target) return null;
+  return (
+    <>
+      <div style={STYLES.annotationTargetOverlay(target.overlay)} />
+      <form
+        style={STYLES.annotationPopover(target.popover)}
+        onSubmit={onSubmit}
+        onPointerDown={(event) => event.stopPropagation()}
+        onWheel={(event) => event.stopPropagation()}
+      >
+        <div style={STYLES.annotationPopoverHeader}>
+          <div style={STYLES.annotationPopoverTitle}>{target.title}</div>
+          <button type="button" style={STYLES.annotationCloseButton} onClick={onClose} aria-label="关闭标注">
+            ×
+          </button>
+        </div>
+        <textarea
+          style={STYLES.annotationTextarea}
+          value={text}
+          onChange={(event) => onTextChange(event.target.value)}
+          placeholder="添加标注..."
+          rows={3}
+        />
+        <div style={STYLES.annotationFooter}>
+          <label style={STYLES.annotationFlagLabel}>
+            <input
+              type="checkbox"
+              checked={flagged}
+              onChange={(event) => onFlagChange(event.target.checked)}
+            />
+            提交标志
+          </label>
+          <button type="submit" style={STYLES.annotationSubmitButton} disabled={submitting || !text.trim()}>
+            {submitting ? '提交中...' : '提交'}
+          </button>
+        </div>
+        {target.annotationCount > 0 && (
+          <div style={STYLES.annotationMeta}>{target.annotationCount} 条已有标注</div>
+        )}
+      </form>
+    </>
   );
 }
 
@@ -1166,9 +1404,9 @@ const STYLES = {
     top: component.y,
     width: component.w,
     height: component.h,
-    minWidth: 120,
-    minHeight: 96,
-    pointerEvents: 'auto',
+    // The container itself never intercepts: interaction goes to the iframe
+    // body, select/drag go to the border ring and background drag messages.
+    pointerEvents: 'none',
     background: 'transparent',
   }),
   htmlComponentSelectButton: {
@@ -1183,13 +1421,123 @@ const STYLES = {
     padding: '3px 7px',
     cursor: 'pointer',
     whiteSpace: 'nowrap',
+    pointerEvents: 'auto',
   },
+  // Grab ring: four thin strips along the widget edges that select + drag the
+  // anchor shape. The dotted placeholder border drawn by tldraw sits right
+  // under them and doubles as the visual affordance.
+  widgetDragEdge: (edge) => ({
+    position: 'absolute',
+    ...(edge === 'top' ? { top: 0, left: 0, right: 0, height: 6 } : {}),
+    ...(edge === 'bottom' ? { bottom: 0, left: 0, right: 0, height: 6 } : {}),
+    ...(edge === 'left' ? { top: 6, bottom: 6, left: 0, width: 6 } : {}),
+    ...(edge === 'right' ? { top: 6, bottom: 6, right: 0, width: 6 } : {}),
+    pointerEvents: 'auto',
+    cursor: 'grab',
+    touchAction: 'none',
+    zIndex: 2,
+  }),
   htmlComponentBody: (height, interactive) => ({
     height,
-    minHeight: 80,
     background: 'transparent',
+    overflow: 'hidden',
     pointerEvents: interactive ? 'auto' : 'none',
   }),
+  annotationTargetOverlay: (box) => ({
+    position: 'absolute',
+    left: box.x,
+    top: box.y,
+    width: box.w,
+    height: box.h,
+    border: '2px solid rgba(124, 58, 237, .86)',
+    background: 'rgba(124, 58, 237, .08)',
+    boxShadow: '0 0 0 4px rgba(124, 58, 237, .12)',
+    borderRadius: 8,
+    pointerEvents: 'none',
+  }),
+  annotationPopover: (point) => ({
+    position: 'absolute',
+    left: point.x,
+    top: point.y,
+    zIndex: 360,
+    width: 320,
+    padding: 10,
+    border: '1px solid rgba(124, 58, 237, .34)',
+    borderRadius: 8,
+    background: 'rgba(255, 255, 255, .98)',
+    boxShadow: '0 16px 34px rgba(76, 29, 149, .18)',
+    pointerEvents: 'auto',
+  }),
+  annotationPopoverHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  annotationPopoverTitle: {
+    color: ANNOTATION_PURPLE,
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  annotationCloseButton: {
+    width: 24,
+    height: 24,
+    border: 'none',
+    borderRadius: 6,
+    background: 'rgba(124, 58, 237, .08)',
+    color: ANNOTATION_PURPLE,
+    cursor: 'pointer',
+    lineHeight: 1,
+  },
+  annotationTextarea: {
+    width: '100%',
+    minHeight: 74,
+    resize: 'vertical',
+    boxSizing: 'border-box',
+    border: '1px solid rgba(124, 58, 237, .28)',
+    borderRadius: 7,
+    padding: '8px 9px',
+    color: 'var(--vd-text-primary)',
+    background: 'rgba(250, 245, 255, .68)',
+    fontFamily: 'var(--vd-font-family)',
+    fontSize: 'var(--vd-font-size-sm)',
+    outlineColor: ANNOTATION_PURPLE,
+  },
+  annotationFooter: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 8,
+  },
+  annotationFlagLabel: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    color: 'var(--vd-text-secondary)',
+    fontSize: 'var(--vd-font-size-xs)',
+    userSelect: 'none',
+  },
+  annotationSubmitButton: {
+    minHeight: 30,
+    border: '1px solid rgba(124, 58, 237, .42)',
+    borderRadius: 7,
+    background: ANNOTATION_PURPLE,
+    color: '#fff',
+    padding: '5px 12px',
+    cursor: 'pointer',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+  },
+  annotationMeta: {
+    marginTop: 7,
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+  },
   highlightOverlay: (item) => {
     const isAgent = item.author === 'agent';
     const isMixed = item.author === 'mixed';
@@ -1246,16 +1594,53 @@ export default function CanvasWorkspace() {
   const [scaffolds, setScaffolds] = useState([]);
   const [scaffoldPickerOpen, setScaffoldPickerOpen] = useState(false);
   const [completionToolReady, setCompletionToolReady] = useState(false);
+  const [annotationArrowToolReady, setAnnotationArrowToolReady] = useState(false);
+  const [selectedAnnotationTarget, setSelectedAnnotationTarget] = useState(null);
+  const [annotationDraft, setAnnotationDraft] = useState('');
+  const [annotationFlagged, setAnnotationFlagged] = useState(true);
+  const [annotationSubmitting, setAnnotationSubmitting] = useState(false);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const mounted = useRef(false);
   const completionToolActive = useRef(false);
+  const annotationArrowToolActive = useRef(false);
   const knownShapeIds = useRef(new Set());
   const pendingCanvasEvent = useRef(null);
+  const widgetAspectGuard = useRef(false);
+  const widgetDragRef = useRef(null);
 
   function refreshHtmlComponents(editor = editorRef.current) {
     setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
     setAuthoredOverlays(editor ? authoredOverlaysFromEditor(editor) : []);
+    setSelectedAnnotationTarget(editor ? selectionAnnotationTargetFromEditor(editor) : null);
+  }
+
+  useEffect(() => {
+    setAnnotationDraft('');
+    setAnnotationFlagged(true);
+  }, [selectedAnnotationTarget?.key]);
+
+  // Widgets scale proportionally: after any edit, snap the anchor shape's
+  // height back to the intrinsic aspect ratio (width is the driving axis).
+  function enforceWidgetAspect(editor) {
+    if (!editor || widgetAspectGuard.current) return;
+    const updates = [];
+    for (const shape of currentPageShapes(editor)) {
+      if (!isHtmlComponentShape(shape)) continue;
+      const intrinsic = shape.meta?.vd_intrinsic_size;
+      if (!intrinsic || !(intrinsic.w > 0) || !(intrinsic.h > 0)) continue;
+      const expectedH = Math.round((shape.props?.w || 0) * (intrinsic.h / intrinsic.w));
+      if (expectedH > 0 && Math.abs((shape.props?.h || 0) - expectedH) > 2) {
+        updates.push({ id: shape.id, type: shape.type, props: { ...shape.props, h: expectedH } });
+      }
+    }
+    if (updates.length === 0) return;
+    widgetAspectGuard.current = true;
+    try {
+      editor.updateShapes?.(updates);
+    } finally {
+      widgetAspectGuard.current = false;
+    }
   }
 
   async function loadList(preferredId = selectedId) {
@@ -1488,6 +1873,11 @@ export default function CanvasWorkspace() {
           min_height: 120,
           max_height: 640,
         },
+        vd_widget_template: scaffold?.template_id || null,
+        vd_widget_version: 1,
+        vd_state_version: 0,
+        vd_state_actor: scaffold ? 'agent' : 'user',
+        vd_intrinsic_size: { w: Math.round(bounds.w), h: Math.round(bounds.h) },
         ...(scaffold ? {
           vd_scaffold_id: scaffold.id,
           vd_scaffold_title: scaffold.title,
@@ -1625,9 +2015,324 @@ export default function CanvasWorkspace() {
     }
   }
 
+  /* ---------------- Widget runtime handlers (canvas-widgets.md) -------- */
+
+  function updateWidgetShapeMeta(component, updater) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const shape = editor.getShape?.(component.shapeId);
+    if (!shape) return;
+    const nextMeta = updater({ ...(shape.meta || {}) });
+    if (!nextMeta) return;
+    editor.updateShapes?.([{ id: shape.id, type: shape.type, meta: nextMeta }]);
+  }
+
+  // User interaction inside the widget wrote state: merge into shape meta.
+  // The store listener then persists it through the normal snapshot save.
+  function handleWidgetStatePatch(component, data) {
+    updateWidgetShapeMeta(component, (meta) => ({
+      ...meta,
+      vd_widget_state: data?.replace
+        ? (data?.state || {})
+        : { ...(meta.vd_widget_state || {}), ...(data?.patch || {}) },
+      vd_state_version: (meta.vd_state_version || 0) + 1,
+      vd_state_actor: 'user',
+      vd_updated_at: new Date().toISOString(),
+    }));
+  }
+
+  // Explicit vd.emit output: routed to the feedback pool (continuous state
+  // changes stay in the snapshot only).
+  async function handleWidgetEvent(component, data) {
+    if (!workspace) return;
+    const payload = data?.payload || {};
+    const eventType = payload.event_type || 'widget_event';
+    try {
+      const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
+        kind: 'widget_output',
+        content: `Widget 输出：${component.title} / ${eventType}`,
+        author: 'user',
+        target: {
+          kind: 'html_component',
+          workspace_id: workspace.id,
+          shape_id: component.shapeId,
+          component_id: component.componentId,
+          component_title: component.title,
+          bounds: component.pageBounds,
+          action: eventType,
+          payload,
+          schema_valid: data?.valid !== false,
+        },
+      });
+      setWorkspace((current) => {
+        if (!current || current.id !== workspace.id) return current;
+        return {
+          ...current,
+          feedback: [...(current.feedback || []), feedback],
+          pending_feedback_count: (current.pending_feedback_count || 0) + 1,
+        };
+      });
+      markToolMessage(`Widget 输出已记录：${eventType}`);
+    } catch {
+      markToolMessage('Widget 输出保存失败。');
+    }
+  }
+
+  // Widget reported its intrinsic content size: resize the anchor shape to
+  // intrinsic × current scale so the box hugs the content without reflow.
+  function handleWidgetSize(component, size) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const shape = editor.getShape?.(component.shapeId);
+    if (!shape) return;
+    const intrinsicW = Math.max(40, Math.round(size?.w || 0));
+    const intrinsicH = Math.max(24, Math.round(size?.h || 0));
+    if (!intrinsicW || !intrinsicH) return;
+    const meta = shape.meta || {};
+    const prevIntrinsic = meta.vd_intrinsic_size && meta.vd_intrinsic_size.w > 0
+      ? meta.vd_intrinsic_size
+      : { w: shape.props?.w || intrinsicW, h: shape.props?.h || intrinsicH };
+    const scale = prevIntrinsic.w > 0 ? (shape.props?.w || prevIntrinsic.w) / prevIntrinsic.w : 1;
+    const nextW = Math.round(Math.min(1600, Math.max(48, intrinsicW * scale)));
+    const nextH = Math.round(Math.min(1200, Math.max(32, intrinsicH * scale)));
+    const sameIntrinsic = Math.abs((prevIntrinsic.w || 0) - intrinsicW) < 2
+      && Math.abs((prevIntrinsic.h || 0) - intrinsicH) < 2;
+    const sameShape = Math.abs((shape.props?.w || 0) - nextW) < 2
+      && Math.abs((shape.props?.h || 0) - nextH) < 2;
+    if (sameIntrinsic && sameShape) return;
+    editor.updateShapes?.([{
+      id: shape.id,
+      type: shape.type,
+      props: { ...shape.props, w: nextW, h: nextH },
+      meta: { ...meta, vd_intrinsic_size: { w: intrinsicW, h: intrinsicH } },
+    }]);
+  }
+
+  function recordWidgetMountReview(component, patch) {
+    updateWidgetShapeMeta(component, (meta) => {
+      const prev = meta.vd_widget_review || {};
+      const checks = { ...(prev.checks || {}), ...(patch.checks || {}) };
+      // A successful mount never upgrades a needs_adjustment static review.
+      const status = patch.status === 'passed' && prev.status === 'needs_adjustment'
+        ? 'needs_adjustment'
+        : (patch.status || prev.status || 'passed');
+      return {
+        ...meta,
+        vd_widget_review: {
+          id: prev.id || `widget_review_${Date.now()}`,
+          type: 'widget_review',
+          ...prev,
+          ...patch,
+          status,
+          checks,
+          reviewed_at: new Date().toISOString(),
+        },
+      };
+    });
+  }
+
+  function handleWidgetReady(component) {
+    recordWidgetMountReview(component, {
+      status: 'passed',
+      checks: { mounted: true },
+    });
+  }
+
+  function handleWidgetError(component, err) {
+    recordWidgetMountReview(component, {
+      status: 'needs_adjustment',
+      checks: { script_error: true },
+      last_error: String(err?.message || 'widget script error'),
+    });
+    markToolMessage(`Widget 脚本报错：${component.title}`);
+  }
+
+  // Background drag reported by the widget bridge (deltas in iframe CSS px).
+  // Page delta = iframe delta × (shape.w / intrinsic.w) — zoom-independent.
+  function handleWidgetDrag(component, data) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (data?.phase === 'start') {
+      const shape = editor.getShape?.(component.shapeId);
+      if (!shape) return;
+      widgetDragRef.current = { shapeId: component.shapeId, x: shape.x, y: shape.y, moved: false };
+      editor.setSelectedShapes?.([component.shapeId]);
+      return;
+    }
+    const drag = widgetDragRef.current;
+    if (!drag || drag.shapeId !== component.shapeId) return;
+    if (data?.phase === 'move') {
+      const shape = editor.getShape?.(component.shapeId);
+      if (!shape) return;
+      const factor = component.intrinsic?.w > 0
+        ? (shape.props?.w || component.intrinsic.w) / component.intrinsic.w
+        : 1;
+      const dx = (data.dx || 0) * factor;
+      const dy = (data.dy || 0) * factor;
+      if (Math.abs(dx) + Math.abs(dy) > 1) drag.moved = true;
+      editor.updateShapes?.([{
+        id: shape.id,
+        type: shape.type,
+        x: Math.round(drag.x + dx),
+        y: Math.round(drag.y + dy),
+      }]);
+      return;
+    }
+    if (data?.phase === 'end') {
+      if (!drag.moved) markToolMessage(`已选中 widget：${component.title}`);
+      widgetDragRef.current = null;
+    }
+  }
+
+  // Border-ring drag handled on the host side with pointer capture.
+  function handleWidgetBorderDragStart(component, e) {
+    const editor = editorRef.current;
+    if (!editor || e.button !== 0) return;
+    const shape = editor.getShape?.(component.shapeId);
+    if (!shape) return;
+    e.preventDefault();
+    e.stopPropagation();
+    editor.setSelectedShapes?.([component.shapeId]);
+    const zoom = editor.getZoomLevel?.() || 1;
+    const start = { cx: e.clientX, cy: e.clientY, x: shape.x, y: shape.y };
+    const el = e.currentTarget;
+    let moved = false;
+    try { el.setPointerCapture?.(e.pointerId); } catch { /* synthetic events */ }
+    const onMove = (ev) => {
+      const dx = (ev.clientX - start.cx) / zoom;
+      const dy = (ev.clientY - start.cy) / zoom;
+      if (Math.abs(dx) + Math.abs(dy) > 0.5) moved = true;
+      editor.updateShapes?.([{
+        id: shape.id,
+        type: shape.type,
+        x: Math.round(start.x + dx),
+        y: Math.round(start.y + dy),
+      }]);
+    };
+    const onUp = (ev) => {
+      try { el.releasePointerCapture?.(ev.pointerId); } catch { /* noop */ }
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      if (!moved) markToolMessage(`已选中 widget：${component.title}`);
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+  }
+
   function setCompletionToolMode(active) {
     completionToolActive.current = active;
     setCompletionToolReady(active);
+  }
+
+  function setAnnotationArrowToolMode(active) {
+    annotationArrowToolActive.current = active;
+    setAnnotationArrowToolReady(active);
+  }
+
+  function annotationFeedbackTarget(target, feedbackId = null) {
+    if (!target) return null;
+    return {
+      kind: target.kind,
+      workspace_id: workspace?.id || null,
+      shape_ids: target.shapeIds,
+      shape_id: target.shapeIds.length === 1 ? target.shapeIds[0] : null,
+      bounds: target.pageBounds,
+      annotation_feedback_id: feedbackId,
+      flagged: annotationFlagged,
+    };
+  }
+
+  async function handleSubmitSelectionAnnotation(event) {
+    event.preventDefault();
+    const editor = editorRef.current;
+    const target = selectedAnnotationTarget;
+    const note = annotationDraft.trim();
+    if (!editor || !workspace || !target || !note) return;
+    setAnnotationSubmitting(true);
+    const now = new Date().toISOString();
+    const annotationId = `canvas_annotation_${Date.now()}`;
+    try {
+      const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
+        kind: 'canvas_annotation',
+        content: `画布标注：${note}`,
+        author: 'user',
+        target: annotationFeedbackTarget(target),
+        meta: {
+          annotation_id: annotationId,
+          flagged: annotationFlagged,
+          shape_ids: target.shapeIds,
+        },
+      });
+      const annotation = {
+        id: annotationId,
+        type: 'selection_annotation',
+        kind: 'canvas_annotation',
+        text: note,
+        flagged: annotationFlagged,
+        status: annotationFlagged ? 'tracked' : 'submitted',
+        submitted: true,
+        feedback_id: feedback.id,
+        created_by: 'user',
+        created_at: now,
+        target: annotationFeedbackTarget(target, feedback.id),
+        bounds: target.pageBounds,
+      };
+      const patches = target.shapeIds
+        .map((shapeId) => editor.getShape?.(shapeId))
+        .filter(Boolean)
+        .map((shape) => ({
+          id: shape.id,
+          type: shape.type,
+          meta: {
+            ...(shape.meta || {}),
+            vd_annotations: [
+              ...(Array.isArray(shape.meta?.vd_annotations) ? shape.meta.vd_annotations : []),
+              annotation,
+            ].slice(-50),
+            vd_last_annotated_at: now,
+            vd_last_edited_by: 'user',
+          },
+        }));
+      if (patches.length > 0) editor.updateShapes?.(patches);
+      setWorkspace((current) => {
+        if (!current || current.id !== workspace.id) return current;
+        return {
+          ...current,
+          feedback: [...(current.feedback || []), feedback],
+          pending_feedback_count: (current.pending_feedback_count || 0) + 1,
+        };
+      });
+      setAnnotationDraft('');
+      setAnnotationFlagged(true);
+      markToolMessage(annotationFlagged ? '已提交画布标注，并标记为待处理。' : '已提交画布标注。');
+      window.clearTimeout(saveTimer.current);
+      await saveSnapshot(editor, workspace, {
+        type: 'canvas_annotation_submitted',
+        actor: 'user',
+        summary: `提交画布标注：${note}`,
+        target: annotation.target,
+        commands: [{
+          op: 'add_canvas_annotation',
+          annotation_id: annotationId,
+          feedback_id: feedback.id,
+          shape_ids: target.shapeIds,
+          flagged: annotationFlagged,
+        }],
+        created_shape_ids: [],
+        mutated_shape_ids: target.shapeIds,
+        meta: { annotation },
+      });
+    } catch {
+      markToolMessage('画布标注提交失败。');
+    } finally {
+      setAnnotationSubmitting(false);
+    }
+  }
+
+  function closeSelectionAnnotation() {
+    const editor = editorRef.current;
+    editor?.setSelectedShapes?.([]);
+    setSelectedAnnotationTarget(null);
   }
 
   function completionRequestDrawnEvent(editor, activeWorkspace, shapeId) {
@@ -1708,16 +2413,88 @@ export default function CanvasWorkspace() {
     return true;
   }
 
-  function processCompletionToolShapeChanges(editor) {
+  function annotationArrowDrawnEvent(editor, activeWorkspace, shapeId) {
+    if (!activeWorkspace) return null;
+    const shape = editor?.getShape?.(shapeId);
+    const bounds = getShapePageBounds(editor, shapeId);
+    return {
+      type: 'annotation_arrow_created',
+      actor: 'user',
+      summary: '绘制标注箭头。',
+      target: {
+        kind: 'canvas_annotation',
+        workspace_id: activeWorkspace.id,
+        shape_id: String(shapeId),
+        bounds,
+      },
+      commands: [
+        {
+          op: 'add_annotation_arrow',
+          shape_id: String(shapeId),
+          bounds,
+          text: shapeText(shape),
+        },
+      ],
+      created_shape_ids: [String(shapeId)],
+      mutated_shape_ids: [],
+    };
+  }
+
+  function annotationArrowPatch(shape) {
+    const now = new Date().toISOString();
+    return {
+      id: shape.id,
+      type: 'arrow',
+      props: {
+        ...(shape?.props || {}),
+        color: 'violet',
+        labelColor: 'violet',
+        dash: 'solid',
+        size: 'l',
+        arrowheadEnd: shape?.props?.arrowheadEnd || 'arrow',
+      },
+      meta: {
+        ...(shape.meta || {}),
+        vd_kind: 'annotation_arrow',
+        vd_annotation_id: shape.meta?.vd_annotation_id || `annotation_arrow_${Date.now()}`,
+        vd_annotation_status: shape.meta?.vd_annotation_status || 'open',
+        vd_created_by: shape.meta?.vd_created_by || 'user',
+        vd_created_at: shape.meta?.vd_created_at || now,
+      },
+    };
+  }
+
+  function applyNewAnnotationArrowShape(editor, shape) {
+    if (!editor || !shape || shape.type !== 'arrow') return false;
+    const shapeId = shape.id;
+    setAnnotationArrowToolMode(false);
+    pendingCanvasEvent.current = (latestEditor, activeWorkspace) => (
+      annotationArrowDrawnEvent(latestEditor, activeWorkspace, shapeId)
+    );
+    editor.updateShapes([annotationArrowPatch(shape)]);
+    editor.setSelectedShapes?.([shapeId]);
+    refreshHtmlComponents(editor);
+    markToolMessage('已绘制紫色标注箭头，可选中后补充标注。');
+    return true;
+  }
+
+  function processCanvasToolShapeChanges(editor) {
     const shapes = currentPageShapes(editor);
     const previousIds = knownShapeIds.current;
     const nextIds = new Set(shapes.map((shape) => String(shape.id)));
     const createdShapes = shapes.filter((shape) => !previousIds.has(String(shape.id)));
     knownShapeIds.current = nextIds;
-    if (!completionToolActive.current || createdShapes.length === 0) return false;
-    const geoShape = createdShapes.find((shape) => shape.type === 'geo');
-    if (geoShape) return applyNewCompletionRequestShape(editor, geoShape);
-    setCompletionToolMode(false);
+    if (createdShapes.length === 0) return false;
+    if (completionToolActive.current) {
+      const geoShape = createdShapes.find((shape) => shape.type === 'geo');
+      if (geoShape) return applyNewCompletionRequestShape(editor, geoShape);
+      setCompletionToolMode(false);
+    }
+    if (annotationArrowToolActive.current) {
+      const arrowShape = createdShapes.find((shape) => shape.type === 'arrow');
+      if (arrowShape) return applyNewAnnotationArrowShape(editor, arrowShape);
+      setAnnotationArrowToolMode(false);
+    }
     return false;
   }
 
@@ -1725,6 +2502,7 @@ export default function CanvasWorkspace() {
     const editor = editorRef.current;
     if (!editor || !workspace) return;
     setScaffoldPickerOpen(false);
+    setAnnotationArrowToolMode(false);
     setCompletionToolMode(true);
     try {
       editor.run(() => {
@@ -1737,6 +2515,27 @@ export default function CanvasWorkspace() {
       editor.setCurrentTool?.('geo');
     }
     markToolMessage('拖拽添加紫色补全矩形，完成后双击添加批注。');
+  }
+
+  function handleSelectAnnotationArrowTool() {
+    const editor = editorRef.current;
+    if (!editor || !workspace) return;
+    setScaffoldPickerOpen(false);
+    setCompletionToolMode(false);
+    setAnnotationArrowToolMode(true);
+    try {
+      editor.run(() => {
+        editor.setStyleForNextShapes?.(DefaultColorStyle, 'violet');
+        editor.setStyleForNextShapes?.(DefaultDashStyle, 'solid');
+        editor.setStyleForNextShapes?.(DefaultSizeStyle, 'l');
+        editor.setStyleForNextShapes?.(ArrowShapeKindStyle, 'arc');
+        editor.setStyleForNextShapes?.(ArrowShapeArrowheadEndStyle, 'arrow');
+        editor.setCurrentTool?.('arrow');
+      });
+    } catch {
+      editor.setCurrentTool?.('arrow');
+    }
+    markToolMessage('拖拽绘制紫色标注箭头。');
   }
 
   function handleInsertScaffold(scaffold) {
@@ -2048,15 +2847,20 @@ export default function CanvasWorkspace() {
     const container = editor.getContainer?.();
     // 补全矩形的批注走 tldraw 原生双击文字编辑，无需自定义双击拦截。
     const handleToolbarPointerDown = (event) => {
-      if (!completionToolActive.current) return;
+      if (!completionToolActive.current && !annotationArrowToolActive.current) return;
       const target = event.target;
       if (target?.closest?.('[data-testid="tools.vd-completion-rectangle"]')) return;
-      if (target?.closest?.('.tlui-main-toolbar')) setCompletionToolMode(false);
+      if (target?.closest?.('[data-testid="tools.vd-annotation-arrow"]')) return;
+      if (target?.closest?.('.tlui-main-toolbar')) {
+        setCompletionToolMode(false);
+        setAnnotationArrowToolMode(false);
+      }
     };
     document.addEventListener('pointerdown', handleToolbarPointerDown, true);
     const unsubscribe = editor.store.listen(() => {
       if (!mounted.current) return;
-      processCompletionToolShapeChanges(editor);
+      processCanvasToolShapeChanges(editor);
+      enforceWidgetAspect(editor);
       refreshHtmlComponents(editor);
       queueCanvasSnapshotSave(editor);
     });
@@ -2065,9 +2869,11 @@ export default function CanvasWorkspace() {
       mounted.current = false;
       editorRef.current = null;
       setCompletionToolMode(false);
+      setAnnotationArrowToolMode(false);
       knownShapeIds.current = new Set();
       pendingCanvasEvent.current = null;
       setHtmlComponents([]);
+      setSelectedAnnotationTarget(null);
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('pointerdown', handleToolbarPointerDown, true);
       unsubscribe?.();
@@ -2090,12 +2896,23 @@ export default function CanvasWorkspace() {
           </TldrawUiToolbarButton>
           <TldrawUiToolbarButton
             type="tool"
+            title="标注箭头"
+            data-testid="tools.vd-annotation-arrow"
+            data-value="vd-annotation-arrow"
+            isActive={annotationArrowToolReady}
+            onClick={handleSelectAnnotationArrowTool}
+          >
+            <TldrawUiButtonIcon icon="tool-arrow" />
+          </TldrawUiToolbarButton>
+          <TldrawUiToolbarButton
+            type="tool"
             title="脚手架"
             data-testid="tools.vd-scaffold-library"
             data-value="vd-scaffold-library"
             isActive={scaffoldPickerOpen}
             onClick={() => {
               setCompletionToolMode(false);
+              setAnnotationArrowToolMode(false);
               setScaffoldPickerOpen((value) => !value);
             }}
           >
@@ -2131,7 +2948,7 @@ export default function CanvasWorkspace() {
       Toolbar: VisualDeliveryToolbar,
       NavigationPanel: VisualDeliveryNavigationPanel,
     };
-  }, [completionToolReady, previewMode, scaffoldPickerOpen, workspace]);
+  }, [annotationArrowToolReady, completionToolReady, previewMode, scaffoldPickerOpen, workspace]);
 
   if (loading) {
     return <div style={STYLES.empty}>正在读取画布工作区...</div>;
@@ -2243,13 +3060,33 @@ export default function CanvasWorkspace() {
                   {previewMode === 'highlight' && authoredOverlays.filter((item) => item.kind !== 'completion_request').map((item) => (
                     <div key={item.shapeId} style={STYLES.highlightOverlay(item)} />
                   ))}
+                  {selectedAnnotationTarget && (
+                    <CanvasAnnotationPopover
+                      target={selectedAnnotationTarget}
+                      text={annotationDraft}
+                      flagged={annotationFlagged}
+                      submitting={annotationSubmitting}
+                      onTextChange={setAnnotationDraft}
+                      onFlagChange={setAnnotationFlagged}
+                      onSubmit={handleSubmitSelectionAnnotation}
+                      onClose={closeSelectionAnnotation}
+                    />
+                  )}
                   {htmlComponents.map((component) => (
                     <CanvasHtmlComponentOverlay
-                      key={component.shapeId}
+                      key={`${component.shapeId}-v${component.widgetVersion}`}
                       component={component}
                       tokens={tokens}
+                      workspaceId={workspace?.id || null}
                       onSelect={handleSelectHtmlComponent}
                       onFeedback={handleHtmlComponentFeedback}
+                      onWidgetStatePatch={handleWidgetStatePatch}
+                      onWidgetEvent={handleWidgetEvent}
+                      onWidgetSize={handleWidgetSize}
+                      onWidgetReady={handleWidgetReady}
+                      onWidgetError={handleWidgetError}
+                      onWidgetDrag={handleWidgetDrag}
+                      onBorderDragStart={handleWidgetBorderDragStart}
                     />
                   ))}
                 </div>

@@ -12,6 +12,7 @@ const {
   instantiateTemplate,
   applyCanvasIRCommands,
   buildCanvasAgentContext,
+  hydrateWidgetRuntimeState,
   listWidgetTemplates,
   prepareWidget,
 } = require('../lib/canvas-ir');
@@ -3312,7 +3313,9 @@ function setupRoutes(app, dataDir, options = {}) {
       if (!ir) {
         return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'ir or template_id is required' } });
       }
-      const compiled = compileCanvasIR(ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });
+      const previousSnapshot = readCanvasSnapshot(workspace.id);
+      const hydratedIR = hydrateWidgetRuntimeState(ir, previousSnapshot);
+      const compiled = compileCanvasIR(hydratedIR, { previousSnapshot });
       if (!compiled.valid) {
         return res.status(400).json({
           error: {
@@ -3376,7 +3379,10 @@ function setupRoutes(app, dataDir, options = {}) {
         nodes: [],
         relationships: [],
       };
-      const { ir, results } = applyCanvasIRCommands(currentIR, commands);
+      // Pull live widget state from the snapshot into the IR so recompiling
+      // does not wipe user interaction data (votes, scores, timers).
+      const hydratedIR = hydrateWidgetRuntimeState(currentIR, readCanvasSnapshot(workspace.id));
+      const { ir, results } = applyCanvasIRCommands(hydratedIR, commands);
       const locateOnly = commands.every((command) => command?.op === 'locate_node');
       if (locateOnly || req.body?.dry_run === true) {
         const compiled = compileCanvasIR(ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });

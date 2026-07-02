@@ -42,9 +42,15 @@ function typeOf(value) {
 
 function checkAgainstSchema(value, schema, path, errors) {
   if (!schema || typeof schema !== 'object') return;
-  if (schema.type && typeOf(value) !== schema.type) {
-    errors.push(`${path}: expected ${schema.type}, got ${typeOf(value)}`);
-    return;
+  if (schema.type) {
+    const actual = typeOf(value);
+    const matches = schema.type === 'integer'
+      ? actual === 'number' && Number.isInteger(value)
+      : actual === schema.type;
+    if (!matches) {
+      errors.push(`${path}: expected ${schema.type}, got ${actual}`);
+      return;
+    }
   }
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
     errors.push(`${path}: value not in enum [${schema.enum.join(', ')}]`);

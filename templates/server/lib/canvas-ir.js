@@ -1435,6 +1435,38 @@ function instantiateTemplate(templateId, options = {}) {
   return applyTemplateTransform(normalizeCanvasIR(ir), options);
 }
 
+/**
+ * Copy widget runtime state (user votes, intrinsic size, mount review) from
+ * the live snapshot back into the IR before a recompile. Without this, any
+ * later agent command would regenerate widget shape records from stale IR
+ * meta and wipe user interaction state. Per-key rule: the higher
+ * vd_state_version wins.
+ */
+function hydrateWidgetRuntimeState(ir, previousSnapshot) {
+  if (!ir || !Array.isArray(ir.nodes) || ir.nodes.length === 0) return ir;
+  const store = previousSnapshot?.document?.store || {};
+  let changed = false;
+  const nodes = ir.nodes.map((node) => {
+    if (node.kind !== 'html_component') return node;
+    const record = store[shapeIdFor(safeId(node.id))];
+    const recMeta = record?.meta;
+    if (!recMeta) return node;
+    const meta = { ...(node.meta || {}) };
+    const irVersion = Number(meta.vd_state_version || 0);
+    const snapVersion = Number(recMeta.vd_state_version || 0);
+    if (recMeta.vd_widget_state && snapVersion >= irVersion) {
+      meta.vd_widget_state = recMeta.vd_widget_state;
+      meta.vd_state_version = snapVersion;
+      meta.vd_state_actor = recMeta.vd_state_actor || meta.vd_state_actor || 'user';
+    }
+    if (recMeta.vd_intrinsic_size) meta.vd_intrinsic_size = recMeta.vd_intrinsic_size;
+    if (recMeta.vd_widget_review) meta.vd_widget_review = recMeta.vd_widget_review;
+    changed = true;
+    return { ...node, meta };
+  });
+  return changed ? { ...ir, nodes } : ir;
+}
+
 function applyCanvasIRCommands(currentIR, commands = []) {
   const ir = normalizeCanvasIR(currentIR || {});
   const results = [];
@@ -1709,6 +1741,7 @@ module.exports = {
   instantiateTemplate,
   applyCanvasIRCommands,
   buildCanvasAgentContext,
+  hydrateWidgetRuntimeState,
   listWidgetTemplates: canvasWidgets.listWidgetTemplates,
   prepareWidget: canvasWidgets.prepareWidget,
 };

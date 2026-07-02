@@ -28,7 +28,13 @@
  *   iframe → parent: vd:widget:ready | vd:widget:size {w,h}
  *                    vd:widget:state-patch {patch,state} | vd:widget:event
  *                    vd:widget:error {message}
+ *                    vd:widget:drag {phase:start|move|end, dx, dy}  (iframe px)
  *   parent → iframe: vd:widget:state {state, actor}
+ *
+ *   Drag contract: pointerdown on a non-interactive background area (widget
+ *   root, fragment root padding/gaps, or [data-vd-drag-handle]) starts a
+ *   select+drag of the anchor shape on the host canvas. Buttons, inputs,
+ *   links, feedback elements, and text content keep their own interactions.
  */
 export function getBridgeScript(lang) {
   const isZh = lang === 'zh';
@@ -491,6 +497,58 @@ export function getBridgeScript(lang) {
         type: 'vd:widget:error',
         message: String((e && e.message) || 'widget script error'),
       }, ORIGIN);
+    });
+
+    // Background select + drag: clicking empty widget areas selects the
+    // anchor shape; holding and moving drags it on the canvas. Interactive
+    // elements and text content are excluded so in-widget interaction and
+    // annotation selection keep working.
+    var INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, label, form, [contenteditable], [data-vd-feedback-action]';
+    var isDragBackground = function(target) {
+      if (!target || !target.closest) return false;
+      if (target.closest(INTERACTIVE_SELECTOR)) return false;
+      if (target.closest('[data-vd-drag-handle]')) return true;
+      if (target === document.documentElement || target === document.body) return true;
+      var root = document.getElementById('vd-widget-root');
+      if (!root) return false;
+      // The widget root and the fragment's own root element count as
+      // background (their padding and gaps); nested content does not.
+      return target === root || target.parentElement === root;
+    };
+    document.addEventListener('pointerdown', function(e) {
+      if (e.button !== 0) return;
+      if (!isDragBackground(e.target)) return;
+      var captureEl = document.documentElement;
+      try { captureEl.setPointerCapture(e.pointerId); } catch (err) {}
+      var startX = e.clientX;
+      var startY = e.clientY;
+      var prevCursor = document.body.style.cursor;
+      document.body.style.cursor = 'grabbing';
+      window.parent.postMessage({ type: 'vd:widget:drag', phase: 'start', dx: 0, dy: 0 }, ORIGIN);
+      var onMove = function(ev) {
+        window.parent.postMessage({
+          type: 'vd:widget:drag',
+          phase: 'move',
+          dx: ev.clientX - startX,
+          dy: ev.clientY - startY,
+        }, ORIGIN);
+      };
+      var onUp = function(ev) {
+        try { captureEl.releasePointerCapture(ev.pointerId); } catch (err) {}
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.body.style.cursor = prevCursor;
+        window.parent.postMessage({
+          type: 'vd:widget:drag',
+          phase: 'end',
+          dx: ev.clientX - startX,
+          dy: ev.clientY - startY,
+        }, ORIGIN);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      // Prevent accidental text-selection while dragging the background.
+      e.preventDefault();
     });
   }
 
