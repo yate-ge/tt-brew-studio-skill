@@ -139,9 +139,9 @@ const DESIGN_STAGE_ALIASES = new Map([
 ]);
 
 const PROJECT_STAGE_LAYOUT = {
-  width: 2600,
+  width: 5200,
   headerHeight: 300,
-  stageHeight: 900,
+  stageHeight: 1800,
   stageGap: 96,
   stageStartY: 396,
   contentOrigin: { x: 56, y: 172 },
@@ -196,6 +196,39 @@ const COLOR_BY_ROLE = {
   decision: 'violet',
 };
 
+// Diagram geo subtypes carry meaning: rectangle = process step, diamond =
+// decision, ellipse = start/end or state, cloud = fuzzy area.
+const GEO_SUBTYPES = new Set([
+  'rectangle', 'ellipse', 'triangle', 'diamond', 'pentagon', 'hexagon',
+  'octagon', 'star', 'rhombus', 'oval', 'trapezoid', 'cloud', 'heart',
+  'x-box', 'check-box', 'arrow-right', 'arrow-left', 'arrow-up', 'arrow-down',
+]);
+
+const GEO_SUBTYPE_ALIASES = new Map([
+  ['process', 'rectangle'], ['step', 'rectangle'], ['box', 'rectangle'], ['rect', 'rectangle'],
+  ['decision', 'diamond'], ['choice', 'diamond'], ['gateway', 'diamond'], ['branch', 'diamond'],
+  ['state', 'ellipse'], ['status', 'ellipse'], ['start', 'ellipse'], ['end', 'ellipse'],
+  ['begin', 'ellipse'], ['terminal', 'ellipse'], ['circle', 'ellipse'],
+  ['fuzzy', 'cloud'], ['vague', 'cloud'], ['unknown', 'cloud'],
+]);
+
+const GEO_ROLE_RULES = [
+  [/decision|choice|gateway|branch|判断|决策|分支/i, 'diamond'],
+  [/state|status|start|end|begin|finish|terminal|起点|终点|状态|开始|结束/i, 'ellipse'],
+  [/fuzzy|unknown|risk|assumption|模糊|不确定|风险|假设|待定/i, 'cloud'],
+];
+
+function geoSubtypeForShapeNode(node) {
+  const explicit = String(node.shape_type || '').trim().toLowerCase();
+  if (GEO_SUBTYPES.has(explicit)) return explicit;
+  if (GEO_SUBTYPE_ALIASES.has(explicit)) return GEO_SUBTYPE_ALIASES.get(explicit);
+  const role = String(node.role || '');
+  for (const [pattern, subtype] of GEO_ROLE_RULES) {
+    if (pattern.test(role)) return subtype;
+  }
+  return 'rectangle';
+}
+
 function makeRichText(text) {
   const lines = String(text || '').split('\n');
   return {
@@ -227,6 +260,18 @@ function safeId(value, fallback = 'node') {
 
 function shapeIdFor(nodeId) {
   return `shape:vd-ir-${safeId(nodeId)}`;
+}
+
+function connectorShapeId(relId) {
+  return `shape:vd-ir-conn-${safeId(relId)}`;
+}
+
+function connectorBindingId(relId, terminal) {
+  return `binding:vd-ir-conn-${safeId(relId)}-${terminal}`;
+}
+
+function assetIdFor(nodeId) {
+  return `asset:vd-ir-${safeId(nodeId)}`;
 }
 
 function indexKeyAt(index) {
@@ -1168,6 +1213,27 @@ function createContentRecord(node, parentId, index, bounds, now) {
   // the real content, so no solid fill and no body text behind it.
   const isWidget = node.kind === 'html_component';
   const text = isWidget ? title : (body && body !== title ? `${title}\n\n${body}` : title);
+
+  // Kind -> native tldraw tool (see SKILL.md「画板节点语义」). Plain text renders
+  // as a real tldraw text shape (no frame, no fill), not a bordered geo box.
+  // Do NOT draw a shape as a text box just to place words.
+  if (node.kind === 'text') {
+    return {
+      ...baseShapeRecord(node, parentId, index, bounds, now),
+      type: 'text',
+      props: {
+        color: color === 'black' ? 'black' : color,
+        size: bounds.h < 88 || bounds.w < 200 ? 's' : 'm',
+        font: 'draw',
+        textAlign: 'start',
+        w: Math.max(120, Math.round(bounds.w)),
+        richText: makeRichText(text),
+        scale: 1,
+        autoSize: false,
+      },
+    };
+  }
+
   return {
     ...baseShapeRecord(node, parentId, index, bounds, now),
     type: 'geo',

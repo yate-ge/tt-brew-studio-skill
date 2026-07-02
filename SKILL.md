@@ -54,6 +54,11 @@ DATA_DIR  = {CWD}/.visual-delivery
 不要仅仅因为任务可以使用画布、图表、头脑风暴、汇报或持久工作区就触发本 skill。非设计
 任务应使用普通文本、代码工具或研究工具完成。
 
+模糊的"优化 / 改进这个项目"请求要先判断对象：只有当"项目"是**设计项目**（作品、视觉方向、
+服务 / 体验 / 空间 / 交互设计等）时才触发本 skill，并按诊断再入场处理
+（design-mentor-protocol.md §4.1）。如果"优化项目"指的是代码库、后端性能、软件工程或通用
+文档，本 skill 不触发，交给相应的代码或文本工具。
+
 ### 多专家设计导师模式
 
 当工作是设计项目时，以 **多专家设计导师工作室** 模式运行：专家分身从不同研究审美出发
@@ -82,8 +87,11 @@ DATA_DIR  = {CWD}/.visual-delivery
   自上而下排列，角色分别为 `stage.discover`、`stage.define`、`stage.develop`、
   `stage.deliver`。后续方法模板（CanvasIR Template）、Widget、专家批注和学生材料默认放入
   对应阶段区域，并从该阶段左上工作区开始顺序排列。对已经进行中的项目先做阶段识别，并用
-  一句话向学生确认；已经完成的阶段放回溯归档卡，当前阶段放置对应脚手架包。成熟项目中的
-  新功能也默认在同一工作 Page 内增加独立四阶段区域，而不是切换 Page。完整协议见：
+  一句话向学生确认；已经完成的阶段放回溯归档卡，当前阶段放置对应脚手架包。当请求是模糊的
+  整体优化（如"帮我优化这个项目"）时走**诊断再入场**：不直接生成优化后的成品，而是先承接
+  现状为证据，再放"现状盘点 → 针灸式诊断"脚手架，让学生亲手标出最值得改的杠杆点，收窄出
+  具体设计张力后再进入方案（见 design-mentor-protocol.md §4.1）。成熟项目中的新功能也默认
+  在同一工作 Page 内增加独立四阶段区域，而不是切换 Page。完整协议见：
   [references/design-mentor-protocol.md](references/design-mentor-protocol.md)。
 - **方法生成**：脚手架按阶段化方法库即时生成。方法规格是知识，不是预制件；agent 根据
   判断规则决定生成**方法模板（CanvasIR Template）**还是**交互组件（Widget）**，并贴合
@@ -273,12 +281,23 @@ section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `an
 - **学生设计动作**：继续使用 tldraw 原生工具创建、移动、编辑 frame、shape、sticky、text、
   image 和 connector。默认不引导学生使用 Page 切换；所有内容在当前工作 Page 中完成。
 - **协作沟通动作**：对象批注工具、区域批注矩形、批注 popover、紫色标注箭头、右下角
-  feedback panel，以及批注中的 `@专家名` 指定回应对象。这些工具服务学生、专家和智能体
-  之间的协作闭环。
+  feedback panel，以及批注中的 `@专家名` 指定回应对象。**这些标注工具是用户表达反馈的
+  专属交互。**
+
+**agent 工具红线**：agent 只通过 CanvasIR 使用普通工具，并遵守 kind → 原生工具映射（见
+「画板节点语义」）——说明走文字 `text`、想法走便签 `note`、diagram 节点走按含义选型的形状
+`geo`、关系走箭头 `arrow`、artifact / 资料走图片 `image`、容器走 `frame`。**对象批注工具、
+区域批注矩形和紫色标注箭头 agent 永不使用；** agent 对反馈的回应通过脚手架、评审 annotation
+（`author = 专家名`）和讨论便签表达，而不是用标注工具在画布上作图。
 
 不要把方法库做成学生可见的方法选择器，也不要把专家方法直接堆进工具栏。agent 读取方法库后，
 根据当前阶段、专家组和画板证据，决定在画布上添加一个具体的视觉脚手架：方法模板
 （CanvasIR Template）、交互组件（Widget）或二者组合。
+
+方法模板判断规则（何时用、6 个结构母型、三层生成策略、三段生命周期、专家角色）见：
+[references/canvas-templates.md](references/canvas-templates.md)。方法模板示例见：
+[references/template-examples.md](references/template-examples.md)。这些示例用于引导智能体
+生成项目化方法模板，不是固定模板库。
 
 ### 画板反馈与批注
 
@@ -337,16 +356,30 @@ Widget 示例模式见：[references/widget-examples.md](references/widget-examp
 
 ### 画板节点语义
 
-- `section`：渲染为 tldraw `frame`；用作相关内容的父级 / 容器。
-- `sticky_note`：学生想法、头脑风暴项、担忧或决策。每张 sticky 保持一个想法。
-- `text`：画板标题、section 标题、提示、说明、caption 和分析。
-- `shape`：图示节点、状态、选项和流程步骤。
-- `connector`：空间关系；在 `semantic_index.relationships` 中记录 `from`、`to`、方向、
-  line type 和可选 label。
+每个内容 kind 对应一个 tldraw 原生工具。agent 按“意图”选 kind，运行时映射到对应原生
+shape —— 不要用一种形状（实心矩形）承载文字、想法和图示节点：
+
+- `section` / `slot`：渲染为 tldraw `frame`，只作相关内容的父级 / 容器，不放正文。
+- `text`：渲染为 tldraw **文字** shape（无框、无填充）。用于画板标题、section 标题、tips、
+  frame 内说明、问题、caption 和分析。**不要为了摆放文字而画一个形状当文本框。**
+- `sticky_note`（IR kind `sticky`）：渲染为 tldraw **便签** `note`。用于学生 / 参与者的想法、
+  头脑风暴项、假设、担忧或讨论便签。**一张便签只放一个想法。**
+- `shape`：渲染为 tldraw **形状** `geo`，**仅用于 diagram**，形状本身承载语义。按含义选型：
+  矩形 = 流程步骤，菱形 = 决策，椭圆 = 起止 / 状态，云 = 模糊区。可用 `shape_type` 指定，
+  未指定时按 `role` 推断。不要拿 `geo` 当文本底板或容器。
+- `connector`：渲染为 tldraw **箭头 / 连线** `arrow` / `line`，绑定到 `from` / `to` 节点的
+  shape，带可选 `label`；同时在 `semantic_index.relationships` 记录方向和 line type。用于
+  diagram 的依赖、流程和证据流向。
+- `image`：渲染为 tldraw **图片** `image` shape + `asset` 记录，需要 `alt_text`。仅两种用途：
+  **① 智能体 artifact 产出**（海报 / 版式 / 视觉稿 / UI 稿等最终视觉产物，由智能体本体生成，
+  `meta.vd_artifact = true`，署名 `AI 草稿，待确认`，不以专家身份产出）；**② 图片资料**
+  （参考图 / 素材 / 场域照片 / 已有材料，`meta.vd_reference_material = true`，作为输入不带
+  专家署名，默认落入 Discover 阶段）。
 - `html_component`：嵌入式交互 HTML widget，带 backing shape id、HTML、title、
   description、bounds，并把 state 镜像到 semantic index。
-- `region_annotation`：用户创建的紫色区域批注，包含 `note`、`status`、`bounds`、
-  `shape_id`、`page_id`、frame 包含关系、相交目标对象和截图 capture hint。
+- `region_annotation` / `annotation_arrow`：**用户专属的标注工具**，agent 永不使用。用户
+  创建的紫色区域批注 / 标注箭头，包含 `note`、`status`、`bounds`、`shape_id`、`page_id`、
+  frame 包含关系、相交目标对象和截图 capture hint。
 - `table`、`code_block` 和 `label`：即使 renderer fallback 到 tldraw grouped shapes，
   也保持一等语义类型。
 
@@ -367,6 +400,8 @@ canvas event 和 `semantic_index.layout_reviews`。
 - API endpoints：[references/api.md](references/api.md)
 - Canvas document model：[references/canvas-workspace-model.md](references/canvas-workspace-model.md)
 - CanvasIR 与方法模板：[references/canvas-ir.md](references/canvas-ir.md)
+- 方法模板合约：[references/canvas-templates.md](references/canvas-templates.md)
+- 方法模板示例：[references/template-examples.md](references/template-examples.md)
 - 交互组件合约：[references/canvas-widgets.md](references/canvas-widgets.md)
 - Widget 示例模式：[references/widget-examples.md](references/widget-examples.md)
 - Design tokens：[references/design-system.md](references/design-system.md)

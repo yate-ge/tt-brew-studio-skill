@@ -95,7 +95,7 @@ CanvasIR 层级是显式且稳定的：
 board
   section
     slot
-      sticky / text / shape / widget
+      text / sticky / shape / image / widget
 ```
 
 用 `parent` 把节点放进 section 或 slot。compiler 会把可见容器节点映射为 tldraw frame
@@ -108,14 +108,29 @@ shapes，并把同样的包含关系记录到 `semantic_index.relationships`。
 - `cluster`: loose group of related nodes, visible as a frame when needed.
 - `pattern`: reusable top-level thinking construct.
 
-内容类型：
+内容类型：每个 kind 映射到一个 tldraw 原生工具。按“意图”选 kind，运行时映射到对应原生
+shape —— 不要用一种形状（实心矩形）承载文字、想法和图示节点。
 
-- `sticky`: one participant-style idea or hypothesis.
-- `text`: structural guidance, heading, question, or analysis.
-- `shape`: diagram option, state, process, or decision.
-- `connector`: represented as a semantic relationship in v1.
+- `text` → tldraw **文字** shape（无框、无填充）：结构性说明、标题、tips、frame 内说明、
+  问题、caption、分析。**不要为了摆放文字而画一个形状当文本框。**
+- `sticky` → tldraw **便签** `note`：一条参与者风格的想法或假设，一张便签只放一个想法。
+- `shape` → tldraw **形状** `geo`，**仅用于 diagram**，形状本身承载语义：矩形 = 流程步骤，
+  菱形 = 决策，椭圆 = 起止 / 状态，云 = 模糊区。用可选 `shape_type` 指定，未指定按 `role`
+  推断。不要拿 `geo` 当文本底板或容器。
+- `connector` → tldraw **箭头 / 连线** `arrow` / `line`：通过 `relationships` 声明 `from` /
+  `to`，编译为真实连线并绑定到两端 shape，带可选 `label`，同时记录进
+  `semantic_index.relationships`。用于 diagram 的依赖、流程和证据流向。
+- `image` → tldraw **图片** `image` shape + `asset`：仅两种用途——**智能体 artifact 产出**
+  （海报 / 版式 / 视觉稿 / UI 稿等最终视觉产物，由智能体本体生成，`meta.vd_artifact = true`，
+  署名 `AI 草稿，待确认`）或 **图片资料**（参考图 / 素材 / 场域照片 / 已有材料，
+  `meta.vd_reference_material = true`，作为输入不带专家署名，默认落入 Discover 阶段）。
+  两者都需要 `alt_text`。
 - `html_component`：嵌入式交互组件（`widget` 可作为 alias）；应放在某个 slot 或 section
   内。通过 `add_widget` 创建，不要手写 node meta。合约见：[canvas-widgets.md](canvas-widgets.md)。
+
+标注工具（对象批注、区域批注矩形、紫色标注箭头）是用户表达反馈的专属交互，agent 永不用它
+在画布上作图；专家评审以 annotation 数据形式发布（`author = 专家名`），是对反馈的回应，
+不是用标注工具画东西。
 
 ## Grid Layout
 
