@@ -221,12 +221,25 @@ Before any agent writes to a canvas workspace, it must read:
 GET /api/canvas-workspaces/{WORKSPACE_ID}/context
 ```
 
-The context payload contains the current `snapshot`, `semantic_index`, `events`,
-`open_feedback`, and `open_completion_requests`. Agent writes must then save
-the updated snapshot and semantic index through
-`PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot` and include a command
-batch event. The server records a semantic diff in `semantic_index.edit_summary`
-and in the event when an event is supplied.
+The debug context payload contains the current `snapshot`, `semantic_index`,
+`events`, `open_feedback`, and `open_completion_requests`. Ordinary agents
+should instead read:
+
+```text
+GET /api/canvas-workspaces/{WORKSPACE_ID}/agent-context
+```
+
+Then write through CanvasIR:
+
+```text
+POST /api/canvas-workspaces/{WORKSPACE_ID}/ir/validate
+PUT /api/canvas-workspaces/{WORKSPACE_ID}/ir
+POST /api/canvas-workspaces/{WORKSPACE_ID}/commands
+```
+
+Direct `PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot` writes are reserved
+for runtime debugging and migration. The server records semantic diffs in
+`semantic_index.edit_summary` and in the event when an event is supplied.
 
 Use Cowart as a product and workflow reference rather than a runtime dependency.
 Cowart validates the direction: local tldraw canvas, project-local persistence,
@@ -249,10 +262,10 @@ depending on FigJam as the runtime. The transferable patterns are:
   proximity
 - validate with screenshots or semantic index reads after meaningful writes
 
-These rules are agent-facing prompts. The current executable write path remains
-`PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot`: the agent writes the
-tldraw snapshot and semantic index, and includes a command batch in the optional
-`event` payload.
+These rules are agent-facing prompts. The preferred executable write paths are
+CanvasIR and commands. The agent writes semantic hierarchy and grid layout; the
+server compiles tldraw snapshot records, semantic index entries, and canvas
+events.
 
 ## Canvas Command Batch
 

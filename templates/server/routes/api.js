@@ -4,6 +4,15 @@ const crypto = require('crypto');
 const { generateId } = require('../lib/ids');
 const { writeJSON, readJSONArray, readJSONObject, updateJSON } = require('../lib/store');
 const { broadcast } = require('../lib/ws');
+const {
+  compileCanvasIR,
+  validateCanvasIR,
+  listCanvasTemplates,
+  getCanvasTemplate,
+  instantiateTemplate,
+  applyCanvasIRCommands,
+  buildCanvasAgentContext,
+} = require('../lib/canvas-ir');
 
 const DELIVERY_MODES = ['task_delivery', 'alignment'];
 const DELIVERY_STATUSES = ['normal', 'pending_feedback'];
@@ -2483,6 +2492,17 @@ function setupRoutes(app, dataDir, options = {}) {
     };
   }
 
+  function carryCanvasAgentFields(previousIndex = {}, nextIndex = {}) {
+    const next = { ...nextIndex };
+    if (!Object.prototype.hasOwnProperty.call(next, 'canvas_ir') && previousIndex?.canvas_ir) {
+      next.canvas_ir = previousIndex.canvas_ir;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, 'ir_node_index') && Array.isArray(previousIndex?.ir_node_index)) {
+      next.ir_node_index = previousIndex.ir_node_index;
+    }
+    return next;
+  }
+
   function mergeCanvasLayoutReviews(...reviewLists) {
     const byId = new Map();
     for (const list of reviewLists) {
@@ -2500,11 +2520,19 @@ function setupRoutes(app, dataDir, options = {}) {
     return ['x', 'y', 'w', 'h'].some((key) => Math.round(Number(prev?.[key] || 0)) !== Math.round(Number(next?.[key] || 0)));
   }
 
+  function semanticTrackables(index) {
+    const normalized = normalizeCanvasSemanticIndex(index);
+    return [
+      ...(normalized.sections || []),
+      ...(normalized.nodes || []),
+    ].filter((item) => item?.shape_id);
+  }
+
   function summarizeSemanticDiff(previousIndex, nextIndex) {
     const previous = normalizeCanvasSemanticIndex(previousIndex);
     const next = normalizeCanvasSemanticIndex(nextIndex);
-    const previousNodes = new Map((previous.nodes || []).map((node) => [node.shape_id, node]));
-    const nextNodes = new Map((next.nodes || []).map((node) => [node.shape_id, node]));
+    const previousNodes = new Map(semanticTrackables(previous).map((node) => [node.shape_id, node]));
+    const nextNodes = new Map(semanticTrackables(next).map((node) => [node.shape_id, node]));
     const added = [];
     const modified = [];
     const moved_or_resized = [];
@@ -2521,20 +2549,24 @@ function setupRoutes(app, dataDir, options = {}) {
         });
         continue;
       }
-      const textChanged = (before.text || '') !== (node.text || '')
-        || (before.title || '') !== (node.title || '')
-        || before.kind !== node.kind
+      const contentChanged = (before.text || '') !== (node.text || '')
+        || (before.title || '') !== (node.title || '');
+      const kindChanged = before.kind !== node.kind;
+      const parentChanged = before.parent_id !== node.parent_id
+        || before.parent_ir_id !== node.parent_ir_id
         || before.section_id !== node.section_id;
       const stateChanged = JSON.stringify(before.meta?.vd_widget_state || null)
         !== JSON.stringify(node.meta?.vd_widget_state || null);
-      if (textChanged || stateChanged) {
+      if (contentChanged || kindChanged || parentChanged || stateChanged) {
         modified.push({
           shape_id: shapeId,
           kind: node.kind,
           title: node.title,
           authored_by: node.meta?.vd_last_edited_by || node.meta?.vd_created_by || 'unknown',
           changed: [
-            textChanged ? 'content' : null,
+            contentChanged ? 'content' : null,
+            kindChanged ? 'kind' : null,
+            parentChanged ? 'parent' : null,
             stateChanged ? 'widget_state' : null,
           ].filter(Boolean),
         });
@@ -2574,6 +2606,14 @@ function setupRoutes(app, dataDir, options = {}) {
       moved_or_resized,
       deleted,
     };
+  }
+
+  function uniqueShapeIds(items = []) {
+    return Array.from(new Set(
+      items
+        .map((item) => item?.shape_id)
+        .filter((shapeId) => typeof shapeId === 'string' && shapeId.trim())
+    ));
   }
 
   function hasSemanticDiff(diff) {
@@ -2697,6 +2737,77 @@ function setupRoutes(app, dataDir, options = {}) {
   function openCompletionRequests(workspace) {
     return (normalizeCanvasSemanticIndex(workspace?.semantic_index).completion_requests || [])
       .filter((item) => !item.status || item.status === 'open' || item.status === 'in_progress');
+  }
+
+  async function saveCompiledCanvasIR(workspace, compiled, event = {}) {
+    const now = new Date().toISOString();
+    const previousIndex = workspace.semantic_index;
+    const normalizedNextIndexBase = normalizeCanvasSemanticIndex({
+      ...compiled.semantic_index,
+      updated_at: now,
+    });
+    const eventReview = compiled.layout_report ? {
+      id: `canvas_ir_layout_${Date.now()}`,
+      type: 'canvas_ir_layout_review',
+      status: compiled.layout_report.warnings?.length ? 'passed_with_warnings' : 'passed',
+      checks: {
+        overlap_count: 0,
+        out_of_section_count: 0,
+        unreadable_count: 0,
+        section_contains_children: true,
+        min_readable_size_ok: true,
+      },
+      repairs: compiled.layout_report.auto_repairs || [],
+      reviewed_at: now,
+    } : null;
+    const normalizedNextIndex = {
+      ...normalizedNextIndexBase,
+      layout_reviews: mergeCanvasLayoutReviews(
+        previousIndex?.layout_reviews,
+        normalizedNextIndexBase?.layout_reviews,
+        eventReview,
+      ),
+    };
+    const semanticDiff = summarizeSemanticDiff(previousIndex, normalizedNextIndex);
+    const diffCreatedShapeIds = uniqueShapeIds(semanticDiff.added);
+    const diffMutatedShapeIds = uniqueShapeIds([
+      ...semanticDiff.modified,
+      ...semanticDiff.moved_or_resized,
+    ]);
+    const nextSemanticIndex = {
+      ...normalizedNextIndex,
+      edit_summary: hasSemanticDiff(semanticDiff) ? semanticDiff : normalizedNextIndex.edit_summary || null,
+    };
+    await writeJSON(canvasSnapshotFile(workspace.id), compiled.snapshot);
+    const saved = await writeCanvasWorkspace({
+      ...workspace,
+      title: compiled.ir?.board?.title || workspace.title,
+      purpose: compiled.ir?.board?.purpose || workspace.purpose,
+      semantic_index: nextSemanticIndex,
+      updated_at: now,
+      updatedAt: now,
+      last_used_at: now,
+    }, { makeActive: true });
+    await appendCanvasEvent(workspace.id, {
+      type: 'agent_canvas_ir_write',
+      actor: 'agent',
+      summary: event.summary || `通过 CanvasIR 更新画布：${saved.title}`,
+      target: { kind: 'canvas_workspace', workspace_id: workspace.id },
+      commands: Array.isArray(event.commands) ? event.commands : [{ op: 'write_canvas_ir' }],
+      created_shape_ids: Array.isArray(event.created_shape_ids) ? event.created_shape_ids : diffCreatedShapeIds,
+      mutated_shape_ids: Array.isArray(event.mutated_shape_ids) ? event.mutated_shape_ids : diffMutatedShapeIds,
+      semantic_diff: hasSemanticDiff(semanticDiff) ? semanticDiff : undefined,
+      meta: {
+        canvas_ir: {
+          node_count: compiled.ir.nodes.length,
+          relationship_count: compiled.ir.relationships.length,
+        },
+        layout_report: compiled.layout_report,
+        ...(event.meta || {}),
+      },
+    });
+    broadcast('canvas_workspace_updated', canvasWorkspaceSummary(saved));
+    return saved;
   }
 
   function publicCanvasWorkspace(workspace, { includeDetail = false } = {}) {
@@ -2969,6 +3080,30 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
+  app.get('/api/canvas-templates', (req, res) => {
+    try {
+      res.json({
+        type: 'canvas_template_index',
+        templates: listCanvasTemplates(),
+        total: listCanvasTemplates().length,
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.get('/api/canvas-templates/:id', (req, res) => {
+    try {
+      const template = getCanvasTemplate(req.params.id);
+      if (!template) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas template not found' } });
+      }
+      res.json(template);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
   app.get('/api/canvas-workspaces', (req, res) => {
     try {
       let workspaces = listCanvasWorkspaces();
@@ -2994,6 +3129,14 @@ function setupRoutes(app, dataDir, options = {}) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
+
+  function canvasIRFromRequest(body = {}) {
+    if (body.ir && typeof body.ir === 'object') return body.ir;
+    if (body.template_id || body.template) {
+      return instantiateTemplate(body.template_id || body.template, body);
+    }
+    return null;
+  }
 
   app.post('/api/canvas-workspaces', async (req, res) => {
     try {
@@ -3103,6 +3246,147 @@ function setupRoutes(app, dataDir, options = {}) {
     }
   });
 
+  app.get('/api/canvas-workspaces/:id/agent-context', (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      res.json(buildCanvasAgentContext({
+        workspace,
+        semanticIndex: workspace.semantic_index,
+        openFeedback: openCanvasFeedback(workspace.id),
+        openCompletionRequests: openCompletionRequests(workspace),
+      }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces/:id/ir/validate', (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const ir = canvasIRFromRequest(req.body || {});
+      if (!ir) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'ir or template_id is required' } });
+      }
+      const validation = validateCanvasIR(ir);
+      if (!validation.valid) {
+        return res.json({
+          valid: false,
+          errors: validation.errors,
+          warnings: validation.warnings,
+          ir: validation.ir,
+        });
+      }
+      const compiled = compileCanvasIR(validation.ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });
+      res.json({
+        valid: compiled.valid,
+        errors: compiled.errors,
+        warnings: compiled.warnings,
+        ir: compiled.ir,
+        layout_report: compiled.layout_report,
+        semantic_counts: compiled.valid ? {
+          sections: compiled.semantic_index.sections.length,
+          nodes: compiled.semantic_index.nodes.length,
+          relationships: compiled.semantic_index.relationships.length,
+        } : null,
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.put('/api/canvas-workspaces/:id/ir', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const ir = canvasIRFromRequest(req.body || {});
+      if (!ir) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'ir or template_id is required' } });
+      }
+      const compiled = compileCanvasIR(ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });
+      if (!compiled.valid) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_CANVAS_IR',
+            message: 'CanvasIR validation failed',
+            details: compiled.errors,
+          },
+        });
+      }
+      const saved = await saveCompiledCanvasIR(workspace, compiled, {
+        summary: req.body?.event?.summary || `通过 CanvasIR 写入画布：${compiled.ir.board.title}`,
+        commands: [{ op: 'write_canvas_ir', node_count: compiled.ir.nodes.length }],
+        meta: req.body?.event?.meta || {},
+      });
+      res.json(publicCanvasWorkspace(saved, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.post('/api/canvas-workspaces/:id/commands', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const commands = Array.isArray(req.body?.commands) ? req.body.commands : [];
+      if (commands.length === 0) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'commands is required' } });
+      }
+      const currentIR = workspace.semantic_index?.canvas_ir || {
+        version: 1,
+        board: { title: workspace.title, purpose: workspace.purpose, reading_order: 'left_to_right' },
+        grid: undefined,
+        nodes: [],
+        relationships: [],
+      };
+      const { ir, results } = applyCanvasIRCommands(currentIR, commands);
+      const locateOnly = commands.every((command) => command?.op === 'locate_node');
+      if (locateOnly || req.body?.dry_run === true) {
+        const compiled = compileCanvasIR(ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });
+        return res.json({
+          status: 'dry_run',
+          results,
+          valid: compiled.valid,
+          errors: compiled.errors,
+          warnings: compiled.warnings,
+          layout_report: compiled.layout_report,
+        });
+      }
+      const compiled = compileCanvasIR(ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });
+      if (!compiled.valid) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_CANVAS_IR',
+            message: 'CanvasIR command result is invalid',
+            details: compiled.errors,
+          },
+          results,
+        });
+      }
+      const saved = await saveCompiledCanvasIR(workspace, compiled, {
+        summary: req.body?.summary || '通过 CanvasIR commands 更新画布。',
+        commands,
+        meta: { command_results: results },
+      });
+      res.json({
+        workspace: publicCanvasWorkspace(saved, { includeDetail: true }),
+        results,
+        layout_report: compiled.layout_report,
+      });
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
   app.put('/api/canvas-workspaces/:id', async (req, res) => {
     try {
       const workspace = readCanvasWorkspace(req.params.id);
@@ -3160,7 +3444,10 @@ function setupRoutes(app, dataDir, options = {}) {
       const now = new Date().toISOString();
       const previousIndex = workspace.semantic_index;
       const normalizedNextIndexBase = semanticIndex && typeof semanticIndex === 'object'
-        ? normalizeCanvasSemanticIndex({ ...semanticIndex, updated_at: now })
+        ? carryCanvasAgentFields(
+          previousIndex,
+          normalizeCanvasSemanticIndex({ ...semanticIndex, updated_at: now })
+        )
         : workspace.semantic_index;
       const eventReview = event?.meta?.scaffold_review || null;
       const normalizedNextIndex = {

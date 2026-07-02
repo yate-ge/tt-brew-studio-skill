@@ -221,6 +221,14 @@ Canvas workspace behavior:
   templates. A scaffold package may include structure, seed content, interaction
   slots, widgets, next actions, and a short agent note explaining why this
   scaffold fits the current stage.
+- For agent-generated canvas structure, use CanvasIR or canvas commands by
+  default. CanvasIR is a semantic tree plus grid layout that the server compiles
+  into valid tldraw frames, shapes, semantic indexes, and events. Ordinary
+  agents should not write `snapshot.document.store` directly.
+- Templates are composable PatternSpec / CanvasIR fragments, not fixed workflow
+  pages. Use templates such as `business_model_canvas` when a mature thinking
+  structure helps the collaboration; agents may seed, rewrite, duplicate, or
+  combine template slots.
 - User can annotate, add material, select regions, and submit feedback in the
   same canvas space.
 - The canvas toolbar exposes a project-private scaffold library inside the
@@ -298,15 +306,18 @@ Canvas write prompt:
 
 ```text
 Before writing to a canvas workspace, read
-`GET /api/canvas-workspaces/{WORKSPACE_ID}/context`. Inspect the current
-`snapshot`, `semantic_index`, `events`, `open_feedback`, and
-`open_completion_requests`. If the task is additive, choose the active related
-section or create a new named section. Plan content as an ordered command batch.
-After modifying the tldraw snapshot, persist both `snapshot` and
-`semantic_index` via `PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot`, and
-include an `event` with `commands`, `created_shape_ids`, `mutated_shape_ids`,
-and a short summary. The server records a semantic diff in the saved semantic
-index/event so future turns can see what changed.
+`GET /api/canvas-workspaces/{WORKSPACE_ID}/agent-context`. Inspect the current
+CanvasIR summary, section/slot ids, open feedback, open completion requests, and
+available templates. If the task needs a thinking scaffold, write CanvasIR or
+use `POST /api/canvas-workspaces/{WORKSPACE_ID}/commands` with semantic node ids
+such as `value_propositions`, not tldraw shape ids.
+
+Use `POST /api/canvas-workspaces/{WORKSPACE_ID}/ir/validate` for dry runs and
+`PUT /api/canvas-workspaces/{WORKSPACE_ID}/ir` to save a complete CanvasIR. Use
+`POST /api/canvas-workspaces/{WORKSPACE_ID}/commands` for incremental changes
+such as `insert_template`, `add_node`, `edit_node`, `delete_node`, `move_node`,
+and `locate_node`. Direct `PUT /snapshot` writes are a debug-only fallback for
+runtime maintenance and migration.
 
 For scaffold work, include `review_scaffold_layout` in the command batch and
 mirror the review into `semantic_index.layout_reviews`. If a rendered browser or
@@ -496,7 +507,28 @@ record strip so the user can see what changed without searching history.
 
 ### Step 7: Update Canvas Workspaces
 
-For canvas workspaces, persist tldraw snapshots and semantic indexes:
+For ordinary canvas workspace writes, use CanvasIR or commands:
+
+```bash
+curl -s -X POST http://localhost:3847/api/canvas-workspaces/{WORKSPACE_ID}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "commands": [
+      {
+        "op": "insert_template",
+        "template_id": "business_model_canvas",
+        "title": "AI 桌面机器人商业模式画布",
+        "seed": {
+          "value_propositions": ["实体 AI presence 降低工具抽象感"],
+          "customer_segments": ["远程办公者", "创作者"]
+        }
+      }
+    ]
+  }'
+```
+
+For runtime maintenance only, advanced agents may persist tldraw snapshots and
+semantic indexes directly:
 
 ```bash
 curl -s -X PUT http://localhost:3847/api/canvas-workspaces/{WORKSPACE_ID}/snapshot \
@@ -565,6 +597,7 @@ should use `/api/reports`.
 - Implementation plan: [docs/implementation-plan-v4.md](docs/implementation-plan-v4.md)
 - API endpoints: [references/api.md](references/api.md)
 - Canvas workspace model: [references/canvas-workspace-model.md](references/canvas-workspace-model.md)
+- CanvasIR and templates: [references/canvas-ir.md](references/canvas-ir.md)
 - Generative UI guide: [references/generative-ui-guide.md](references/generative-ui-guide.md)
 - Feedback payload model: [references/feedback-schema.md](references/feedback-schema.md)
 - Design tokens: [references/design-system.md](references/design-system.md)

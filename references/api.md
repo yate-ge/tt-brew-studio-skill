@@ -560,6 +560,35 @@ JSON-style state/schema metadata. They do not require a full widget SDK.
 Canvas workspaces are project-scoped persistent collaboration spaces stored
 under `.visual-delivery/data/canvas-workspaces/{workspace_id}/`.
 
+## Canvas Templates
+
+Templates are composable PatternSpec / CanvasIR fragments. They are not fixed
+workflow pages; agents can seed, edit, duplicate, and combine their slots.
+
+### `GET /api/canvas-templates`
+
+Returns built-in canvas templates.
+
+```json
+{
+  "type": "canvas_template_index",
+  "templates": [
+    {
+      "id": "business_model_canvas",
+      "title": "商业模式画布",
+      "kind": "template",
+      "node_count": 10,
+      "relationship_count": 4
+    }
+  ],
+  "total": 1
+}
+```
+
+### `GET /api/canvas-templates/:id`
+
+Returns a template including its default CanvasIR fragment.
+
 ### `POST /api/canvas-workspaces/select`
 
 Selects the most relevant active canvas workspace, or creates a new one when no
@@ -580,7 +609,9 @@ related workspace exists.
 
 ### `GET /api/canvas-workspaces/:id/context`
 
-Agent-facing inspect endpoint. Agents must read this before writing to a canvas.
+Debug inspect endpoint. It exposes the raw snapshot and is useful for runtime
+maintenance. Ordinary agents should prefer
+`GET /api/canvas-workspaces/:id/agent-context`.
 
 Response:
 
@@ -605,9 +636,106 @@ Response:
 }
 ```
 
+### `GET /api/canvas-workspaces/:id/agent-context`
+
+Compact agent-facing context for CanvasIR and template workflows.
+
+```json
+{
+  "type": "canvas_workspace_agent_context_v2",
+  "preferred_write_api": "CanvasIR or commands API",
+  "direct_snapshot_write": "debug_only",
+  "workspace": { "id": "cw_...", "title": "协作画布" },
+  "current_ir_summary": {
+    "board": { "title": "商业模式画布" },
+    "node_count": 10,
+    "relationship_count": 4,
+    "nodes": [
+      {
+        "id": "value_propositions",
+        "kind": "slot",
+        "title": "价值主张",
+        "parent": "business_model_canvas",
+        "shape_id": "shape:vd-ir-value_propositions"
+      }
+    ]
+  },
+  "available_templates": [
+    { "id": "business_model_canvas", "title": "商业模式画布" }
+  ],
+  "command_schema": {
+    "ops": ["insert_template", "add_node", "edit_node", "delete_node", "move_node", "locate_node"]
+  }
+}
+```
+
+### `POST /api/canvas-workspaces/:id/ir/validate`
+
+Dry-runs a CanvasIR or template insert without saving.
+
+```json
+{
+  "template_id": "business_model_canvas",
+  "title": "AI 桌面机器人商业模式画布",
+  "seed": {
+    "value_propositions": ["实体 AI presence 降低工具抽象感"]
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "valid": true,
+  "layout_report": {
+    "strategy": "canvas_ir_grid",
+    "counts": { "sections": 10, "nodes": 1, "relationships": 4 }
+  }
+}
+```
+
+### `PUT /api/canvas-workspaces/:id/ir`
+
+Compiles and saves a complete CanvasIR or template instance. The server writes
+the tldraw snapshot, semantic index, layout review, and canvas event.
+
+### `POST /api/canvas-workspaces/:id/commands`
+
+Applies semantic CanvasIR commands. Agents should reference CanvasIR node ids
+and slot ids, not tldraw shape ids.
+
+```json
+{
+  "commands": [
+    {
+      "op": "insert_template",
+      "template_id": "business_model_canvas",
+      "title": "AI 桌面机器人商业模式画布"
+    },
+    {
+      "op": "add_node",
+      "parent": "value_propositions",
+      "kind": "sticky",
+      "content": "桌面机器人把 AI 从抽象工具变成可见伙伴"
+    }
+  ]
+}
+```
+
+Supported commands:
+
+- `insert_template`
+- `add_node`
+- `edit_node`
+- `delete_node`
+- `move_node`
+- `locate_node`
+
 ### `PUT /api/canvas-workspaces/:id/snapshot`
 
-Persists the tldraw snapshot and an agent-readable semantic index.
+Advanced debug endpoint that persists the tldraw snapshot and an agent-readable
+semantic index. Ordinary agents should use CanvasIR or commands instead.
 Visual Delivery treats tldraw `frame` shapes as canvas sections: they are named
 containers, their child shapes are section content, and the semantic index
 records both section summaries and `contains` relationships.

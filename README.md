@@ -78,6 +78,7 @@ visual-delivery-skill/
 ├── SKILL.md                  # Agent instructions (skill entry point)
 ├── scripts/
 │   ├── start.js              # Launch server + build frontend
+│   ├── reinitialize.js       # Reset runtime data and initialize again
 │   └── stop.js               # Graceful shutdown
 ├── references/               # Supplementary docs for SKILL.md
 │   ├── api.md
@@ -93,7 +94,7 @@ visual-delivery-skill/
 
 ### Runtime
 
-On first start, `start.js` copies `templates/` into the project's `.visual-delivery/` directory, installs dependencies, builds the frontend, and starts the server. This runtime directory is gitignored and regenerated as needed.
+On first start, `start.js` copies `templates/` into the project's `.visual-delivery/` directory, installs dependencies, builds the frontend, and starts the server. Later `start.js` runs preserve existing data while syncing templates and restarting the server. To initialize a clean runtime, use `scripts/reinitialize.js`; it backs up the old `.visual-delivery/` directory before generating a fresh one. This runtime directory is gitignored and regenerated as needed.
 
 ### How It Works
 

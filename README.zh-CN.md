@@ -78,6 +78,7 @@ visual-delivery-skill/
 ├── SKILL.md                  # Agent 指令文件（技能入口）
 ├── scripts/
 │   ├── start.js              # 启动服务 + 构建前端
+│   ├── reinitialize.js       # 清空运行时数据后重新初始化
 │   └── stop.js               # 优雅停止
 ├── references/               # SKILL.md 的补充参考文档
 │   ├── api.md
@@ -93,7 +94,7 @@ visual-delivery-skill/
 
 ### 运行时
 
-首次启动时，`start.js` 将 `templates/` 复制到项目的 `.visual-delivery/` 目录，安装依赖、构建前端、启动服务。该运行时目录已被 gitignore，会按需重新生成。
+首次启动时，`start.js` 将 `templates/` 复制到项目的 `.visual-delivery/` 目录，安装依赖、构建前端、启动服务。后续 `start.js` 会保留已有数据，只同步模板并重启服务。需要重新初始化干净运行时时，使用 `scripts/reinitialize.js`；它会先备份旧 `.visual-delivery/`，再生成新的运行时目录。该运行时目录已被 gitignore，会按需重新生成。
 
 ### 工作原理
 

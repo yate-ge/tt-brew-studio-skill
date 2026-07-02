@@ -44,6 +44,15 @@ node {SKILL_DIR}/scripts/start.js \
 ```
 
 服务运行在 `http://localhost:3847`，数据存储在 `.visual-delivery/` 目录。
+普通启动会保留已有运行时数据。需要重新初始化干净环境时，使用：
+
+```bash
+node {SKILL_DIR}/scripts/reinitialize.js \
+  --data-dir {RUNTIME_DIR} \
+  --lang zh
+```
+
+该命令会停止服务、备份旧 `.visual-delivery/`，再重新创建干净运行时。
 
 #### 1.2 验证运行环境
 

@@ -50,6 +50,18 @@ node /Users/yatege/WorkingProject/visual-delivery-skill/scripts/start.js \
   --lang zh
 ```
 
+重新初始化并清空运行时数据：
+
+```bash
+node /Users/yatege/WorkingProject/visual-delivery-skill/scripts/reinitialize.js \
+  --data-dir /Users/yatege/WorkingProject/visual-delivery-skill/.visual-delivery \
+  --lang zh
+```
+
+`reinitialize.js` 会先停止服务，再把旧 `.visual-delivery/` 备份为
+`.visual-delivery.bak.YYYYMMDDHHMMSS`，最后重新创建干净运行时。普通
+`start.js` 只重启和同步模板，不清空历史数据。
+
 健康检查：
 
 ```bash
