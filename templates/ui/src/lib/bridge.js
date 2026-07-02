@@ -21,6 +21,14 @@
  *   { type: 'vd:highlight',     target }
  *   { type: 'vd:feedback-reset', action, itemId }
  *   { type: 'vd:feedback-reset-all' }
+ *
+ * Widget mode (references/canvas-widgets.md) — active when the host injected
+ * `window.__VD_WIDGET__` before this script:
+ *   exposes `window.vd` (instance / state.get/set/subscribe / emit)
+ *   iframe → parent: vd:widget:ready | vd:widget:size {w,h}
+ *                    vd:widget:state-patch {patch,state} | vd:widget:event
+ *                    vd:widget:error {message}
+ *   parent → iframe: vd:widget:state {state, actor}
  */
 export function getBridgeScript(lang) {
   const isZh = lang === 'zh';
@@ -368,6 +376,123 @@ export function getBridgeScript(lang) {
       }
     }
   });
+
+  /* ------------------------------------------------------------------ */
+  /*  5. Widget runtime (window.vd) — only when the host injected         */
+  /*     window.__VD_WIDGET__ before this script                          */
+  /* ------------------------------------------------------------------ */
+
+  var W = window.__VD_WIDGET__;
+  if (W && typeof W === 'object') {
+    var deepCopy = function(value) {
+      try { return JSON.parse(JSON.stringify(value)); } catch (err) { return {}; }
+    };
+    var widgetState = (W.state && typeof W.state === 'object') ? deepCopy(W.state) : {};
+    var stateSubscribers = [];
+
+    window.vd = {
+      instance: W.instance || {},
+      state: {
+        get: function() { return deepCopy(widgetState); },
+        set: function(patch) {
+          if (!patch || typeof patch !== 'object') return;
+          for (var key in patch) {
+            if (patch.hasOwnProperty(key)) widgetState[key] = patch[key];
+          }
+          window.parent.postMessage({
+            type: 'vd:widget:state-patch',
+            patch: deepCopy(patch),
+            state: deepCopy(widgetState),
+          }, ORIGIN);
+        },
+        replace: function(next) {
+          widgetState = deepCopy(next || {});
+          window.parent.postMessage({
+            type: 'vd:widget:state-patch',
+            patch: deepCopy(widgetState),
+            state: deepCopy(widgetState),
+            replace: true,
+          }, ORIGIN);
+        },
+        subscribe: function(fn) {
+          if (typeof fn === 'function') stateSubscribers.push(fn);
+          return function() {
+            var i = stateSubscribers.indexOf(fn);
+            if (i >= 0) stateSubscribers.splice(i, 1);
+          };
+        },
+      },
+      emit: function(eventType, payload) {
+        var body = { event_type: String(eventType || 'event') };
+        if (payload && typeof payload === 'object') {
+          for (var key in payload) {
+            if (payload.hasOwnProperty(key) && key !== 'event_type') body[key] = payload[key];
+          }
+        }
+        // Lightweight output_schema check: required keys + event_type enum.
+        var valid = true;
+        var schema = W.output_schema || {};
+        if (Object.prototype.toString.call(schema.required) === '[object Array]') {
+          for (var i = 0; i < schema.required.length; i++) {
+            if (body[schema.required[i]] === undefined) valid = false;
+          }
+        }
+        var enumTypes = schema.properties && schema.properties.event_type && schema.properties.event_type['enum'];
+        if (enumTypes && enumTypes.indexOf(body.event_type) === -1) valid = false;
+        window.parent.postMessage({ type: 'vd:widget:event', payload: body, valid: valid }, ORIGIN);
+      },
+    };
+
+    // External (agent) state updates pushed by the host.
+    window.addEventListener('message', function(e) {
+      if (!e.data || e.data.type !== 'vd:widget:state') return;
+      widgetState = deepCopy(e.data.state || {});
+      var snapshot = deepCopy(widgetState);
+      for (var i = 0; i < stateSubscribers.length; i++) {
+        try { stateSubscribers[i](snapshot, { actor: e.data.actor || 'agent' }); } catch (err) {}
+      }
+    });
+
+    // Intrinsic content size — measured from the widget root so the host can
+    // size/scale the anchor shape. Never implemented inside widget HTML.
+    var lastIntrinsicW = 0;
+    var lastIntrinsicH = 0;
+    var widgetRoot = function() {
+      return document.getElementById('vd-widget-root') || document.body;
+    };
+    var sendIntrinsicSize = function() {
+      var root = widgetRoot();
+      if (!root) return;
+      var w = Math.ceil(Math.max(root.scrollWidth || 0, root.offsetWidth || 0));
+      var h = Math.ceil(Math.max(root.scrollHeight || 0, root.offsetHeight || 0));
+      if (!w || !h) return;
+      if (Math.abs(w - lastIntrinsicW) < 2 && Math.abs(h - lastIntrinsicH) < 2) return;
+      lastIntrinsicW = w;
+      lastIntrinsicH = h;
+      window.parent.postMessage({ type: 'vd:widget:size', w: w, h: h }, ORIGIN);
+    };
+    var bootWidget = function() {
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(sendIntrinsicSize).observe(widgetRoot());
+      }
+      sendIntrinsicSize();
+      setTimeout(sendIntrinsicSize, 120);
+      setTimeout(sendIntrinsicSize, 600);
+      window.parent.postMessage({ type: 'vd:widget:ready' }, ORIGIN);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bootWidget);
+    } else {
+      bootWidget();
+    }
+
+    window.addEventListener('error', function(e) {
+      window.parent.postMessage({
+        type: 'vd:widget:error',
+        message: String((e && e.message) || 'widget script error'),
+      }, ORIGIN);
+    });
+  }
 
 })();
 </script>`;

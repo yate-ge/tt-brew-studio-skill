@@ -217,6 +217,10 @@ Canvas workspace behavior:
   regions, and agent-readable canvas state.
 - Agent can continuously add material, organize ideas, place options, explain
   decisions, and advance product/design thinking on the canvas.
+- Treat agent canvas output as mentor-provided visual scaffolding: the agent
+  supplies thinking structure, prompts, seed content, tradeoffs, and next
+  discussion areas; the runtime handles stable frames, layout, scaling, and
+  preservation of user-authored canvas marks.
 - Agent should add collaboration scaffold packages when useful, not just empty
   templates. A scaffold package may include structure, seed content, interaction
   slots, widgets, next actions, and a short agent note explaining why this
@@ -229,6 +233,14 @@ Canvas workspace behavior:
   pages. Use templates such as `business_model_canvas` when a mature thinking
   structure helps the collaboration; agents may seed, rewrite, duplicate, or
   combine template slots.
+- Generated scaffold content should default to top-left flow inside sections,
+  leave useful blank space for collaboration, grow containers to fit content,
+  and wrap multi-section new generations in a single `scaffold.root` section.
+  Template inserts may use `scale` and `anchor` while preserving the root frame,
+  child frame proportions, and non-frame content offsets from each container's
+  top-left corner. When a template frame is resized in the canvas editor, child
+  frames should scale from their container's top-left corner; non-frame content
+  should keep its local offset and size.
 - User can annotate, add material, select regions, and submit feedback in the
   same canvas space.
 - The canvas toolbar exposes a project-private scaffold library inside the

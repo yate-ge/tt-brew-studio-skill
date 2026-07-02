@@ -256,8 +256,13 @@ depending on FigJam as the runtime. The transferable patterns are:
 - return or record every created and mutated shape id
 - use sections as navigational containers
 - position child nodes in the section's local coordinate system
+- treat agent output as a mentor-provided visual thinking scaffold, not a final
+  poster or static layout
+- place scaffold contents from the top-left and leave unused room for the user
+  to continue adding material
 - resize sections to encompass children unless the section is intentionally a
   participatory zone
+- preserve user-authored shapes and annotations during later agent writes
 - represent relationships explicitly instead of relying only on visual
   proximity
 - validate with screenshots or semantic index reads after meaningful writes

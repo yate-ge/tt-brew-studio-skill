@@ -10,6 +10,13 @@ Ordinary agents should use CanvasIR or canvas commands. Direct writes to
 `snapshot.document.store` are reserved for runtime debugging, migration, or
 front-end editor persistence.
 
+The agent's role on the canvas is like a mentor providing a visual thinking
+scaffold. Agents should express the learning/design intent: questions,
+sections, slots, seed ideas, tradeoffs, and next discussion spaces. The runtime
+owns stable execution details: wrapping new generated structures, preserving
+user-authored canvas marks, placing content from the top-left, growing
+containers to fit content, and keeping template geometry stable under scaling.
+
 ```text
 Agent intent
   -> CanvasIR / commands
@@ -27,6 +34,12 @@ Agent intent
     "title": "AI 桌面机器人商业模式画布",
     "purpose": "评估产品路线和商业可行性",
     "reading_order": "left_to_right"
+  },
+  "layout_policy": {
+    "flow": "top_left",
+    "container_sizing": "content_fit",
+    "wrap_new_generation": true,
+    "preserve_user_content": true
   },
   "grid": {
     "cols": 12,
@@ -114,9 +127,20 @@ Areas are relative to the node's parent grid. A top-level section uses the board
 grid. A slot inside a section uses that section's derived grid unless it defines
 its own `grid`.
 
+Nodes may also specify `bounds` when a command or template needs stable
+geometry. Child `bounds` are interpreted relative to the parent container's
+top-left corner; root `bounds` are page coordinates. This is mainly used by the
+server for generated scaffold wrappers and template scaling.
+
 When a content node has no `area`, the compiler auto-places it inside the parent
-with a readable grid flow. This keeps agent prompts small while preserving
-section containment.
+from the top-left with a readable size. Containers grow to fit their children
+instead of shrinking or evenly distributing children across the frame. This keeps
+agent prompts small while preserving section containment and leaving room for
+user collaboration.
+
+When generated CanvasIR has multiple root nodes, the compiler wraps them in a
+single `section` with `role = "scaffold.root"`. A single mature template with
+its own root frame is not wrapped again.
 
 ## Templates
 
@@ -137,6 +161,8 @@ Use templates through commands:
       "op": "insert_template",
       "template_id": "business_model_canvas",
       "title": "AI 桌面机器人商业模式画布",
+      "scale": 1.25,
+      "anchor": { "x": 320, "y": 240 },
       "seed": {
         "value_propositions": ["实体 AI presence 降低工具抽象感"],
         "customer_segments": ["远程办公者", "创作者"]
@@ -158,6 +184,11 @@ Supported v1 commands:
 - `delete_node`
 - `move_node`
 - `locate_node`
+
+`insert_template` accepts optional `scale` and `anchor` / `position` / `x` +
+`y`. Scaling keeps the template root frame and child frames in proportion while
+preserving non-frame seeded content offsets and sizes from the container
+top-left.
 
 Examples:
 
@@ -193,7 +224,9 @@ Before saving, the server checks:
 - parent existence
 - grid area overflow
 - sibling grid area overlap
+- sibling bounds overlap
 - generated snapshot structure
 - semantic hierarchy and containment
+- user-authored non-CanvasIR shapes are preserved across CanvasIR writes
 
 The API returns `layout_report` with counts, extents, warnings, and repairs.

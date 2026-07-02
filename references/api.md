@@ -677,6 +677,8 @@ Dry-runs a CanvasIR or template insert without saving.
 {
   "template_id": "business_model_canvas",
   "title": "AI 桌面机器人商业模式画布",
+  "scale": 1.25,
+  "anchor": { "x": 320, "y": 240 },
   "seed": {
     "value_propositions": ["实体 AI presence 降低工具抽象感"]
   }
@@ -711,7 +713,9 @@ and slot ids, not tldraw shape ids.
     {
       "op": "insert_template",
       "template_id": "business_model_canvas",
-      "title": "AI 桌面机器人商业模式画布"
+      "title": "AI 桌面机器人商业模式画布",
+      "scale": 1.25,
+      "anchor": { "x": 320, "y": 240 }
     },
     {
       "op": "add_node",
@@ -731,6 +735,16 @@ Supported commands:
 - `delete_node`
 - `move_node`
 - `locate_node`
+
+`insert_template` supports optional `scale` and `anchor` / `position` / `x` +
+`y`. Template scaling preserves the root frame, child frame proportions, and
+non-frame content offsets and sizes from their container top-left. When no
+anchor is provided for an incremental insert, the server places the template
+below the current CanvasIR extents.
+
+CanvasIR writes replace only shapes managed by CanvasIR
+(`meta.vd_ir_id` / `shape:vd-ir-*`) and preserve user-authored canvas shapes,
+including shapes nested inside agent-created frames.
 
 ### `PUT /api/canvas-workspaces/:id/snapshot`
 

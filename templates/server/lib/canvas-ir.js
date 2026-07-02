@@ -1,3 +1,5 @@
+const canvasWidgets = require('./canvas-widgets');
+
 const DEFAULT_TLDRAW_SCHEMA = {
   schemaVersion: 2,
   sequences: {
@@ -40,10 +42,20 @@ const DEFAULT_GRID = {
   padding: 48,
 };
 
+const DEFAULT_LAYOUT_POLICY = {
+  flow: 'top_left',
+  container_sizing: 'content_fit',
+  density: 'loose',
+  preserve_user_content: true,
+  wrap_new_generation: true,
+  wrapper_margin: 72,
+};
+
 const DEFAULT_NODE_SIZE = {
   sticky: { w: 220, h: 112 },
   text: { w: 360, h: 96 },
   shape: { w: 260, h: 132 },
+  html_component: { w: 360, h: 240 },
 };
 
 const MIN_NODE_SIZE = {
@@ -51,7 +63,18 @@ const MIN_NODE_SIZE = {
   sticky_note: { w: 104, h: 64 },
   text: { w: 120, h: 48 },
   shape: { w: 120, h: 72 },
+  html_component: { w: 160, h: 80 },
 };
+
+function nodeDesiredSize(node) {
+  if (node.kind === 'html_component') {
+    const sizing = node.meta?.vd_sizing;
+    if (sizing && Number.isFinite(sizing.initial_width) && Number.isFinite(sizing.initial_height)) {
+      return { w: sizing.initial_width, h: sizing.initial_height };
+    }
+  }
+  return DEFAULT_NODE_SIZE[node.kind] || DEFAULT_NODE_SIZE.shape;
+}
 
 const INDEX_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const CONTAINER_KINDS = new Set(['section', 'slot', 'cluster', 'pattern']);
@@ -132,6 +155,19 @@ function normalizeGrid(grid = {}) {
   };
 }
 
+function normalizeLayoutPolicy(policy = {}) {
+  const input = policy && typeof policy === 'object' ? policy : {};
+  return {
+    ...input,
+    flow: input.flow || input.auto_flow || DEFAULT_LAYOUT_POLICY.flow,
+    container_sizing: input.container_sizing || DEFAULT_LAYOUT_POLICY.container_sizing,
+    density: input.density || DEFAULT_LAYOUT_POLICY.density,
+    preserve_user_content: input.preserve_user_content !== false,
+    wrap_new_generation: input.wrap_new_generation !== false,
+    wrapper_margin: nonNegativeNumber(input.wrapper_margin, DEFAULT_LAYOUT_POLICY.wrapper_margin),
+  };
+}
+
 function positiveInt(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
@@ -157,6 +193,26 @@ function normalizeArea(area) {
   };
 }
 
+function normalizeBounds(bounds) {
+  if (!bounds || typeof bounds !== 'object') return null;
+  const x = Number(bounds.x ?? bounds.minX ?? 0);
+  const y = Number(bounds.y ?? bounds.minY ?? 0);
+  const width = Number(bounds.w ?? bounds.width ?? (
+    Number.isFinite(bounds.maxX) && Number.isFinite(bounds.minX) ? bounds.maxX - bounds.minX : NaN
+  ));
+  const height = Number(bounds.h ?? bounds.height ?? (
+    Number.isFinite(bounds.maxY) && Number.isFinite(bounds.minY) ? bounds.maxY - bounds.minY : NaN
+  ));
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    w: Math.round(width),
+    h: Math.round(height),
+  };
+}
+
 function areaToBounds(area, grid, origin = { x: 0, y: 0 }) {
   const normalizedArea = normalizeArea(area) || { col: 1, row: 1, colSpan: 1, rowSpan: 1 };
   const x = origin.x + grid.padding + (normalizedArea.col - 1) * (grid.cellWidth + grid.gap);
@@ -174,7 +230,7 @@ function areaToBounds(area, grid, origin = { x: 0, y: 0 }) {
 function normalizeCanvasIR(input = {}) {
   const now = new Date().toISOString();
   const nodes = Array.isArray(input.nodes) ? input.nodes : [];
-  return {
+  const ir = {
     version: input.version || 1,
     board: {
       title: input.board?.title || input.title || '协作画布',
@@ -184,16 +240,18 @@ function normalizeCanvasIR(input = {}) {
     grid: normalizeGrid(input.grid),
     nodes: nodes.map((node, index) => normalizeIRNode(node, index)),
     relationships: Array.isArray(input.relationships) ? input.relationships.map(normalizeRelationship).filter(Boolean) : [],
-    layout_policy: input.layout_policy && typeof input.layout_policy === 'object' ? input.layout_policy : {},
+    layout_policy: normalizeLayoutPolicy(input.layout_policy),
     metadata: {
       ...(input.metadata || {}),
       normalized_at: now,
     },
   };
+  return maybeWrapGeneratedScaffold(ir);
 }
 
 function normalizeIRNode(node = {}, index = 0) {
-  const kind = String(node.kind || 'sticky').trim();
+  const rawKind = String(node.kind || 'sticky').trim();
+  const kind = rawKind === 'widget' ? 'html_component' : rawKind;
   const id = safeId(node.id || node.title || `node-${index + 1}`, `node-${index + 1}`);
   const title = node.title || node.label || compactText(node.content || node.text || id, 48);
   return {
@@ -205,6 +263,7 @@ function normalizeIRNode(node = {}, index = 0) {
     children: Array.isArray(node.children) ? node.children.map((item) => safeId(item)).filter(Boolean) : [],
     visible: node.visible !== false,
     area: normalizeArea(node.area),
+    bounds: normalizeBounds(node.bounds),
     grid: node.grid ? normalizeGrid(node.grid) : null,
     content: typeof node.content === 'string' ? node.content : (typeof node.text === 'string' ? node.text : ''),
     color: node.color || null,
@@ -225,6 +284,90 @@ function normalizeRelationship(rel = {}) {
     label: rel.label || '',
     meta: rel.meta && typeof rel.meta === 'object' ? rel.meta : {},
   };
+}
+
+function maybeWrapGeneratedScaffold(ir) {
+  const policy = normalizeLayoutPolicy(ir.layout_policy);
+  if (policy.wrap_new_generation === false) return ir;
+  const roots = ir.nodes.filter((node) => !node.parent);
+  if (roots.length === 0) return ir;
+  if (roots.length === 1 && CONTAINER_KINDS.has(roots[0].kind) && roots[0].visible !== false) return ir;
+  if (roots.some((node) => String(node.role || '').includes('scaffold.root') || node.meta?.vd_scaffold_root)) return ir;
+
+  const layout = resolveLayout(
+    { ...ir, layout_policy: { ...policy, wrap_new_generation: false } },
+    new Map(ir.nodes.map((node) => [node.id, node])),
+    buildChildrenByParent(ir.nodes)
+  );
+  const rootBounds = roots.map((node) => layout.get(node.id)?.bounds).filter(Boolean);
+  if (rootBounds.length === 0) return ir;
+
+  const margin = policy.wrapper_margin;
+  const minX = Math.min(...rootBounds.map((bounds) => bounds.x));
+  const minY = Math.min(...rootBounds.map((bounds) => bounds.y));
+  const maxX = Math.max(...rootBounds.map((bounds) => bounds.x + bounds.w));
+  const maxY = Math.max(...rootBounds.map((bounds) => bounds.y + bounds.h));
+  const wrapperBounds = {
+    x: Math.round(minX - margin),
+    y: Math.round(minY - margin),
+    w: Math.round((maxX - minX) + margin * 2),
+    h: Math.round((maxY - minY) + margin * 2),
+  };
+  const wrapperId = uniqueNodeId(ir, 'scaffold-root');
+  const wrappedRoots = new Set(roots.map((node) => node.id));
+  const nodes = ir.nodes.map((node) => {
+    if (!wrappedRoots.has(node.id)) return node;
+    const bounds = layout.get(node.id)?.bounds;
+    return {
+      ...node,
+      parent: wrapperId,
+      area: null,
+      bounds: bounds ? {
+        x: bounds.x - wrapperBounds.x,
+        y: bounds.y - wrapperBounds.y,
+        w: bounds.w,
+        h: bounds.h,
+      } : node.bounds,
+    };
+  });
+  return {
+    ...ir,
+    nodes: [
+      {
+        id: wrapperId,
+        kind: 'section',
+        title: ir.board.title || '协作脚手架',
+        role: 'scaffold.root',
+        parent: null,
+        children: [],
+        visible: true,
+        area: null,
+        bounds: wrapperBounds,
+        grid: deriveChildGrid({ kind: 'section' }, wrapperBounds),
+        content: '',
+        color: null,
+        items: [],
+        meta: { vd_scaffold_root: true },
+      },
+      ...nodes,
+    ],
+    metadata: {
+      ...ir.metadata,
+      scaffold_wrap_applied: true,
+      scaffold_root_id: wrapperId,
+    },
+  };
+}
+
+function uniqueNodeId(ir, base) {
+  const ids = new Set(ir.nodes.map((node) => node.id));
+  let candidate = safeId(base);
+  let suffix = 2;
+  while (ids.has(candidate)) {
+    candidate = `${safeId(base)}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function validateCanvasIR(input) {
@@ -306,22 +449,7 @@ function compileCanvasIR(input, options = {}) {
   const nodesById = new Map(ir.nodes.map((node) => [node.id, node]));
   const childrenByParent = buildChildrenByParent(ir.nodes);
   const layout = resolveLayout(ir, nodesById, childrenByParent);
-  const records = {
-    'document:document': previousSnapshot.document?.store?.['document:document'] || {
-      gridSize: 10,
-      name: '',
-      meta: {},
-      id: 'document:document',
-      typeName: 'document',
-    },
-    'page:page': previousSnapshot.document?.store?.['page:page'] || {
-      meta: {},
-      id: 'page:page',
-      name: 'Page 1',
-      index: 'a1',
-      typeName: 'page',
-    },
-  };
+  const records = buildBaseStoreRecords(previousSnapshot.document?.store || {}, normalizeLayoutPolicy(ir.layout_policy));
 
   const tldrawSections = [];
   const tldrawNodes = [];
@@ -339,6 +467,7 @@ function compileCanvasIR(input, options = {}) {
     shapeIdsByNodeId,
     now,
   });
+  removeDanglingBindings(records);
 
   const snapshot = {
     document: { schema, store: records },
@@ -380,6 +509,7 @@ function resolveLayout(ir, nodesById, childrenByParent) {
   const layout = new Map();
   const rootNodes = ir.nodes.filter((node) => !node.parent);
   const rootGrid = normalizeGrid(ir.grid);
+  const layoutPolicy = normalizeLayoutPolicy(ir.layout_policy);
   const autoState = new Map();
 
   function resolveNode(node, parent = null) {
@@ -387,9 +517,11 @@ function resolveLayout(ir, nodesById, childrenByParent) {
     const parentGrid = node.parent && parent ? (parent.grid || parentLayout?.grid || rootGrid) : rootGrid;
     const origin = parentLayout ? { x: parentLayout.bounds.x, y: parentLayout.bounds.y } : { x: 0, y: 0 };
     const siblings = parent ? (childrenByParent.get(parent.id) || []) : rootNodes;
-    const bounds = node.area
+    const bounds = node.bounds
+      ? boundsToAbsolute(node.bounds, origin)
+      : node.area
       ? areaToBounds(node.area, parentGrid, origin)
-      : nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, siblings.length);
+      : nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, siblings.length, layoutPolicy);
     const grid = node.grid || deriveChildGrid(node, bounds);
     layout.set(node.id, { bounds, grid, parent_id: parent?.id || null });
     const children = childrenByParent.get(node.id) || [];
@@ -400,7 +532,18 @@ function resolveLayout(ir, nodesById, childrenByParent) {
   for (const node of ir.nodes) {
     if (!layout.has(node.id)) resolveNode(node, node.parent ? nodesById.get(safeId(node.parent)) : null);
   }
+  layout.autoRepairs = [];
+  growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy);
   return layout;
+}
+
+function boundsToAbsolute(bounds, origin = { x: 0, y: 0 }) {
+  return {
+    x: Math.round(origin.x + bounds.x),
+    y: Math.round(origin.y + bounds.y),
+    w: Math.round(bounds.w),
+    h: Math.round(bounds.h),
+  };
 }
 
 function deriveChildGrid(node, bounds) {
@@ -417,13 +560,13 @@ function deriveChildGrid(node, bounds) {
   });
 }
 
-function nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, siblingCount = 1) {
+function nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, siblingCount = 1, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
   const key = parent?.id || '__root__';
   const state = autoState.get(key) || { index: 0 };
   autoState.set(key, state);
-  const size = DEFAULT_NODE_SIZE[node.kind] || DEFAULT_NODE_SIZE.shape;
+  const size = nodeDesiredSize(node);
   const flow = parent
-    ? (state.flow || computeAutoFlow(parentLayout.bounds, parentGrid, size, node.kind, siblingCount))
+    ? (state.flow || computeAutoFlow(parentLayout.bounds, parentGrid, size, node.kind, siblingCount, layoutPolicy))
     : { cols: 3, cellW: size.w, cellH: size.h, itemW: size.w, itemH: size.h };
   state.flow = flow;
   const cols = Math.max(1, flow.cols);
@@ -431,20 +574,38 @@ function nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, sibli
   const row = Math.floor(state.index / cols);
   state.index += 1;
   const origin = parentLayout ? { x: parentLayout.bounds.x, y: parentLayout.bounds.y } : { x: 0, y: 0 };
+  const centerInCell = normalizeLayoutPolicy(layoutPolicy).flow !== 'top_left';
+  // Widgets keep their sizing-derived dimensions even when the parent flow
+  // was measured from smaller siblings.
+  const itemW = node.kind === 'html_component' ? Math.max(flow.itemW, size.w) : flow.itemW;
+  const itemH = node.kind === 'html_component' ? Math.max(flow.itemH, size.h) : flow.itemH;
   return {
-    x: Math.round(origin.x + parentGrid.padding + col * (flow.cellW + parentGrid.gap) + Math.max(0, (flow.cellW - flow.itemW) / 2)),
+    x: Math.round(origin.x + parentGrid.padding + col * (flow.cellW + parentGrid.gap) + (centerInCell ? Math.max(0, (flow.cellW - flow.itemW) / 2) : 0)),
     y: Math.round(origin.y + parentGrid.padding + row * (flow.cellH + parentGrid.gap)),
-    w: Math.round(flow.itemW),
-    h: Math.round(flow.itemH),
+    w: Math.round(itemW),
+    h: Math.round(itemH),
   };
 }
 
-function computeAutoFlow(parentBounds, parentGrid, desiredSize, kind, siblingCount) {
+function computeAutoFlow(parentBounds, parentGrid, desiredSize, kind, siblingCount, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
   const count = Math.max(1, siblingCount);
   const gap = parentGrid.gap;
   const minSize = MIN_NODE_SIZE[kind] || MIN_NODE_SIZE.shape;
   const availableW = Math.max(minSize.w, parentBounds.w - parentGrid.padding * 2);
   const availableH = Math.max(minSize.h, parentBounds.h - parentGrid.padding * 2);
+
+  if (normalizeLayoutPolicy(layoutPolicy).flow === 'top_left') {
+    const itemW = Math.max(minSize.w, desiredSize.w);
+    const itemH = Math.max(minSize.h, desiredSize.h);
+    return {
+      cols: Math.max(1, Math.min(count, Math.floor((availableW + gap) / (itemW + gap)) || 1)),
+      cellW: itemW,
+      cellH: itemH,
+      itemW,
+      itemH,
+    };
+  }
+
   const maxCols = Math.max(1, Math.min(
     count,
     Math.floor((availableW + gap) / (minSize.w + gap))
@@ -486,6 +647,112 @@ function computeAutoFlow(parentBounds, parentGrid, desiredSize, kind, siblingCou
     itemW: Math.max(minSize.w, best.itemW),
     itemH: Math.max(minSize.h, best.itemH),
   };
+}
+
+function buildBaseStoreRecords(previousStore = {}, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
+  const policy = normalizeLayoutPolicy(layoutPolicy);
+  const records = {};
+  for (const [id, record] of Object.entries(previousStore || {})) {
+    if (id === 'document:document' || id === 'page:page') continue;
+    if (policy.preserve_user_content && !isIRManagedRecord(id, record)) {
+      records[id] = cloneRecord(record);
+    }
+  }
+  records['document:document'] = cloneRecord(previousStore['document:document']) || {
+    gridSize: 10,
+    name: '',
+    meta: {},
+    id: 'document:document',
+    typeName: 'document',
+  };
+  records['page:page'] = cloneRecord(previousStore['page:page']) || {
+    meta: {},
+    id: 'page:page',
+    name: 'Page 1',
+    index: 'a1',
+    typeName: 'page',
+  };
+  return records;
+}
+
+function cloneRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  return JSON.parse(JSON.stringify(record));
+}
+
+function isIRManagedRecord(id, record) {
+  return record?.typeName === 'shape'
+    && (record?.meta?.vd_ir_id || String(id || record?.id || '').startsWith('shape:vd-ir-'));
+}
+
+function removeDanglingBindings(records) {
+  for (const [id, record] of Object.entries(records)) {
+    if (!isBindingRecord(record)) continue;
+    const refs = bindingReferenceIds(record);
+    if (refs.some((shapeId) => shapeId && !records[shapeId])) delete records[id];
+  }
+}
+
+function isBindingRecord(record) {
+  return String(record?.typeName || '').includes('binding');
+}
+
+function bindingReferenceIds(record) {
+  return [
+    record.fromId,
+    record.toId,
+    record.props?.fromId,
+    record.props?.toId,
+    record.props?.terminal === 'start' ? record.props?.boundShapeId : null,
+    record.props?.terminal === 'end' ? record.props?.boundShapeId : null,
+  ].filter((value) => typeof value === 'string' && value.startsWith('shape:'));
+}
+
+function growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
+  const policy = normalizeLayoutPolicy(layoutPolicy);
+  if (policy.container_sizing !== 'content_fit' && policy.auto_grow !== true) return;
+  const containerNodes = ir.nodes
+    .filter((node) => CONTAINER_KINDS.has(node.kind) && node.visible !== false)
+    .sort((a, b) => nodeDepth(ir, b.id) - nodeDepth(ir, a.id));
+  for (const node of containerNodes) {
+    const parentLayout = layout.get(node.id);
+    const children = childrenByParent.get(node.id) || [];
+    if (!parentLayout || children.length === 0) continue;
+    const childBounds = children.map((child) => layout.get(child.id)?.bounds).filter(Boolean);
+    if (childBounds.length === 0) continue;
+    const grid = node.grid || parentLayout.grid || deriveChildGrid(node, parentLayout.bounds);
+    const requiredW = Math.max(
+      parentLayout.bounds.w,
+      Math.max(...childBounds.map((bounds) => bounds.x + bounds.w)) - parentLayout.bounds.x + grid.padding
+    );
+    const requiredH = Math.max(
+      parentLayout.bounds.h,
+      Math.max(...childBounds.map((bounds) => bounds.y + bounds.h)) - parentLayout.bounds.y + grid.padding
+    );
+    const nextW = Math.ceil(requiredW);
+    const nextH = Math.ceil(requiredH);
+    if (nextW !== parentLayout.bounds.w || nextH !== parentLayout.bounds.h) {
+      const before = { ...parentLayout.bounds };
+      parentLayout.bounds = { ...parentLayout.bounds, w: nextW, h: nextH };
+      layout.set(node.id, parentLayout);
+      layout.autoRepairs.push({
+        code: 'GROW_CONTAINER_TO_FIT_CHILDREN',
+        node_id: node.id,
+        from: before,
+        to: parentLayout.bounds,
+      });
+    }
+  }
+}
+
+function nodeDepth(ir, nodeId) {
+  let depth = 0;
+  let current = ir.nodes.find((node) => node.id === safeId(nodeId));
+  while (current?.parent) {
+    depth += 1;
+    current = ir.nodes.find((node) => node.id === safeId(current.parent));
+  }
+  return depth;
 }
 
 function addRecordsForNodes(ctx) {
@@ -567,7 +834,10 @@ function createContentRecord(node, parentId, index, bounds, now) {
   const color = node.color || colorForNode(node);
   const title = node.title || compactText(node.content || node.id, 48);
   const body = node.content || node.title || '';
-  const text = body && body !== title ? `${title}\n\n${body}` : title;
+  // Widget anchors stay visually empty: the transparent iframe overlay renders
+  // the real content, so no solid fill and no body text behind it.
+  const isWidget = node.kind === 'html_component';
+  const text = isWidget ? title : (body && body !== title ? `${title}\n\n${body}` : title);
   return {
     ...baseShapeRecord(node, parentId, index, bounds, now),
     type: 'geo',
@@ -575,13 +845,13 @@ function createContentRecord(node, parentId, index, bounds, now) {
       w: bounds.w,
       h: bounds.h,
       geo: node.kind === 'completion_request' ? 'cloud' : 'rectangle',
-      dash: 'draw',
+      dash: isWidget ? 'dotted' : 'draw',
       growY: 0,
       url: '',
       scale: 1,
-      color,
+      color: isWidget ? 'violet' : color,
       labelColor: 'black',
-      fill: node.kind === 'text' ? 'none' : 'solid',
+      fill: node.kind === 'text' || isWidget ? 'none' : 'solid',
       size: bounds.w < 150 || bounds.h < 88 ? 's' : 'm',
       font: 'draw',
       align: 'middle',
@@ -733,6 +1003,16 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
       shape_id: node.shape_id,
       title: node.title,
       section_id: node.section_id,
+      template_id: node.meta?.vd_widget_template || null,
+      version: node.meta?.vd_widget_version || 1,
+      state: node.meta?.vd_widget_state || {},
+      state_version: node.meta?.vd_state_version || 0,
+      state_actor: node.meta?.vd_state_actor || 'agent',
+      input_schema: node.meta?.vd_input_schema || {},
+      output_schema: node.meta?.vd_output_schema || {},
+      sizing: node.meta?.vd_sizing || null,
+      review: node.meta?.vd_widget_review || null,
+      bounds: node.bounds,
     })),
     artifact_links: [],
     layout_reviews: [{
@@ -788,6 +1068,7 @@ function buildLayoutReport({ ir, layout, validation, tldrawSections, tldrawNodes
   const bounds = Array.from(layout.values()).map((item) => item.bounds);
   const warnings = [...validation.warnings];
   const childOverflows = [];
+  const siblingOverlaps = [];
   for (const node of ir.nodes) {
     if (!node.parent) continue;
     const childLayout = layout.get(node.id);
@@ -803,6 +1084,25 @@ function buildLayoutReport({ ir, layout, validation, tldrawSections, tldrawNodes
       });
     }
   }
+  const byParent = groupBy(ir.nodes, (node) => node.parent || '__root__');
+  for (const [parent, siblings] of byParent.entries()) {
+    for (let i = 0; i < siblings.length; i += 1) {
+      for (let j = i + 1; j < siblings.length; j += 1) {
+        const a = layout.get(siblings[i].id)?.bounds;
+        const b = layout.get(siblings[j].id)?.bounds;
+        if (a && b && boundsOverlap(a, b)) {
+          siblingOverlaps.push({
+            code: 'SIBLING_BOUNDS_OVERLAP',
+            parent: parent === '__root__' ? null : parent,
+            a: siblings[i].id,
+            b: siblings[j].id,
+            a_bounds: a,
+            b_bounds: b,
+          });
+        }
+      }
+    }
+  }
   const unreadableNodes = tldrawNodes
     .filter(({ bounds: nodeBounds }) => nodeBounds.w < 96 || nodeBounds.h < 56)
     .map(({ node, bounds: nodeBounds }) => ({
@@ -810,15 +1110,17 @@ function buildLayoutReport({ ir, layout, validation, tldrawSections, tldrawNodes
       node_id: node.id,
       bounds: nodeBounds,
     }));
-  warnings.push(...childOverflows, ...unreadableNodes);
+  warnings.push(...childOverflows, ...siblingOverlaps, ...unreadableNodes);
   return {
     strategy: 'canvas_ir_grid',
+    layout_policy: ir.layout_policy,
     board_title: ir.board.title,
     counts: {
       sections: tldrawSections.length,
       nodes: tldrawNodes.length,
       relationships: ir.relationships.length,
       child_overflows: childOverflows.length,
+      sibling_overlaps: siblingOverlaps.length,
       unreadable_nodes: unreadableNodes.length,
     },
     extents: bounds.length ? {
@@ -828,8 +1130,15 @@ function buildLayoutReport({ ir, layout, validation, tldrawSections, tldrawNodes
       h: Math.max(...bounds.map((item) => item.y + item.h)) - Math.min(...bounds.map((item) => item.y)),
     } : null,
     warnings,
-    auto_repairs: [],
+    auto_repairs: Array.isArray(layout.autoRepairs) ? layout.autoRepairs : [],
   };
+}
+
+function boundsOverlap(a, b, tolerance = 2) {
+  return a.x < b.x + b.w - tolerance
+    && a.x + a.w > b.x + tolerance
+    && a.y < b.y + b.h - tolerance
+    && a.y + a.h > b.y + tolerance;
 }
 
 function boundsContain(parent, child, tolerance = 2) {
@@ -903,6 +1212,183 @@ function getCanvasTemplate(id) {
   return null;
 }
 
+function boundedScale(value, fallback = 1) {
+  const scale = positiveNumber(value, fallback);
+  return Math.min(4, Math.max(0.2, scale));
+}
+
+function scaleGrid(grid, scale) {
+  const normalized = normalizeGrid(grid);
+  return normalizeGrid({
+    ...normalized,
+    cellWidth: normalized.cellWidth * scale,
+    rowHeight: normalized.rowHeight * scale,
+    gap: normalized.gap * scale,
+    padding: normalized.padding * scale,
+  });
+}
+
+function scaleBounds(bounds, scale) {
+  const normalized = normalizeBounds(bounds);
+  if (!normalized) return null;
+  return {
+    x: Math.round(normalized.x * scale),
+    y: Math.round(normalized.y * scale),
+    w: Math.round(normalized.w * scale),
+    h: Math.round(normalized.h * scale),
+  };
+}
+
+function normalizePoint(input, fallback = null) {
+  if (!input || typeof input !== 'object') return fallback;
+  const x = Number(input.x);
+  const y = Number(input.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function commandAnchor(options = {}) {
+  return normalizePoint(options.anchor)
+    || normalizePoint(options.position)
+    || (Number.isFinite(Number(options.x)) && Number.isFinite(Number(options.y))
+      ? { x: Math.round(Number(options.x)), y: Math.round(Number(options.y)) }
+      : null);
+}
+
+function applyTemplateTransform(ir, options = {}) {
+  const scale = boundedScale(options.scale, 1);
+  const anchor = commandAnchor(options);
+  const next = {
+    ...ir,
+    metadata: {
+      ...ir.metadata,
+      template_scale: scale,
+      template_anchor: anchor,
+    },
+  };
+  if (scale !== 1 || anchor) return materializeScaledTree(next, { scale, anchor });
+  return normalizeCanvasIR(next);
+}
+
+function moveRootNodesToAnchor(ir, anchor) {
+  const roots = ir.nodes.filter((node) => !node.parent);
+  if (roots.length === 0) return ir;
+  const layout = resolveLayout(
+    { ...ir, layout_policy: { ...normalizeLayoutPolicy(ir.layout_policy), wrap_new_generation: false } },
+    new Map(ir.nodes.map((node) => [node.id, node])),
+    buildChildrenByParent(ir.nodes)
+  );
+  const rootBounds = roots.map((node) => layout.get(node.id)?.bounds).filter(Boolean);
+  if (rootBounds.length === 0) return ir;
+  const minX = Math.min(...rootBounds.map((bounds) => bounds.x));
+  const minY = Math.min(...rootBounds.map((bounds) => bounds.y));
+  const rootIds = new Set(roots.map((node) => node.id));
+  return {
+    ...ir,
+    nodes: ir.nodes.map((node) => {
+      if (!rootIds.has(node.id)) return node;
+      const bounds = layout.get(node.id)?.bounds;
+      if (!bounds) return node;
+      return {
+        ...node,
+        area: null,
+        bounds: {
+          x: anchor.x + (bounds.x - minX),
+          y: anchor.y + (bounds.y - minY),
+          w: bounds.w,
+          h: bounds.h,
+        },
+      };
+    }),
+  };
+}
+
+function materializeScaledTree(ir, { scale = 1, anchor = null } = {}) {
+  const layoutIR = {
+    ...ir,
+    layout_policy: { ...normalizeLayoutPolicy(ir.layout_policy), wrap_new_generation: false },
+  };
+  const layout = resolveLayout(
+    layoutIR,
+    new Map(ir.nodes.map((node) => [node.id, node])),
+    buildChildrenByParent(ir.nodes)
+  );
+  const roots = ir.nodes.filter((node) => !node.parent);
+  const rootBounds = roots.map((node) => layout.get(node.id)?.bounds).filter(Boolean);
+  if (rootBounds.length === 0) return normalizeCanvasIR(ir);
+  const minX = Math.min(...rootBounds.map((bounds) => bounds.x));
+  const minY = Math.min(...rootBounds.map((bounds) => bounds.y));
+  const target = anchor || { x: minX, y: minY };
+  const nodes = ir.nodes.map((node) => {
+    const bounds = layout.get(node.id)?.bounds;
+    if (!bounds) return node;
+    const parentBounds = node.parent ? layout.get(safeId(node.parent))?.bounds : null;
+    const shouldScaleSize = CONTAINER_KINDS.has(node.kind);
+    const localScale = shouldScaleSize ? scale : 1;
+    const x = parentBounds
+      ? (bounds.x - parentBounds.x) * localScale
+      : target.x + (bounds.x - minX) * scale;
+    const y = parentBounds
+      ? (bounds.y - parentBounds.y) * localScale
+      : target.y + (bounds.y - minY) * scale;
+    return {
+      ...node,
+      area: null,
+      bounds: {
+        x: Math.round(x),
+        y: Math.round(y),
+        w: Math.round(shouldScaleSize ? bounds.w * scale : bounds.w),
+        h: Math.round(shouldScaleSize ? bounds.h * scale : bounds.h),
+      },
+      meta: {
+        ...(node.meta || {}),
+        vd_template_scaled: scale !== 1 ? true : undefined,
+        vd_template_scale: scale,
+        vd_template_size_policy: shouldScaleSize ? 'scale_frame' : 'preserve_content_offset_and_size',
+      },
+    };
+  });
+  return normalizeCanvasIR({
+    ...ir,
+    grid: scale !== 1 ? scaleGrid(ir.grid, scale) : ir.grid,
+    nodes,
+    metadata: {
+      ...ir.metadata,
+      template_scale: scale,
+      template_anchor: anchor,
+      template_geometry: 'materialized_frame_scaled_content_size_preserved',
+    },
+  });
+}
+
+function canvasIRExtents(ir) {
+  if (!ir.nodes.length) return null;
+  const layout = resolveLayout(
+    { ...ir, layout_policy: { ...normalizeLayoutPolicy(ir.layout_policy), wrap_new_generation: false } },
+    new Map(ir.nodes.map((node) => [node.id, node])),
+    buildChildrenByParent(ir.nodes)
+  );
+  const bounds = Array.from(layout.values()).map((item) => item.bounds).filter(Boolean);
+  if (bounds.length === 0) return null;
+  const minX = Math.min(...bounds.map((item) => item.x));
+  const minY = Math.min(...bounds.map((item) => item.y));
+  const maxX = Math.max(...bounds.map((item) => item.x + item.w));
+  const maxY = Math.max(...bounds.map((item) => item.y + item.h));
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function placeTemplateFragment(fragment, currentIR, command = {}) {
+  const explicitAnchor = commandAnchor(command);
+  if (explicitAnchor) return moveRootNodesToAnchor(fragment, explicitAnchor);
+  const currentExtents = canvasIRExtents(currentIR);
+  if (!currentExtents) return fragment;
+  const anchor = {
+    x: currentExtents.x,
+    y: currentExtents.y + currentExtents.h + normalizeGrid(currentIR.grid).rowHeight,
+  };
+  return moveRootNodesToAnchor(fragment, anchor);
+}
+
 function instantiateTemplate(templateId, options = {}) {
   const template = getCanvasTemplate(templateId);
   if (!template) throw new Error(`Unknown canvas template: ${templateId}`);
@@ -913,6 +1399,7 @@ function instantiateTemplate(templateId, options = {}) {
   const ir = JSON.parse(JSON.stringify(template.default_ir));
   ir.board.title = title;
   ir.board.purpose = purpose;
+  ir.nodes = ir.nodes.map((node) => (!node.parent && node.id === template.id ? { ...node, title } : node));
   if (instanceId !== template.id) {
     ir.nodes = ir.nodes.map((node) => ({
       ...node,
@@ -945,7 +1432,7 @@ function instantiateTemplate(templateId, options = {}) {
     });
   }
   ir.nodes.push(...seedNodes);
-  return normalizeCanvasIR(ir);
+  return applyTemplateTransform(normalizeCanvasIR(ir), options);
 }
 
 function applyCanvasIRCommands(currentIR, commands = []) {
@@ -965,23 +1452,24 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         results.push({ op, status: 'applied', template_id: command.template_id || command.template || 'business_model_canvas' });
         continue;
       }
+      const placedFragment = placeTemplateFragment(fragment, ir, command);
       const offset = nextRootRow(ir);
       const nodeIdPrefix = safeId(command.instance_id || command.template_id || command.template || 'template');
       const existingIds = new Set(ir.nodes.map((item) => item.id));
       const idMap = new Map();
-      for (const node of fragment.nodes) {
+      for (const node of placedFragment.nodes) {
         idMap.set(node.id, existingIds.has(node.id) ? `${nodeIdPrefix}.${node.id}` : node.id);
       }
-      for (const node of fragment.nodes) {
+      for (const node of placedFragment.nodes) {
         const nextNode = {
           ...node,
           id: idMap.get(node.id),
           parent: node.parent ? (idMap.get(node.parent) || node.parent) : null,
         };
-        if (!nextNode.parent && nextNode.area) nextNode.area = { ...nextNode.area, row: nextNode.area.row + offset };
+        if (!nextNode.parent && !nextNode.bounds && nextNode.area) nextNode.area = { ...nextNode.area, row: nextNode.area.row + offset };
         ir.nodes.push(nextNode);
       }
-      ir.relationships.push(...fragment.relationships.map((rel) => ({
+      ir.relationships.push(...placedFragment.relationships.map((rel) => ({
         ...rel,
         id: rel.id && idMap.has(rel.from) && idMap.has(rel.to)
           ? `rel-${idMap.get(rel.from)}-${idMap.get(rel.to)}`
@@ -998,6 +1486,7 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         role: command.role,
         parent: command.parent,
         area: command.area,
+        bounds: command.bounds,
         content: command.content || command.text,
         color: command.color,
       }, ir.nodes.length);
@@ -1026,6 +1515,95 @@ function applyCanvasIRCommands(currentIR, commands = []) {
       node.parent = command.parent ? safeId(command.parent) : null;
       if (command.area) node.area = normalizeArea(command.area);
       results.push({ op, status: 'applied', node_id: node.id, parent: node.parent });
+    } else if (op === 'add_widget' || op === 'add_html_component') {
+      const { spec, review } = canvasWidgets.prepareWidget(command);
+      if (!spec || review.status === 'failed') {
+        results.push({ op, status: 'rejected', errors: review.errors, widget_review: review });
+        continue;
+      }
+      const meta = canvasWidgets.widgetNodeMeta(spec, { actor: 'agent', review, version: 1 });
+      const node = normalizeIRNode({
+        id: command.id || `widget-${Date.now()}`,
+        kind: 'html_component',
+        title: spec.title,
+        role: command.role || 'widget',
+        parent: command.parent,
+        area: command.area,
+        bounds: command.bounds,
+        content: spec.description,
+        meta,
+      }, ir.nodes.length);
+      ir.nodes.push(node);
+      results.push({
+        op,
+        status: 'applied',
+        node_id: node.id,
+        template_id: spec.template_id,
+        widget_review: review,
+      });
+    } else if (op === 'update_widget') {
+      const node = ir.nodes.find((item) => item.id === safeId(command.id));
+      if (!node || node.kind !== 'html_component') {
+        results.push({ op, status: 'not_found', node_id: command.id });
+        continue;
+      }
+      const meta = { ...(node.meta || {}) };
+      const changes = [];
+      const statePatch = command.state_patch && typeof command.state_patch === 'object' ? command.state_patch : null;
+      const stateReplace = command.state && typeof command.state === 'object' ? command.state : null;
+      if (statePatch || stateReplace) {
+        meta.vd_widget_state = stateReplace || { ...(meta.vd_widget_state || {}), ...statePatch };
+        meta.vd_state_version = (meta.vd_state_version || 0) + 1;
+        meta.vd_state_actor = 'agent';
+        changes.push('state');
+      }
+      let review = null;
+      if (typeof command.html === 'string' && command.html.trim()) {
+        const prepared = canvasWidgets.prepareWidget({
+          title: command.title || meta.vd_title,
+          description: command.description || meta.vd_description,
+          html: command.html,
+          state: meta.vd_widget_state,
+          output_schema: command.output_schema || meta.vd_output_schema,
+          input_schema: command.input_schema || meta.vd_input_schema,
+          sizing: { ...(meta.vd_sizing || {}), ...(command.sizing || {}) },
+        });
+        review = prepared.review;
+        if (!prepared.spec || review.status === 'failed') {
+          results.push({ op, status: 'rejected', node_id: node.id, errors: review.errors, widget_review: review });
+          continue;
+        }
+        meta.vd_html_prev = meta.vd_html || null;
+        meta.vd_html = prepared.spec.html;
+        meta.vd_output_schema = prepared.spec.output_schema;
+        meta.vd_input_schema = prepared.spec.input_schema;
+        meta.vd_sizing = prepared.spec.sizing;
+        meta.vd_widget_version = (meta.vd_widget_version || 1) + 1;
+        meta.vd_widget_review = review;
+        changes.push('html');
+      }
+      if (command.title) {
+        node.title = command.title;
+        meta.vd_title = command.title;
+        changes.push('title');
+      }
+      if (command.description) {
+        node.content = command.description;
+        meta.vd_description = command.description;
+        changes.push('description');
+      }
+      if (changes.length === 0) {
+        results.push({ op, status: 'no_change', node_id: node.id });
+        continue;
+      }
+      node.meta = meta;
+      results.push({
+        op,
+        status: 'applied',
+        node_id: node.id,
+        changes,
+        ...(review ? { widget_review: review } : {}),
+      });
     } else if (op === 'locate_node') {
       const query = String(command.query || command.id || '').toLowerCase();
       const matches = ir.nodes.filter((node) => node.id === safeId(command.id)
@@ -1083,9 +1661,16 @@ function buildCanvasAgentContext({ workspace, semanticIndex, openFeedback = [], 
     open_feedback: openFeedback,
     open_completion_requests: openCompletionRequests,
     available_templates: listCanvasTemplates(),
+    available_widget_templates: canvasWidgets.listWidgetTemplates(),
+    widget_instances: Array.isArray(semanticIndex?.widget_instances) ? semanticIndex.widget_instances : [],
     command_schema: {
-      ops: ['insert_template', 'add_node', 'edit_node', 'delete_node', 'move_node', 'locate_node'],
+      ops: ['insert_template', 'add_node', 'edit_node', 'delete_node', 'move_node', 'locate_node', 'add_widget', 'update_widget'],
       target_ids: 'Use CanvasIR node id / slot id / template instance id, not tldraw shape id.',
+      insert_template_options: ['template_id', 'title', 'seed', 'scale', 'anchor', 'position', 'x', 'y'],
+      widget_rule: 'Prefer add_widget with template_id + params from available_widget_templates. '
+        + 'Freeform html must be a fragment (no <html>/<head>/<body>, no fixed root size, no external scripts); '
+        + 'it is validated before mounting. Use update_widget with state_patch to change widget data; '
+        + 'read current widget state from widget_instances.',
     },
     minimal_examples: [
       {
@@ -1098,6 +1683,17 @@ function buildCanvasAgentContext({ workspace, semanticIndex, openFeedback = [], 
         parent: 'value_propositions',
         kind: 'sticky',
         content: '用实体存在感降低 AI 工具的抽象感',
+      },
+      {
+        op: 'add_widget',
+        parent: 'decision_zone',
+        template_id: 'vote',
+        params: { question: '哪个方向继续深化？', options: ['方向 A', '方向 B', '方向 C'] },
+      },
+      {
+        op: 'update_widget',
+        id: 'vote-directions',
+        state_patch: { closed: true },
       },
     ],
   };
@@ -1113,4 +1709,6 @@ module.exports = {
   instantiateTemplate,
   applyCanvasIRCommands,
   buildCanvasAgentContext,
+  listWidgetTemplates: canvasWidgets.listWidgetTemplates,
+  prepareWidget: canvasWidgets.prepareWidget,
 };

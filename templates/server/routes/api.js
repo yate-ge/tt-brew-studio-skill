@@ -12,6 +12,8 @@ const {
   instantiateTemplate,
   applyCanvasIRCommands,
   buildCanvasAgentContext,
+  listWidgetTemplates,
+  prepareWidget,
 } = require('../lib/canvas-ir');
 
 const DELIVERY_MODES = ['task_delivery', 'alignment'];
@@ -2751,11 +2753,11 @@ function setupRoutes(app, dataDir, options = {}) {
       type: 'canvas_ir_layout_review',
       status: compiled.layout_report.warnings?.length ? 'passed_with_warnings' : 'passed',
       checks: {
-        overlap_count: 0,
-        out_of_section_count: 0,
-        unreadable_count: 0,
-        section_contains_children: true,
-        min_readable_size_ok: true,
+        overlap_count: compiled.layout_report.counts?.sibling_overlaps || 0,
+        out_of_section_count: compiled.layout_report.counts?.child_overflows || 0,
+        unreadable_count: compiled.layout_report.counts?.unreadable_nodes || 0,
+        section_contains_children: (compiled.layout_report.counts?.child_overflows || 0) === 0,
+        min_readable_size_ok: (compiled.layout_report.counts?.unreadable_nodes || 0) === 0,
       },
       repairs: compiled.layout_report.auto_repairs || [],
       reviewed_at: now,
@@ -3326,6 +3328,32 @@ function setupRoutes(app, dataDir, options = {}) {
         meta: req.body?.event?.meta || {},
       });
       res.json(publicCanvasWorkspace(saved, { includeDetail: true }));
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  app.get('/api/canvas-widget-templates', (req, res) => {
+    res.json({ templates: listWidgetTemplates() });
+  });
+
+  // Stateless dry run of the widget validation pipeline (Tier 3 pre-check).
+  app.post('/api/canvas-widgets/validate', (req, res) => {
+    try {
+      const { spec, review } = prepareWidget(req.body || {});
+      res.json({
+        review,
+        spec: spec ? {
+          template_id: spec.template_id,
+          title: spec.title,
+          description: spec.description,
+          state: spec.state,
+          input_schema: spec.input_schema,
+          output_schema: spec.output_schema,
+          sizing: spec.sizing,
+          html_length: spec.html.length,
+        } : null,
+      });
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }

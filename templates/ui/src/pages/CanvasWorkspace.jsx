@@ -7,6 +7,7 @@ import {
   DefaultColorStyle,
   DefaultFillStyle,
   GeoShapeGeoStyle,
+  FrameShapeUtil,
   Tldraw,
   TldrawUiButtonIcon,
   TldrawUiToolbar,
@@ -473,6 +474,103 @@ function resizablePatch(shape, nextSize) {
   if (Number.isFinite(shape.props?.h)) props.h = nextSize.h;
   return Object.keys(props).length > 0 ? props : undefined;
 }
+
+function isTemplateScaleFrame(shape) {
+  if (!isCanvasSectionShape(shape)) return false;
+  const role = String(shape.meta?.vd_role || '');
+  return role.includes('pattern.')
+    || role.includes('bmc.')
+    || shape.meta?.vd_template_scaled === true
+    || Number.isFinite(Number(shape.meta?.vd_template_scale));
+}
+
+function collectTemplateDescendantFrames(editor, rootId) {
+  const frames = [];
+  const visit = (parentId) => {
+    const childIds = editor?.getSortedChildIdsForParent?.(parentId) || [];
+    childIds.forEach((childId) => {
+      const child = editor.getShape?.(childId);
+      if (!child) return;
+      if (isCanvasSectionShape(child)) {
+        frames.push({
+          id: child.id,
+          type: child.type,
+          x: Number(child.x || 0),
+          y: Number(child.y || 0),
+          w: Number(child.props?.w || 0),
+          h: Number(child.props?.h || 0),
+          props: { ...(child.props || {}) },
+        });
+      }
+      visit(child.id);
+    });
+  };
+  visit(rootId);
+  return frames;
+}
+
+function scaledFramePatch(frame, scaleX, scaleY) {
+  return {
+    id: frame.id,
+    type: frame.type,
+    x: frame.x * scaleX,
+    y: frame.y * scaleY,
+    props: {
+      ...frame.props,
+      w: Math.max(1, frame.w * scaleX),
+      h: Math.max(1, frame.h * scaleY),
+    },
+  };
+}
+
+class VisualDeliveryFrameShapeUtil extends FrameShapeUtil {
+  constructor(editor) {
+    super(editor);
+    this.templateResizeSnapshots = new Map();
+  }
+
+  canResizeChildren(shape) {
+    return false;
+  }
+
+  onResizeStart(shape) {
+    if (!isTemplateScaleFrame(shape)) return undefined;
+    this.templateResizeSnapshots.set(String(shape.id), collectTemplateDescendantFrames(this.editor, shape.id));
+    return undefined;
+  }
+
+  onResize(shape, info) {
+    const resized = super.onResize(shape, info);
+    const initial = info?.initialShape || shape;
+    if (!resized || !isTemplateScaleFrame(initial)) return resized;
+
+    const initialW = Number(initial.props?.w || 0);
+    const initialH = Number(initial.props?.h || 0);
+    const nextW = Number(resized.props?.w || initialW);
+    const nextH = Number(resized.props?.h || initialH);
+    if (initialW <= 0 || initialH <= 0 || nextW <= 0 || nextH <= 0) return resized;
+
+    const scaleX = nextW / initialW;
+    const scaleY = nextH / initialH;
+    const frames = this.templateResizeSnapshots.get(String(initial.id)) || [];
+    const patches = frames
+      .filter((frame) => frame.w > 0 && frame.h > 0)
+      .map((frame) => scaledFramePatch(frame, scaleX, scaleY));
+    if (patches.length > 0) this.editor.updateShapes(patches);
+    return resized;
+  }
+
+  onResizeEnd(initial, current) {
+    this.templateResizeSnapshots.delete(String(initial.id));
+    return undefined;
+  }
+
+  onResizeCancel(initial) {
+    this.templateResizeSnapshots.delete(String(initial.id));
+  }
+}
+
+const CANVAS_SHAPE_UTILS = [VisualDeliveryFrameShapeUtil];
 
 function insetBounds(bounds, padding = 0) {
   if (!bounds) return null;
@@ -2102,6 +2200,7 @@ export default function CanvasWorkspace() {
                 <Tldraw
                   key={workspace.id}
                   persistenceKey={`vd-canvas-workspace-${workspace.id}`}
+                  shapeUtils={CANVAS_SHAPE_UTILS}
                   components={tldrawComponents}
                   onMount={handleMount}
                 />
