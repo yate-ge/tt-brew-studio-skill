@@ -401,6 +401,124 @@ key_nodes_materialize_requested
 - 本地操作型 Widget 不应吞掉需要长期编辑的画板内容。稳定结果应物化为原生画板节点。
 - 如果只是简单排列 sticky，用原生画板即可。
 
+## 6. 阶段推进型
+
+代表例子：Develop 阶段的方案推进控制台。适合用户说"继续推进 / 生成几个方向 / 帮我接着细化"，
+并且当前阶段需要通过少量参数生成、筛选或物化下一批内容。
+
+触发来源：
+
+- 当前阶段已有上游证据，例如 HMW、评价标准、Persona、旅程或已选方案。
+- 用户要继续推进，而不是全项目诊断。
+- 生成或筛选动作需要保留状态：方向参数、候选项、用户选择、物化目标。
+
+Widget 记录：
+
+```json
+{
+  "status": "submitted",
+  "source_stage": "define",
+  "source_shape_ids": ["shape:vd-ir-hmw-main", "shape:vd-ir-criteria"],
+  "target_stage": "develop",
+  "request": {
+    "action": "generate_directions",
+    "count": 5,
+    "constraints": ["必须回应 HMW", "保留低精度原型可能性"]
+  },
+  "result": {
+    "directions": []
+  },
+  "selected_items": []
+}
+```
+
+Widget events：
+
+```text
+stage_progress_requested
+direction_selected
+direction_materialize_requested
+stage_progress_accepted
+```
+
+智能体本体处理：
+
+- 读取来源 shape 和上游证据，再生成候选方向；每个候选标明回应了哪个 HMW / 评价标准。
+- 用户选择后，把稳定方向物化为 Develop 阶段的方案卡、低精度原型计划或决策记录。
+- 更新 Widget 到 `materialized` 并记录 `materialized_shape_ids`。
+
+专家介入：
+
+- 主导专家评审候选方向是否真的回应上游问题。
+- 方法论锚点检查筛选标准是否清楚。
+- 专家不替用户选择最终方向。
+
+边界：
+
+- 没有上游证据时，先补 Define 脚手架，不创建推进控制台。
+- 如果只是写几个静态方向，优先用方案墙方法模板，不必做 Widget。
+
+## 7. 全项目诊断型
+
+代表例子：跨阶段针灸式诊断 Widget。适合四阶段诊断包已经建立、并且每个阶段都有证据后，用来
+比较不同阶段里的潜在杠杆点。
+
+触发来源：
+
+- 用户请求诊断、评审或优化整个项目。
+- Discover / Define / Develop / Deliver 四个阶段已经有项目化脚手架和 seed 内容。
+- agent 已从这些脚手架里提取出可比较的问题点、证据来源和待验证假设。
+
+Widget 记录：
+
+```json
+{
+  "status": "user_reviewing",
+  "points": [
+    {
+      "id": "hmw_unclear",
+      "label": "评价标准不清",
+      "source_stage": "define",
+      "source_shape_id": "define-diagnosis.criteria",
+      "severity": 7,
+      "leverage": 9,
+      "evidence_summary": "Define 阶段未找到明确的成功标准",
+      "ai_note": "AI 初评，需学生校正"
+    }
+  ],
+  "selected_items": [],
+  "user_notes": ""
+}
+```
+
+Widget events：
+
+```text
+diagnosis_point_selected
+diagnosis_score_updated
+diagnosis_lever_confirmed
+diagnosis_materialize_requested
+```
+
+智能体本体处理：
+
+- 只从四阶段脚手架里的 root / slot / Widget 输出提取点，不用抽象标签凑数。
+- 回写每个点的来源、证据摘要、严重度和传导力初评。
+- 用户确认后，把杠杆点物化为阶段内任务卡、HMW 修订卡、信息架构调整卡或风险处理卡。
+
+可能的专家介入：
+
+- 主导专家命名跨阶段设计张力。
+- 方法论锚点检查所选杠杆点是否真的有证据和评价标准。
+- 领域专家指出这个点在真实使用场景中可能带来的连锁影响。
+
+边界：
+
+- 如果四阶段内容还没落位，不创建这个 Widget；先补四阶段模板和内容。
+- 如果点没有 `source_stage` 或 `source_shape_id/source_note`，只能标 `AI 推测，需验证`，
+  不能高亮为推荐。
+- Widget 不替学生选杠杆点，只让学生校正、选择和请求物化。
+
 ## 阶段映射示例
 
 这些示例只提示生成方向，不是固定菜单。

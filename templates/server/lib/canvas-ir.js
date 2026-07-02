@@ -2576,28 +2576,59 @@ function buildCanvasAgentContext({
   const ir = semanticIndex?.canvas_ir || null;
   const nodeIndex = Array.isArray(semanticIndex?.ir_node_index) ? semanticIndex.ir_node_index : [];
   const widgetInstances = Array.isArray(semanticIndex?.widget_instances) ? semanticIndex.widget_instances : [];
+  const workspaceContext = workspace?.context && typeof workspace.context === 'object' ? workspace.context : {};
+  const zones = Array.isArray(semanticIndex?.zones) ? semanticIndex.zones : [];
+  const sections = Array.isArray(semanticIndex?.sections) ? semanticIndex.sections : [];
+  const stageSections = DESIGN_STAGE_SEQUENCE.map((stage) => {
+    const zone = zones.find((item) => normalizeDesignStageKey(item?.stage || item?.role) === stage.key);
+    const section = zone
+      ? sections.find((item) => item.shape_id === zone.section_id || item.ir_id === zone.ir_id)
+      : sections.find((item) => normalizeDesignStageKey(item?.meta?.vd_stage_key || item?.role) === stage.key);
+    return {
+      key: stage.key,
+      role: stage.role,
+      parent_id: stage.id,
+      title: stage.title,
+      rhythm: stage.rhythm,
+      exists: Boolean(zone || section),
+      shape_id: zone?.section_id || section?.shape_id || null,
+      ir_id: zone?.ir_id || section?.ir_id || stage.id,
+      bounds: zone?.bounds || section?.bounds || null,
+      content_origin: zone?.content_origin || section?.meta?.vd_stage_content_origin || PROJECT_STAGE_LAYOUT.contentOrigin,
+    };
+  });
+  const activeExperts = Array.isArray(workspaceContext.active_experts)
+    ? workspaceContext.active_experts
+    : (Array.isArray(workspaceContext.expert_team) ? workspaceContext.expert_team : []);
+  const judgmentContract = workspaceContext.judgment_contract || workspaceContext.judgement_contract || null;
   return {
     type: 'canvas_workspace_agent_context_v2',
     preferred_write_api: 'CanvasIR or commands API',
     direct_snapshot_write: 'debug_only',
     stage_routing: {
       default: '当 command 带 stage 且没有显式 parent 时，运行时把 template/widget/node 放入对应阶段 frame。',
-      stages: DESIGN_STAGE_SEQUENCE.map((stage) => ({
-        key: stage.key,
-        role: stage.role,
-        parent_id: stage.id,
-        title: stage.title,
-        rhythm: stage.rhythm,
-      })),
+      stages: stageSections,
+      stage_spine_ready: stageSections.every((stage) => stage.exists),
     },
     workspace: {
       id: workspace.id,
       title: workspace.title,
       purpose: workspace.purpose,
       tags: workspace.tags || [],
+      context: workspaceContext,
       updated_at: workspace.updated_at,
       snapshot_rev: workspace.snapshot_rev || 0,
       agent_rev: workspace.agent_rev || 0,
+    },
+    project_protocol_state: {
+      vd_project_document: workspaceContext.vd_project_document === true,
+      current_stage: workspaceContext.current_stage || workspaceContext.stage || null,
+      expert_team: Array.isArray(workspaceContext.expert_team) ? workspaceContext.expert_team : [],
+      active_experts: activeExperts,
+      judgment_contract: judgmentContract,
+      expert_team_ready: activeExperts.length > 0 && Boolean(judgmentContract),
+      stage_spine_ready: stageSections.every((stage) => stage.exists),
+      missing_stage_keys: stageSections.filter((stage) => !stage.exists).map((stage) => stage.key),
     },
     current_ir_summary: ir ? {
       board: ir.board,

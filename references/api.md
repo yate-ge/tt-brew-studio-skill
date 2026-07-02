@@ -190,7 +190,10 @@ Returns raw context for runtime maintenance.
 Returns the preferred agent-facing context. The `semantic_index.active_page_id`
 field identifies the current work Page. `semantic_index.pages` may be present for
 compatibility and orientation, but agents should not create or switch Pages unless
-the user explicitly asks for multi Page work:
+the user explicitly asks for multi Page work. The response mirrors
+`workspace.context` and adds `project_protocol_state` so agents can check the
+expert-team gate, judgment contract, current stage, and four-stage frame status
+before writing diagnosis content:
 
 ```json
 {
@@ -199,8 +202,33 @@ the user explicitly asks for multi Page work:
   "workspace": {
     "id": "cw_...",
     "title": "协作画布",
+    "context": {
+      "vd_project_document": true,
+      "current_stage": "develop",
+      "expert_team": [],
+      "judgment_contract": {}
+    },
     "snapshot_rev": 3,
     "agent_rev": 2
+  },
+  "project_protocol_state": {
+    "vd_project_document": true,
+    "current_stage": "develop",
+    "expert_team_ready": true,
+    "stage_spine_ready": true,
+    "missing_stage_keys": []
+  },
+  "stage_routing": {
+    "stage_spine_ready": true,
+    "stages": [
+      {
+        "key": "discover",
+        "parent_id": "stage-discover",
+        "exists": true,
+        "shape_id": "shape:vd-ir-stage-discover",
+        "ir_id": "stage-discover"
+      }
+    ]
   },
   "current_ir_summary": {},
   "edit_summary": {},
@@ -227,6 +255,11 @@ the user explicitly asks for multi Page work:
   }
 }
 ```
+
+If `project_protocol_state.expert_team_ready` is false, assemble and write the
+expert team before diagnosis, templates, widgets, or review. If
+`stage_spine_ready` is false, create or repair the four-stage workspace before
+adding project content.
 
 ### `POST /api/canvas-workspaces/:id/ir/validate`
 
