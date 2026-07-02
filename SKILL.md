@@ -327,6 +327,8 @@ curl -s -X POST http://localhost:3847/api/canvas-widgets/validate \
 Widget state 存在 shape meta 和 `semantic_index.widget_instances[].state` 中。用
 `update_widget` patch state。`vd.emit` 输出会进入 `widget_output` feedback。完整合约见：
 [references/canvas-widgets.md](references/canvas-widgets.md)。
+Widget 示例模式见：[references/widget-examples.md](references/widget-examples.md)。这些示例只
+用于引导智能体生成项目化 Widget，不是固定菜单。
 
 ### 画板节点语义
 
@@ -361,4 +363,5 @@ canvas event 和 `semantic_index.layout_reviews`。
 - Canvas document model：[references/canvas-workspace-model.md](references/canvas-workspace-model.md)
 - CanvasIR 与方法模板：[references/canvas-ir.md](references/canvas-ir.md)
 - 交互组件合约：[references/canvas-widgets.md](references/canvas-widgets.md)
+- Widget 示例模式：[references/widget-examples.md](references/widget-examples.md)
 - Design tokens：[references/design-system.md](references/design-system.md)

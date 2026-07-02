@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DefaultNavigationPanel,
   DefaultToolbar,
-  DefaultToolbarContent,
   DefaultColorStyle,
   DefaultFillStyle,
   GeoShapeGeoStyle,
   FrameShapeUtil,
   Tldraw,
   TldrawUiButtonIcon,
+  TldrawUiMenuToolItem,
   TldrawUiToolbar,
   TldrawUiToolbarButton,
   createShapeId,
@@ -43,6 +43,29 @@ const DEFAULT_COMPLETION_SIZE = { w: 520, h: 300 };
 const ANNOTATION_PURPLE = '#7c3aed';
 const REGION_ANNOTATION_KIND = 'region_annotation';
 const LEGACY_COMPLETION_KIND = 'completion_request';
+const PINNED_TLDRAW_TOOL_IDS = ['select', 'hand', 'draw', 'eraser', 'arrow', 'rectangle', 'text', 'frame'];
+const OVERFLOW_TLDRAW_TOOL_IDS = [
+  'note',
+  'asset',
+  'ellipse',
+  'triangle',
+  'diamond',
+  'hexagon',
+  'oval',
+  'rhombus',
+  'star',
+  'cloud',
+  'heart',
+  'x-box',
+  'check-box',
+  'arrow-left',
+  'arrow-up',
+  'arrow-down',
+  'arrow-right',
+  'line',
+  'highlight',
+  'laser',
+];
 const DESIGN_EXPERTS = [
   { name: '马谨', domain: '服务/系统设计', virtual: false, avatar: expertMaJin, color: '#b45309' },
   { name: '刘洋', domain: '城市数据驱动设计', virtual: false, avatar: expertLiuYang, color: '#0f766e' },
@@ -156,6 +179,23 @@ function parseExpertMentions(text) {
     }
   });
   return Array.from(mentions.values());
+}
+
+function parseParticipatingExpertMentions(text, participatingExperts = []) {
+  if (!text || !text.includes('@') || participatingExperts.length === 0) return [];
+  const activeByName = new Map(participatingExperts.map((expert) => [expert.name, expert]));
+  return parseExpertMentions(text)
+    .filter((mention) => activeByName.has(mention.name))
+    .map((mention) => ({ type: 'expert', ...activeByName.get(mention.name), ...mention }));
+}
+
+function activeMentionQuery(text) {
+  if (!text || !text.includes('@')) return null;
+  const start = text.lastIndexOf('@');
+  if (start < 0) return null;
+  const query = text.slice(start + 1);
+  if (/[\s，。！？、,.!?;；:：()（）\[\]【】<>《》"'“”‘’]/.test(query)) return null;
+  return { start, query };
 }
 
 function expertFallbackColor(name = '') {
@@ -1506,18 +1546,88 @@ function CanvasHtmlComponentOverlay({
   );
 }
 
+function PinnedTldrawToolbarContent() {
+  return (
+    <>
+      {PINNED_TLDRAW_TOOL_IDS.map((toolId) => (
+        <TldrawUiMenuToolItem key={toolId} toolId={toolId} />
+      ))}
+      {OVERFLOW_TLDRAW_TOOL_IDS.map((toolId) => (
+        <TldrawUiMenuToolItem key={toolId} toolId={toolId} />
+      ))}
+    </>
+  );
+}
+
 function CanvasAnnotationPopover({
   target,
   text,
-  flagged,
   submitting,
+  participatingExperts = [],
   onTextChange,
-  onFlagChange,
   onSubmit,
-  onClose,
 }) {
+  const inputRef = useRef(null);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const mention = activeMentionQuery(text);
+  const mentionOptions = useMemo(() => {
+    if (!mention || participatingExperts.length === 0) return [];
+    const query = mention.query.trim().toLowerCase();
+    return participatingExperts
+      .filter((expert) => {
+        if (!query) return true;
+        return expert.name.toLowerCase().includes(query)
+          || String(expert.domain || '').toLowerCase().includes(query);
+      })
+      .slice(0, 6);
+  }, [mention?.query, participatingExperts]);
+  const mentionVisible = mentionOpen && mentionOptions.length > 0;
+
+  useEffect(() => {
+    setActiveMentionIndex(0);
+    if (mentionOptions.length === 0) setMentionOpen(false);
+  }, [mentionOptions.length, mention?.query]);
+
   if (!target) return null;
-  const mentions = parseExpertMentions(text);
+
+  function selectMention(expert) {
+    if (!mention) return;
+    const next = `${text.slice(0, mention.start)}@${expert.name} `;
+    onTextChange(next);
+    setMentionOpen(false);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  function handleInputChange(event) {
+    const value = event.target.value;
+    onTextChange(value);
+    setMentionOpen(Boolean(activeMentionQuery(value)));
+  }
+
+  function handleInputKeyDown(event) {
+    if (!mentionVisible) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveMentionIndex((index) => (index + 1) % mentionOptions.length);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveMentionIndex((index) => (index - 1 + mentionOptions.length) % mentionOptions.length);
+      return;
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      selectMention(mentionOptions[activeMentionIndex] || mentionOptions[0]);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setMentionOpen(false);
+    }
+  }
+
   return (
     <>
       <div style={STYLES.annotationTargetOverlay(target.overlay)} />
@@ -1528,54 +1638,55 @@ function CanvasAnnotationPopover({
         onPointerDown={(event) => event.stopPropagation()}
         onWheel={(event) => event.stopPropagation()}
       >
-        <div style={STYLES.annotationPopoverHeader}>
-          <div style={STYLES.annotationPopoverTitle}>{target.title}</div>
-          <button type="button" style={STYLES.annotationCloseButton} onClick={onClose} aria-label="关闭标注">
-            ×
-          </button>
-        </div>
-        <textarea
-          style={STYLES.annotationTextarea}
-          value={text}
-          onChange={(event) => onTextChange(event.target.value)}
-          placeholder="添加标注，可 @马谨 / @孙效华 / @虚拟品牌专家..."
-          rows={3}
-        />
-        <div style={STYLES.annotationMentionHint}>
-          {mentions.length > 0 ? '已指定：' : '输入 @专家名 可指定回应对象'}
-          {mentions.length > 0 && (
-            <span style={STYLES.annotationMentionChips}>
-              {mentions.map((mention) => (
-                <span key={mention.name} style={STYLES.annotationMentionChip}>
-                  @{mention.name}
+        {mentionVisible && (
+          <div style={STYLES.annotationMentionMenu} role="listbox" aria-label="选择专家">
+            {mentionOptions.map((expert, index) => (
+              <button
+                type="button"
+                key={expert.name}
+                style={STYLES.annotationMentionOption(index === activeMentionIndex)}
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActiveMentionIndex(index)}
+                onClick={() => selectMention(expert)}
+                role="option"
+                aria-selected={index === activeMentionIndex}
+              >
+                <ExpertAvatar expert={expert} selected={index === activeMentionIndex} size={34} />
+                <span style={STYLES.annotationMentionOptionText}>
+                  <span style={STYLES.annotationMentionOptionName}>{expert.name}</span>
+                  {expert.domain && <span style={STYLES.annotationMentionOptionDomain}>{expert.domain}</span>}
                 </span>
-              ))}
-            </span>
-          )}
-        </div>
-        <div style={STYLES.annotationFooter}>
-          <label style={STYLES.annotationFlagLabel}>
-            <input
-              type="checkbox"
-              checked={flagged}
-              onChange={(event) => onFlagChange(event.target.checked)}
-            />
-            提交标志
-          </label>
-          <button type="submit" style={STYLES.annotationSubmitButton} disabled={submitting || !text.trim()}>
-            {submitting ? '提交中...' : '提交'}
-          </button>
-        </div>
-        {target.annotationCount > 0 && (
-          <div style={STYLES.annotationMeta}>{target.annotationCount} 条已有标注</div>
+              </button>
+            ))}
+          </div>
         )}
+        <input
+          ref={inputRef}
+          type="text"
+          style={STYLES.annotationInput}
+          value={text}
+          onChange={handleInputChange}
+          onKeyDown={handleInputKeyDown}
+          onFocus={() => setMentionOpen(Boolean(activeMentionQuery(text)))}
+          placeholder="添加批注，可 @专家"
+          autoFocus
+        />
+        <button
+          type="submit"
+          style={STYLES.annotationSendButton(submitting || !text.trim())}
+          disabled={submitting || !text.trim()}
+          aria-label="发送批注"
+          title="发送"
+        >
+          {submitting ? '...' : '发送'}
+        </button>
       </form>
     </>
   );
 }
 
-function ExpertAvatar({ expert, selected = false }) {
-  const avatarStyle = STYLES.expertAvatar(expert.color, selected);
+function ExpertAvatar({ expert, selected = false, size = 58 }) {
+  const avatarStyle = STYLES.expertAvatar(expert.color, selected, size);
   if (expert.avatar) {
     return (
       <span style={avatarStyle}>
@@ -1585,8 +1696,8 @@ function ExpertAvatar({ expert, selected = false }) {
   }
   return (
     <span style={avatarStyle} aria-hidden="true">
-      <span style={STYLES.expertAvatarFallbackHead} />
-      <span style={STYLES.expertAvatarFallbackBody} />
+      <span style={STYLES.expertAvatarFallbackHead(size)} />
+      <span style={STYLES.expertAvatarFallbackBody(size)} />
     </span>
   );
 }
@@ -1787,17 +1898,9 @@ const STYLES = {
     minWidth: 0,
     minHeight: '100dvh',
   },
-  canvasPanelFullscreen: {
-    position: 'fixed',
-    inset: 0,
-    zIndex: 50,
-    border: 'none',
-    borderRadius: 0,
-    background: 'var(--vd-surface-bg)',
-  },
   canvasHeader: {
     display: 'flex',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     alignItems: 'flex-start',
     gap: 'var(--vd-space-4)',
     padding: '12px 16px',
@@ -1821,27 +1924,11 @@ const STYLES = {
     fontSize: 'var(--vd-font-size-sm)',
     fontWeight: 'var(--vd-font-weight-medium)',
   },
-  headerActions: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 'var(--vd-space-2)',
-    flexWrap: 'wrap',
-  },
   canvasTitle: {
     margin: 0,
     color: 'var(--vd-text-primary)',
     fontSize: 'var(--vd-font-size-lg)',
     fontWeight: 'var(--vd-font-weight-bold)',
-  },
-  ghostButton: {
-    border: '1px solid var(--vd-border-default)',
-    borderRadius: 'var(--vd-radius-md)',
-    background: 'var(--vd-surface-bg)',
-    color: 'var(--vd-text-secondary)',
-    padding: '7px 10px',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
   },
   canvasArea: {
     flex: 1,
@@ -1849,9 +1936,6 @@ const STYLES = {
     background: 'var(--vd-page-bg)',
     position: 'relative',
     overflow: 'hidden',
-  },
-  canvasAreaFullscreen: {
-    minHeight: 0,
   },
   vdToolbarButton: {
     color: ANNOTATION_PURPLE,
@@ -2010,9 +2094,9 @@ const STYLES = {
     gap: 8,
     color: 'var(--vd-text-primary)',
   }),
-  expertAvatar: (color, selected) => ({
-    width: 58,
-    height: 58,
+  expertAvatar: (color, selected, size = 58) => ({
+    width: size,
+    height: size,
     borderRadius: '50%',
     display: 'inline-flex',
     alignItems: 'center',
@@ -2031,22 +2115,22 @@ const STYLES = {
     objectFit: 'cover',
     display: 'block',
   },
-  expertAvatarFallbackHead: {
+  expertAvatarFallbackHead: (size = 58) => ({
     position: 'absolute',
-    top: 14,
-    width: 18,
-    height: 18,
+    top: Math.round(size * 0.24),
+    width: Math.round(size * 0.31),
+    height: Math.round(size * 0.31),
     borderRadius: '50%',
     background: 'rgba(255, 255, 255, .9)',
-  },
-  expertAvatarFallbackBody: {
+  }),
+  expertAvatarFallbackBody: (size = 58) => ({
     position: 'absolute',
-    bottom: 10,
-    width: 34,
-    height: 20,
+    bottom: Math.round(size * 0.17),
+    width: Math.round(size * 0.59),
+    height: Math.round(size * 0.34),
     borderRadius: '18px 18px 10px 10px',
     background: 'rgba(255, 255, 255, .88)',
-  },
+  }),
   expertParticipantName: (selected) => ({
     maxWidth: '100%',
     color: selected ? 'var(--vd-text-primary)' : '#0f172a',
@@ -2278,108 +2362,96 @@ const STYLES = {
     left: point.x,
     top: point.y,
     zIndex: 360,
-    width: 320,
-    padding: 10,
-    border: '1px solid rgba(124, 58, 237, .34)',
-    borderRadius: 8,
-    background: 'rgba(255, 255, 255, .98)',
-    boxShadow: '0 16px 34px rgba(76, 29, 149, .18)',
+    width: 360,
+    minHeight: 46,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '6px 6px 6px 14px',
+    border: '1px solid rgba(124, 58, 237, .22)',
+    borderRadius: 999,
+    background: 'rgba(255, 255, 255, .96)',
+    boxShadow: '0 14px 34px rgba(76, 29, 149, .18), 0 0 0 1px rgba(255, 255, 255, .72) inset',
+    backdropFilter: 'blur(12px)',
     pointerEvents: 'auto',
   }),
-  annotationPopoverHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 8,
-  },
-  annotationPopoverTitle: {
-    color: ANNOTATION_PURPLE,
-    fontSize: 'var(--vd-font-size-sm)',
-    fontWeight: 'var(--vd-font-weight-semibold)',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  annotationCloseButton: {
-    width: 24,
-    height: 24,
-    border: 'none',
-    borderRadius: 6,
-    background: 'rgba(124, 58, 237, .08)',
-    color: ANNOTATION_PURPLE,
-    cursor: 'pointer',
-    lineHeight: 1,
-  },
-  annotationTextarea: {
-    width: '100%',
-    minHeight: 74,
-    resize: 'vertical',
+  annotationInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 34,
     boxSizing: 'border-box',
-    border: '1px solid rgba(124, 58, 237, .28)',
-    borderRadius: 7,
-    padding: '8px 9px',
+    border: 'none',
+    borderRadius: 999,
+    padding: 0,
     color: 'var(--vd-text-primary)',
-    background: 'rgba(250, 245, 255, .68)',
+    background: 'transparent',
     fontFamily: 'var(--vd-font-family)',
     fontSize: 'var(--vd-font-size-sm)',
-    outlineColor: ANNOTATION_PURPLE,
+    outline: 'none',
   },
-  annotationMentionHint: {
+  annotationMentionMenu: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    bottom: 52,
+    zIndex: 2,
     display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 6,
-    minHeight: 22,
-    marginTop: 6,
-    color: 'var(--vd-text-tertiary)',
-    fontSize: 'var(--vd-font-size-xs)',
-  },
-  annotationMentionChips: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
     gap: 4,
+    padding: 6,
+    border: '1px solid rgba(124, 58, 237, .20)',
+    borderRadius: 14,
+    background: 'rgba(255, 255, 255, .98)',
+    boxShadow: '0 18px 36px rgba(76, 29, 149, .18)',
+    backdropFilter: 'blur(14px)',
   },
-  annotationMentionChip: {
-    border: '1px solid rgba(124, 58, 237, .28)',
-    borderRadius: 999,
-    padding: '2px 6px',
-    color: ANNOTATION_PURPLE,
-    background: 'rgba(124, 58, 237, .08)',
-    fontWeight: 'var(--vd-font-weight-medium)',
-  },
-  annotationFooter: {
+  annotationMentionOption: (active) => ({
+    width: '100%',
+    minHeight: 48,
+    border: 'none',
+    borderRadius: 10,
+    background: active ? 'rgba(124, 58, 237, .10)' : 'transparent',
+    color: 'var(--vd-text-primary)',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: 10,
-    marginTop: 8,
-  },
-  annotationFlagLabel: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    color: 'var(--vd-text-secondary)',
-    fontSize: 'var(--vd-font-size-xs)',
-    userSelect: 'none',
-  },
-  annotationSubmitButton: {
-    minHeight: 30,
-    border: '1px solid rgba(124, 58, 237, .42)',
-    borderRadius: 7,
-    background: ANNOTATION_PURPLE,
-    color: '#fff',
-    padding: '5px 12px',
+    padding: '6px 8px',
     cursor: 'pointer',
-    fontSize: 'var(--vd-font-size-xs)',
-    fontWeight: 'var(--vd-font-weight-medium)',
+    textAlign: 'left',
+  }),
+  annotationMentionOptionText: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
   },
-  annotationMeta: {
-    marginTop: 7,
+  annotationMentionOptionName: {
+    color: '#0f172a',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+    lineHeight: 1.2,
+  },
+  annotationMentionOptionDomain: {
     color: 'var(--vd-text-tertiary)',
     fontSize: 'var(--vd-font-size-xs)',
+    lineHeight: 1.2,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
+  annotationSendButton: (disabled) => ({
+    height: 34,
+    minWidth: 58,
+    border: 'none',
+    borderRadius: 999,
+    background: disabled ? 'rgba(124, 58, 237, .30)' : ANNOTATION_PURPLE,
+    color: '#fff',
+    padding: '0 14px',
+    cursor: disabled ? 'default' : 'pointer',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+    boxShadow: disabled ? 'none' : '0 8px 18px rgba(124, 58, 237, .26)',
+  }),
   highlightOverlay: (item) => {
     const isAgent = item.author === 'agent';
     const isMixed = item.author === 'mixed';
@@ -2424,7 +2496,6 @@ export default function CanvasWorkspace() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [savingState, setSavingState] = useState('已保存');
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [toolMessage, setToolMessage] = useState('');
   const [htmlComponents, setHtmlComponents] = useState([]);
   const [authoredOverlays, setAuthoredOverlays] = useState([]);
@@ -2531,15 +2602,6 @@ export default function CanvasWorkspace() {
       });
     return () => { canceled = true; };
   }, []);
-
-  useEffect(() => {
-    if (!isFullscreen) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setIsFullscreen(false);
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isFullscreen]);
 
   useEffect(() => () => {
     window.clearTimeout(saveTimer.current);
@@ -3130,7 +3192,7 @@ export default function CanvasWorkspace() {
     setAnnotationSubmitting(true);
     const now = new Date().toISOString();
     const annotationId = `canvas_annotation_${Date.now()}`;
-    const mentions = parseExpertMentions(note);
+    const mentions = parseParticipatingExpertMentions(note, discussionExperts);
     try {
       const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
         kind: 'canvas_annotation',
@@ -3211,12 +3273,6 @@ export default function CanvasWorkspace() {
     } finally {
       setAnnotationSubmitting(false);
     }
-  }
-
-  function closeSelectionAnnotation() {
-    const editor = editorRef.current;
-    editor?.setSelectedShapes?.([]);
-    setSelectedAnnotationTarget(null);
   }
 
   function handleSelectCanvasAnnotationTool() {
@@ -3913,9 +3969,12 @@ export default function CanvasWorkspace() {
     };
     const handleCanvasKeyDown = (event) => {
       if (event.key !== 'Escape') return;
-      if (!annotationTargetToolActive.current && !annotationArrowToolActive.current) return;
+      const hasOpenAnnotationPopover = Boolean(document.querySelector('[data-vd-annotation-popover]'));
+      if (!hasOpenAnnotationPopover && !annotationTargetToolActive.current && !annotationArrowToolActive.current) return;
       clearCanvasCommunicationTools();
       setSelectedAnnotationTarget(null);
+      setAnnotationDraft('');
+      setAnnotationFlagged(true);
       markToolMessage('已退出批注工具。');
     };
     // 区域批注的文字走 tldraw 原生双击编辑，无需自定义双击拦截。
@@ -3966,7 +4025,7 @@ export default function CanvasWorkspace() {
   const tldrawComponents = useMemo(() => {
     function VisualDeliveryToolbar() {
       return (
-        <DefaultToolbar>
+        <DefaultToolbar minItems={12} maxItems={12} minSizePx={0} maxSizePx={1}>
           <TldrawUiToolbarButton
             type="tool"
             title="批注"
@@ -4024,7 +4083,7 @@ export default function CanvasWorkspace() {
             </span>
           </TldrawUiToolbarButton>
           <div style={STYLES.vdToolbarSeparator} aria-hidden="true" />
-          <DefaultToolbarContent />
+          <PinnedTldrawToolbarContent />
         </DefaultToolbar>
       );
     }
@@ -4062,7 +4121,7 @@ export default function CanvasWorkspace() {
 
   return (
     <div style={STYLES.page}>
-      <main style={{ ...STYLES.panel, ...STYLES.canvasPanel, ...(isFullscreen ? STYLES.canvasPanelFullscreen : {}) }}>
+      <main style={{ ...STYLES.panel, ...STYLES.canvasPanel }}>
         {!workspace && (
           <div style={STYLES.empty}>
             <div>还没有可用的项目画布文档。</div>
@@ -4077,18 +4136,13 @@ export default function CanvasWorkspace() {
               <div style={STYLES.headerPrimary}>
                 <h2 style={STYLES.canvasTitle}>{workspace.title}</h2>
               </div>
-              <div style={STYLES.headerActions}>
-                <button type="button" style={STYLES.ghostButton} onClick={() => setIsFullscreen((value) => !value)}>
-                  {isFullscreen ? '退出全屏' : '全屏查看'}
-                </button>
-              </div>
             </header>
             {detailLoading ? (
               <div style={STYLES.empty}>正在加载画布...</div>
             ) : (
               <div
                 className={annotationTargetToolReady ? 'vd-canvas-comment-mode' : undefined}
-                style={{ ...STYLES.canvasArea, ...(isFullscreen ? STYLES.canvasAreaFullscreen : {}) }}
+                style={STYLES.canvasArea}
               >
                 <Tldraw
                   key={workspace.id}
@@ -4149,12 +4203,10 @@ export default function CanvasWorkspace() {
                     <CanvasAnnotationPopover
                       target={selectedAnnotationTarget}
                       text={annotationDraft}
-                      flagged={annotationFlagged}
                       submitting={annotationSubmitting}
+                      participatingExperts={discussionExperts}
                       onTextChange={setAnnotationDraft}
-                      onFlagChange={setAnnotationFlagged}
                       onSubmit={handleSubmitSelectionAnnotation}
-                      onClose={closeSelectionAnnotation}
                     />
                   )}
                   {htmlComponents.map((component) => (

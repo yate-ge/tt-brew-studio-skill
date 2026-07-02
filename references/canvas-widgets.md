@@ -66,6 +66,8 @@ CanvasIR Template。
 
 示例不是限制。`vote`、`rubric`、`word_cloud`、`bar_chart`、`timer` 等内置模板是通用
 交互原语；项目需要更具体的工具时，智能体应生成自由 HTML fragment，并遵守本合约。
+Widget 示例模式见 [widget-examples.md](widget-examples.md)。示例用于说明生成思路，不是固定
+组件菜单。
 
 ## 4. Widget 规格（agent 写什么）
 
