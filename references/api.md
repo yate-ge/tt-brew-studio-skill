@@ -355,6 +355,49 @@ when the user types `@专家名` in the canvas annotation popover.
 }
 ```
 
+Expert feedback and expert dialog use the extended thread fields. `author` may
+be an object with `kind`; `targets` links the item to one or more canvas
+elements (granularity is derived from the referenced shape's meta — template
+root frame = template, widget anchor = widget, stage frame = stage, primitive
+shape = element). Every item seeds a `thread` with its first message.
+
+```json
+{
+  "kind": "expert_review",
+  "content": "这张便签停在感受层，建议补一个真实场景的观察证据。",
+  "author": { "kind": "expert", "name": "孙效华" },
+  "direction": "expert_to_content",
+  "targets": [
+    { "shape_id": "shape:vd-ir-d-s1" },
+    { "shape_id": "shape:vd-ir-stage-discover" }
+  ]
+}
+```
+
+`direction` is one of `expert_to_content`（专家对内容的反馈）、`user_to_expert`
+（用户找专家）、`other`。Items whose last thread message is from the user and
+whose status is unresolved count toward that expert's avatar badge in the
+global feedback panel.
+
+### `POST /api/canvas-workspaces/:id/feedback/:fid/reply`
+
+Appends a message to a feedback item's conversation thread. A user reply keeps
+the item pending (`status: "tracked"`); an expert reply resolves it by default
+(`status: "resolved"`), or keeps it open with `"resolve": false`.
+
+```json
+{
+  "text": "先观察，后访谈。把排队时长和临时行为记下来就是一手证据。",
+  "role": "expert",
+  "author": { "kind": "expert", "name": "马谨" },
+  "resolve": true
+}
+```
+
+### `POST /api/canvas-workspaces/:id/feedback/:fid/status`
+
+Explicitly sets a feedback item's status: `tracked` | `addressed` | `resolved`.
+
 ## Scaffolds
 
 ### `GET /api/scaffolds`

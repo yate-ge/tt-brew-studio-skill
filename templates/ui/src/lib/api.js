@@ -60,6 +60,16 @@ export async function addCanvasWorkspaceFeedback(workspaceId, feedback) {
   return res.json();
 }
 
+export async function replyCanvasWorkspaceFeedback(workspaceId, feedbackId, payload) {
+  const res = await fetch(`${BASE}/api/canvas-workspaces/${workspaceId}/feedback/${feedbackId}/reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  await ensureOk(res, 'Failed to reply canvas workspace feedback');
+  return res.json();
+}
+
 export async function fetchScaffolds(params = {}) {
   const query = new URLSearchParams(params).toString();
   const url = query ? `${BASE}/api/scaffolds?${query}` : `${BASE}/api/scaffolds`;

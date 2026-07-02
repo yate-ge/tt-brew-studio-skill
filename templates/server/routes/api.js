@@ -1643,15 +1643,31 @@ function setupRoutes(app, dataDir) {
         return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'content is required' } });
       }
       const now = new Date().toISOString();
+      const authorName = typeof req.body?.author === 'object'
+        ? String(req.body.author?.name || 'user')
+        : String(req.body?.author || 'user');
+      const authorKind = String(
+        (typeof req.body?.author === 'object' ? req.body.author?.kind : req.body?.author_kind)
+        || (authorName === 'user' ? 'user' : 'user'),
+      ) === 'expert' ? 'expert' : 'user';
+      const targets = normalizeCanvasFeedbackTargets(req.body?.targets, req.body?.target);
+      const direction = ['expert_to_content', 'user_to_expert', 'other'].includes(req.body?.direction)
+        ? req.body.direction
+        : (authorKind === 'expert' ? 'expert_to_content' : 'user_to_expert');
       const feedback = {
         id: generateId('fb'),
         kind: req.body?.kind || 'canvas_feedback',
         workspace_id: workspace.id,
+        direction,
         target: req.body?.target || {},
+        targets,
         status: 'tracked',
         handled: false,
         content,
-        author: req.body?.author || 'user',
+        author: authorName,
+        author_kind: authorKind,
+        round: Number.isFinite(req.body?.round) ? req.body.round : null,
+        thread: [{ role: authorKind, name: authorName, text: content, at: now }],
         meta: req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : {},
         source: {
           type: 'canvas_workspace',
@@ -1669,14 +1685,117 @@ function setupRoutes(app, dataDir) {
         actor: feedback.author,
         summary: content,
         target: feedback.target,
-        meta: feedback.meta,
+        meta: { ...feedback.meta, direction, targets, author_kind: authorKind },
       });
+      broadcast('canvas_workspace_updated', canvasWorkspaceSummary(workspace));
       res.status(201).json(feedback);
     } catch (err) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
     }
   });
 
+  // Append a reply into a feedback item's conversation thread. A user reply
+  // re-opens the item (pending -> awaits the expert's next response); an expert
+  // reply can resolve it.
+  app.post('/api/canvas-workspaces/:id/feedback/:fid/reply', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const text = String(req.body?.text || req.body?.content || '').trim();
+      if (!text) {
+        return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'text is required' } });
+      }
+      const role = String(req.body?.role || req.body?.author_kind) === 'expert' ? 'expert' : 'user';
+      const name = typeof req.body?.author === 'object'
+        ? String(req.body.author?.name || (role === 'expert' ? 'expert' : 'user'))
+        : String(req.body?.author || (role === 'expert' ? 'expert' : 'user'));
+      const now = new Date().toISOString();
+      const message = { role, name, text, at: now };
+      let updated = null;
+      await updateJSON(canvasFeedbackFile(workspace.id), (items) => items.map((item) => {
+        if (item.id !== req.params.fid) return item;
+        const thread = Array.isArray(item.thread) ? [...item.thread, message] : [message];
+        const status = role === 'expert'
+          ? (req.body?.resolve === false ? 'addressed' : 'resolved')
+          : 'tracked';
+        updated = {
+          ...item,
+          thread,
+          status,
+          handled: status === 'resolved',
+          updated_at: now,
+          updatedAt: now,
+        };
+        return updated;
+      }), []);
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback item not found' } });
+      }
+      await appendCanvasEvent(workspace.id, {
+        type: 'feedback_reply',
+        actor: name,
+        summary: text,
+        target: updated.target || {},
+        meta: { feedback_id: updated.id, role, status: updated.status },
+      });
+      broadcast('canvas_workspace_updated', canvasWorkspaceSummary(workspace));
+      res.status(201).json(updated);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // Explicitly mark a feedback item resolved / reopened.
+  app.post('/api/canvas-workspaces/:id/feedback/:fid/status', async (req, res) => {
+    try {
+      const workspace = readCanvasWorkspace(req.params.id);
+      if (!workspace) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Canvas workspace not found' } });
+      }
+      const status = ['tracked', 'addressed', 'resolved'].includes(req.body?.status)
+        ? req.body.status
+        : 'resolved';
+      const now = new Date().toISOString();
+      let updated = null;
+      await updateJSON(canvasFeedbackFile(workspace.id), (items) => items.map((item) => {
+        if (item.id !== req.params.fid) return item;
+        updated = { ...item, status, handled: status === 'resolved', updated_at: now, updatedAt: now };
+        return updated;
+      }), []);
+      if (!updated) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Feedback item not found' } });
+      }
+      broadcast('canvas_workspace_updated', canvasWorkspaceSummary(workspace));
+      res.status(200).json(updated);
+    } catch (err) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+}
+
+// Normalize feedback targets into [{ shape_id, level }]. Accepts an array of
+// strings/objects and/or a legacy single `target` with shape_id / shape_ids.
+function normalizeCanvasFeedbackTargets(rawTargets, legacyTarget) {
+  const out = [];
+  const push = (shapeId, level) => {
+    const id = String(shapeId || '').trim();
+    if (!id || out.some((t) => t.shape_id === id)) return;
+    out.push({ shape_id: id, level: typeof level === 'string' && level ? level : null });
+  };
+  if (Array.isArray(rawTargets)) {
+    rawTargets.forEach((t) => {
+      if (typeof t === 'string') push(t, null);
+      else if (t && typeof t === 'object') push(t.shape_id || t.id, t.level);
+    });
+  }
+  if (legacyTarget && typeof legacyTarget === 'object') {
+    if (Array.isArray(legacyTarget.shape_ids)) legacyTarget.shape_ids.forEach((id) => push(id, null));
+    if (legacyTarget.shape_id) push(legacyTarget.shape_id, null);
+  }
+  return out;
 }
 
 module.exports = { setupRoutes };

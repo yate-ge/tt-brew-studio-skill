@@ -54,10 +54,11 @@ DATA_DIR  = {CWD}/.visual-delivery
 不要仅仅因为任务可以使用画布、图表、头脑风暴、汇报或持久工作区就触发本 skill。非设计
 任务应使用普通文本、代码工具或研究工具完成。
 
-模糊的"优化 / 改进这个项目"请求要先判断对象：只有当"项目"是**设计项目**（作品、视觉方向、
-服务 / 体验 / 空间 / 交互设计等）时才触发本 skill，并按诊断再入场处理
-（design-mentor-protocol.md §4.1）。如果"优化项目"指的是代码库、后端性能、软件工程或通用
-文档，本 skill 不触发，交给相应的代码或文本工具。
+**把用户带来的任何项目都视为设计项目。** 无论它是软件、代码库、后端、工具、研究还是文档，
+都从设计视角（产物 / 用户 / 流程 / 信息架构 / 体验 / 系统）切入，不因为"看起来是技术项目"
+就拒绝或转交。因此模糊的"优化 / 改进这个项目"请求一律按诊断再入场处理
+（design-mentor-protocol.md §4.1）：先和学生一起诊断最值得改的杠杆点，而不是直接改稿。
+（本原则针对"项目"；一次性的代码审查、纯汇报、通用图表等非项目任务仍走普通工具。）
 
 ### 多专家设计导师模式
 
@@ -318,8 +319,26 @@ section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `an
   agent 查看并回应的画布区域；semantic index 会记录区域位置、大小、所在 Page、是否包含在
   frame 中、frame id / title、相交的目标 shape ids，以及供 agent 获取该区域截图的
   `screenshot.capture_hint`。旧 `completion_request` 仅作为兼容语义读取。
-- 画板右下角有画板内 feedback button，用于打开浮动面板，聚合 annotations、annotation
-  arrows、region annotations、widget outputs 和其他项目画板反馈。
+- 画板左侧有全局反馈面板（feedback button 打开），聚合 annotations、annotation arrows、
+  region annotations、widget outputs、专家反馈线程和其他项目画板反馈。
+
+### 专家反馈线程
+
+专家对画板内容的反馈是带署名、带关联元素的**对话线程**，收进同一个全局反馈面板：
+
+- **专家发起反馈**：agent 以具名专家身份调用 `POST /api/canvas-workspaces/{id}/feedback`，
+  传 `author: { kind: "expert", name: "专家名" }`、`direction: "expert_to_content"`、
+  `targets: [{ shape_id }]`（可关联多个元素）。粒度由被引用的 shape 自动推导：模板根
+  frame = 整个模板，widget 锚点 = 组件，阶段 frame = 阶段，普通 shape = 元素。
+- **用户向专家反馈**：批注中 `@专家名`，或在面板中选中专家后直接输入（当前画布选中元素
+  会自动作为 `targets` 关联）。
+- **对话与闭环（异步）**：用户回复即刻进入线程并保持待处理；agent 下一回合读取
+  feedback 中 thread 末条为 user 且状态未解决的条目，以被指名专家的身份调用
+  `POST /api/canvas-workspaces/{id}/feedback/{fid}/reply`（`role: "expert"`,
+  `author: { kind: "expert", name }`）回应，默认标记 `resolved`（传 `resolve: false`
+  保持开放）。专家回应必须遵守导师红线：给判断和方法，不替学生完成内容。
+- **UI 语义**：左侧专家头像显示该专家名下"用户提交且未处理"的条数角标；点击头像在全局
+  面板中聚焦该专家线程；hover / 选中反馈项时画布上以专家色勾勒关联元素并画连接线。
 
 ### 交互组件（Widgets）
 

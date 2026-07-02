@@ -19,6 +19,7 @@ import {
 import 'tldraw/tldraw.css';
 import {
   addCanvasWorkspaceFeedback,
+  replyCanvasWorkspaceFeedback,
   createCanvasWorkspace,
   fetchProjectCanvasWorkspace,
   fetchScaffolds,
@@ -834,6 +835,7 @@ function feedbackKindLabel(kind) {
 
 function feedbackStatusLabel(item) {
   const status = item.status || item.raw?.status;
+  if (status === 'resolved') return '已解决';
   if (status === 'addressed') return '已处理';
   if (status === 'confirmed') return '已确认';
   if (status === 'archived') return '已归档';
@@ -846,8 +848,86 @@ function feedbackStatusLabel(item) {
 
 function isFeedbackItemPending(item) {
   const status = item?.status || item?.raw?.status;
+  // A terminal status wins over the flagged shortcut: once an expert resolves
+  // the thread, the item stops counting as pending even if it was flagged.
+  if (['resolved', 'addressed', 'confirmed', 'archived', 'completed'].includes(status)) return false;
   if (item?.flagged) return true;
   return ['tracked', 'open', 'in_progress'].includes(status);
+}
+
+const TARGET_LEVEL_LABEL = {
+  element: '元素',
+  template: '模板',
+  widget: '组件',
+  stage: '阶段',
+  section: '区块',
+  region: '区域',
+};
+
+// A feedback target's granularity falls out of which shape it references:
+// a template root / stage frame / widget anchor covers the whole composite,
+// a primitive shape is element-level.
+function deriveTargetLevel(meta) {
+  if (!meta || typeof meta !== 'object') return 'element';
+  if (meta.vd_kind === 'html_component') return 'widget';
+  if (meta.vd_kind === REGION_ANNOTATION_KIND || meta.vd_kind === LEGACY_COMPLETION_KIND) return 'region';
+  const isContainer = ['section', 'canvas_section', 'slot', 'cluster', 'pattern'].includes(meta.vd_kind);
+  // Only the stage frame itself is stage-level; children inside it carry
+  // vd_stage_key too (for routing) but stay at their own granularity.
+  if (meta.vd_stage_key && (isContainer || meta.vd_stage_template_dropzone)) return 'stage';
+  const role = String(meta.vd_role || meta.vd_stage_role || '');
+  if (role === 'scaffold.root' || meta.vd_template_id || meta.vd_template_role || meta.vd_scaffold_root) return 'template';
+  if (isContainer) return 'section';
+  return 'element';
+}
+
+function feedbackAuthorInfo(raw) {
+  const rawAuthor = raw?.author;
+  const name = typeof rawAuthor === 'object' ? String(rawAuthor?.name || 'user') : String(rawAuthor || 'user');
+  const known = DESIGN_EXPERTS.find((expert) => expert.name === name || name.startsWith(expert.name));
+  const declaredExpert = raw?.author_kind === 'expert'
+    || (typeof rawAuthor === 'object' && rawAuthor?.kind === 'expert');
+  const kind = declaredExpert || known ? 'expert' : 'user';
+  return { kind, name, expert: known || null, color: known?.color || (kind === 'expert' ? expertFallbackColor(name) : null) };
+}
+
+// Which expert's conversation thread an item belongs to: authored by that
+// expert, or @-mentions them, or targets an element that expert authored.
+function feedbackItemExpertName(item, author, targets, nodeMetaByShapeId) {
+  if (author.kind === 'expert') return author.name;
+  const mentions = parseExpertMentions(item.content || '');
+  if (mentions.length) return mentions[0].name;
+  const rawMentions = item.raw?.mentions || item.raw?.meta?.mentions;
+  if (Array.isArray(rawMentions) && rawMentions.length) {
+    const m = rawMentions[0];
+    return typeof m === 'string' ? m : (m?.name || null);
+  }
+  for (const target of targets) {
+    const meta = nodeMetaByShapeId.get(target.shape_id) || {};
+    const candidate = meta.vd_author
+      || (meta.vd_created_by && !['agent', 'user', ''].includes(meta.vd_created_by) ? meta.vd_created_by : null);
+    if (candidate && DESIGN_EXPERTS.some((expert) => expert.name === candidate)) return candidate;
+  }
+  return null;
+}
+
+// Screen-space rects (canvas-area local) for a feedback item's target shapes,
+// used to draw connector lines + outlines. Matches authoredOverlaysFromEditor.
+function feedbackConnectorRects(editor, shapeIds) {
+  if (!editor || !Array.isArray(shapeIds) || !shapeIds.length) return [];
+  return shapeIds
+    .map((shapeId) => {
+      const bounds = getShapePageBounds(editor, shapeId);
+      if (!bounds) return null;
+      const topLeft = pagePointToViewport(editor, { x: bounds.x, y: bounds.y });
+      const bottomRight = pagePointToViewport(editor, { x: bounds.x + bounds.w, y: bounds.y + bounds.h });
+      const x = Math.min(topLeft.x, bottomRight.x);
+      const y = Math.min(topLeft.y, bottomRight.y);
+      const w = Math.max(8, Math.abs(bottomRight.x - topLeft.x));
+      const h = Math.max(8, Math.abs(bottomRight.y - topLeft.y));
+      return { shapeId: String(shapeId), x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+    })
+    .filter(Boolean);
 }
 
 function canvasFeedbackPanelItems(workspace) {
@@ -950,11 +1030,30 @@ function canvasFeedbackPanelItems(workspace) {
     });
   });
 
-  return Array.from(items.values()).sort((a, b) => {
-    const at = new Date(a.createdAt || 0).getTime();
-    const bt = new Date(b.createdAt || 0).getTime();
-    return bt - at;
-  });
+  const nodeMetaByShapeId = new Map(
+    (workspace?.semantic_index?.nodes || []).map((node) => [String(node.shape_id), node.meta || {}]),
+  );
+  return Array.from(items.values())
+    .map((item) => {
+      const author = feedbackAuthorInfo(item.raw);
+      const storedTargets = Array.isArray(item.raw?.targets) && item.raw.targets.length ? item.raw.targets : null;
+      const targets = (storedTargets || (item.shapeIds || []).map((id) => ({ shape_id: id, level: null })))
+        .map((target) => {
+          const shapeId = String(target.shape_id || target.id || target);
+          return { shape_id: shapeId, level: target.level || deriveTargetLevel(nodeMetaByShapeId.get(shapeId)) };
+        });
+      const thread = Array.isArray(item.raw?.thread) && item.raw.thread.length
+        ? item.raw.thread
+        : [{ role: author.kind, name: author.name, text: item.content, at: item.createdAt }];
+      const direction = item.raw?.direction || (author.kind === 'expert' ? 'expert_to_content' : 'user_to_expert');
+      const expertName = feedbackItemExpertName(item, author, targets, nodeMetaByShapeId);
+      return { ...item, author, direction, targets, thread, expertName };
+    })
+    .sort((a, b) => {
+      const at = new Date(a.createdAt || 0).getTime();
+      const bt = new Date(b.createdAt || 0).getTime();
+      return bt - at;
+    });
 }
 
 function semanticIndexFromEditor(editor, workspace) {
@@ -1798,6 +1897,7 @@ function ActiveExpertsDock({
   onSelectExpert,
   onSummonDraftChange,
   onSubmitSummon,
+  pendingByExpert,
 }) {
   const hasExperts = experts.length > 0;
   return (
@@ -1811,16 +1911,24 @@ function ActiveExpertsDock({
         <div style={STYLES.expertParticipantList}>
           {experts.map((expert) => {
             const selected = selectedExpertName === expert.name;
+            const pending = pendingByExpert?.get?.(expert.name) || 0;
             return (
               <button
                 type="button"
                 key={expert.name}
-                style={STYLES.expertParticipantButton(selected)}
+                style={STYLES.expertParticipantButton(selected, pending > 0)}
                 onClick={() => onSelectExpert(expert)}
                 title={expert.domain ? `${expert.name} · ${expert.domain}` : expert.name}
                 aria-pressed={selected}
               >
-                <ExpertAvatar expert={expert} selected={selected} />
+                <span style={STYLES.expertAvatarWrap}>
+                  <ExpertAvatar expert={expert} selected={selected} size={30} />
+                  {pending > 0 && (
+                    <span style={STYLES.expertPendingBadge(expert.color)} aria-label={`${pending} 条待处理`}>
+                      {pending}
+                    </span>
+                  )}
+                </span>
                 <span style={STYLES.expertParticipantName(selected)}>{expert.name}</span>
               </button>
             );
@@ -1861,12 +1969,16 @@ function CanvasCollaborationDock({
   feedbackPanelItems,
   feedbackPanelOpen,
   feedbackPanelPendingCount,
+  pendingByExpert,
   onSelectExpert,
   onSummonDraftChange,
   onSubmitSummon,
   onToggleFeedback,
   onCloseFeedback,
   onFocusFeedback,
+  onActiveFeedbackChange,
+  onReplyFeedback,
+  onComposeFeedback,
 }) {
   return (
     <div style={STYLES.canvasCollaborationDock(experts.length > 0)}>
@@ -1875,6 +1987,7 @@ function CanvasCollaborationDock({
         selectedExpertName={selectedExpertName}
         summonDraft={summonDraft}
         summonSubmitting={summonSubmitting}
+        pendingByExpert={pendingByExpert}
         onSelectExpert={onSelectExpert}
         onSummonDraftChange={onSummonDraftChange}
         onSubmitSummon={onSubmitSummon}
@@ -1882,11 +1995,40 @@ function CanvasCollaborationDock({
       <CanvasFeedbackPanel
         items={feedbackPanelItems}
         open={feedbackPanelOpen}
+        hasExperts={experts.length > 0}
         pendingCount={feedbackPanelPendingCount}
+        activeExpertName={selectedExpertName}
         onToggle={onToggleFeedback}
         onClose={onCloseFeedback}
         onFocus={onFocusFeedback}
+        onFilterExpert={onSelectExpert}
+        onActiveItemChange={onActiveFeedbackChange}
+        onReply={onReplyFeedback}
+        onCompose={onComposeFeedback}
       />
+    </div>
+  );
+}
+
+function expertColorByName(name) {
+  if (!name) return '#7c3aed';
+  const known = DESIGN_EXPERTS.find((expert) => expert.name === name);
+  return known?.color || expertFallbackColor(name);
+}
+
+function FeedbackThreadMessage({ message }) {
+  const isExpert = message.role === 'expert';
+  const color = isExpert ? expertColorByName(message.name) : null;
+  return (
+    <div style={STYLES.canvasFeedbackThreadMsg(isExpert, color)}>
+      <div style={STYLES.canvasFeedbackThreadMsgTop}>
+        <span style={STYLES.canvasFeedbackAuthorDot(isExpert ? color : '#94a3b8')} />
+        <span style={STYLES.canvasFeedbackAuthorName(isExpert ? color : null)}>
+          {isExpert ? message.name : (message.name === 'user' ? '我' : message.name)}
+        </span>
+        <span style={STYLES.canvasFeedbackTime}>{formatDate(message.at)}</span>
+      </div>
+      <div style={STYLES.canvasFeedbackThreadMsgText}>{message.text}</div>
     </div>
   );
 }
@@ -1894,23 +2036,75 @@ function CanvasCollaborationDock({
 function CanvasFeedbackPanel({
   items,
   open,
+  hasExperts,
   pendingCount,
+  activeExpertName,
   onToggle,
   onClose,
   onFocus,
+  onFilterExpert,
+  onActiveItemChange,
+  onReply,
+  onCompose,
 }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [composeDraft, setComposeDraft] = useState('');
+  const [composeBusy, setComposeBusy] = useState(false);
   const total = items.length;
+  const expertChips = useMemo(() => {
+    const map = new Map();
+    items.forEach((item) => {
+      if (!item.expertName) return;
+      map.set(item.expertName, (map.get(item.expertName) || 0) + 1);
+    });
+    if (activeExpertName && !map.has(activeExpertName)) map.set(activeExpertName, 0);
+    return Array.from(map.entries()).map(([name, count]) => ({ name, count, color: expertColorByName(name) }));
+  }, [items, activeExpertName]);
+  const visibleItems = useMemo(
+    () => (activeExpertName ? items.filter((item) => item.expertName === activeExpertName) : items),
+    [items, activeExpertName],
+  );
+
+  async function submitReply(item) {
+    const text = replyDraft.trim();
+    if (!text || replyBusy) return;
+    setReplyBusy(true);
+    try {
+      await onReply(item, text);
+      setReplyDraft('');
+    } finally {
+      setReplyBusy(false);
+    }
+  }
+
+  async function submitCompose(event) {
+    event.preventDefault();
+    const text = composeDraft.trim();
+    if (!text || composeBusy) return;
+    setComposeBusy(true);
+    try {
+      await onCompose(text);
+      setComposeDraft('');
+    } finally {
+      setComposeBusy(false);
+    }
+  }
+
   return (
     <div
-      style={STYLES.canvasFeedbackDock}
+      style={STYLES.canvasFeedbackDock(hasExperts)}
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
       {open && (
-        <section style={STYLES.canvasFeedbackPanel} aria-label="画布提交内容">
+        <section style={STYLES.canvasFeedbackPanel(hasExperts)} aria-label="画布提交内容">
           <div style={STYLES.canvasFeedbackPanelHeader}>
             <div>
-              <div style={STYLES.canvasFeedbackPanelTitle}>提交内容</div>
+              <div style={STYLES.canvasFeedbackPanelTitle}>
+                {activeExpertName ? `${activeExpertName} 的反馈` : '反馈'}
+              </div>
               <div style={STYLES.canvasFeedbackPanelMeta}>
                 {total} 条内容 · {pendingCount} 条待处理
               </div>
@@ -1924,33 +2118,160 @@ function CanvasFeedbackPanel({
               ×
             </button>
           </div>
+          {expertChips.length > 0 && (
+            <div style={STYLES.canvasFeedbackFilterBar}>
+              <button
+                type="button"
+                style={STYLES.canvasFeedbackFilterChip(!activeExpertName, null)}
+                onClick={() => onFilterExpert(null)}
+              >
+                全部
+              </button>
+              {expertChips.map((chip) => (
+                <button
+                  type="button"
+                  key={chip.name}
+                  style={STYLES.canvasFeedbackFilterChip(activeExpertName === chip.name, chip.color)}
+                  onClick={() => onFilterExpert(activeExpertName === chip.name ? null : { name: chip.name })}
+                >
+                  {chip.name}
+                  {chip.count > 0 && <span style={STYLES.canvasFeedbackFilterCount}>{chip.count}</span>}
+                </button>
+              ))}
+            </div>
+          )}
           <div style={STYLES.canvasFeedbackList}>
-            {items.length === 0 ? (
-              <div style={STYLES.canvasFeedbackEmpty}>还没有提交内容。</div>
-            ) : items.map((item) => (
-              <article key={item.id} style={STYLES.canvasFeedbackItem}>
-                <div style={STYLES.canvasFeedbackItemTop}>
-                  <span style={STYLES.canvasFeedbackKind}>{item.label}</span>
-                  <span style={STYLES.canvasFeedbackStatus(isFeedbackItemPending(item))}>
-                    {feedbackStatusLabel(item)}
-                  </span>
-                </div>
-                <div style={STYLES.canvasFeedbackContent}>{item.content}</div>
-                <div style={STYLES.canvasFeedbackFooter}>
-                  <span style={STYLES.canvasFeedbackTime}>{formatDate(item.createdAt)}</span>
-                  {item.shapeIds?.length > 0 && (
-                    <button
-                      type="button"
-                      style={STYLES.canvasFeedbackLocateButton}
-                      onClick={() => onFocus(item)}
-                    >
-                      定位
-                    </button>
+            {visibleItems.length === 0 ? (
+              <div style={STYLES.canvasFeedbackEmpty}>
+                {activeExpertName ? '这位专家还没有相关反馈。' : '还没有提交内容。'}
+              </div>
+            ) : visibleItems.map((item) => {
+              const expanded = expandedId === item.id;
+              const authorIsExpert = item.author?.kind === 'expert';
+              const itemColor = authorIsExpert
+                ? item.author.color
+                : (item.expertName ? expertColorByName(item.expertName) : null);
+              const canReply = String(item.id || '').startsWith('feedback:');
+              const thread = item.thread || [];
+              return (
+                <article
+                  key={item.id}
+                  data-testid="canvas.feedback-panel.item"
+                  style={STYLES.canvasFeedbackItem2(expanded, itemColor)}
+                  onMouseEnter={(event) => onActiveItemChange({ item, element: event.currentTarget })}
+                  onClick={() => setExpandedId((prev) => (prev === item.id ? null : item.id))}
+                >
+                  <div style={STYLES.canvasFeedbackItemTop}>
+                    <span style={STYLES.canvasFeedbackKind}>{item.label}</span>
+                    <span style={STYLES.canvasFeedbackStatus(isFeedbackItemPending(item))}>
+                      {feedbackStatusLabel(item)}
+                    </span>
+                  </div>
+                  <div style={STYLES.canvasFeedbackAuthorRow}>
+                    <span style={STYLES.canvasFeedbackAuthorDot(authorIsExpert ? itemColor : '#94a3b8')} />
+                    <span style={STYLES.canvasFeedbackAuthorName(authorIsExpert ? itemColor : null)}>
+                      {authorIsExpert ? item.author.name : '我'}
+                    </span>
+                    {!authorIsExpert && item.expertName && (
+                      <span style={STYLES.canvasFeedbackDirection}>→ {item.expertName}</span>
+                    )}
+                    <span style={STYLES.canvasFeedbackTime}>{formatDate(item.createdAt)}</span>
+                  </div>
+                  <div style={STYLES.canvasFeedbackContent}>{item.content}</div>
+                  {item.targets?.length > 0 && (
+                    <div style={STYLES.canvasFeedbackTargetRow}>
+                      {item.targets.map((target) => (
+                        <button
+                          type="button"
+                          key={target.shape_id}
+                          style={STYLES.canvasFeedbackTargetChip(itemColor)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onFocus({ ...item, shapeIds: [target.shape_id] });
+                          }}
+                          title={target.shape_id}
+                        >
+                          ⌖ {TARGET_LEVEL_LABEL[target.level] || '元素'}
+                        </button>
+                      ))}
+                      {item.targets.length > 1 && (
+                        <button
+                          type="button"
+                          style={STYLES.canvasFeedbackLocateButton}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onFocus(item);
+                          }}
+                        >
+                          全部定位
+                        </button>
+                      )}
+                    </div>
                   )}
-                </div>
-              </article>
-            ))}
+                  {!expanded && thread.length > 1 && (
+                    <div style={STYLES.canvasFeedbackThreadHint}>{thread.length - 1} 条回复 · 点击展开</div>
+                  )}
+                  {expanded && thread.length > 1 && (
+                    <div style={STYLES.canvasFeedbackThread}>
+                      {thread.slice(1).map((message, index) => (
+                        <FeedbackThreadMessage key={`${item.id}-msg-${index}`} message={message} />
+                      ))}
+                    </div>
+                  )}
+                  {expanded && canReply && (
+                    <div style={STYLES.canvasFeedbackReplyRow} onClick={(event) => event.stopPropagation()}>
+                      <textarea
+                        rows={1}
+                        style={STYLES.canvasFeedbackReplyInput}
+                        value={replyDraft}
+                        placeholder="回复这条反馈..."
+                        onChange={(event) => setReplyDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            submitReply(item);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        style={STYLES.canvasFeedbackReplyButton(replyBusy || !replyDraft.trim())}
+                        disabled={replyBusy || !replyDraft.trim()}
+                        onClick={() => submitReply(item)}
+                      >
+                        发送
+                      </button>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
+          {activeExpertName && (
+            <form style={STYLES.canvasFeedbackComposeRow} onSubmit={submitCompose}>
+              <textarea
+                rows={1}
+                data-testid="canvas.feedback-panel.compose"
+                style={STYLES.canvasFeedbackReplyInput}
+                value={composeDraft}
+                placeholder={`对 ${activeExpertName} 反馈（选中画布元素可自动关联）...`}
+                onChange={(event) => setComposeDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    submitCompose(event);
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                style={STYLES.canvasFeedbackReplyButton(composeBusy || !composeDraft.trim())}
+                disabled={composeBusy || !composeDraft.trim()}
+              >
+                发送
+              </button>
+            </form>
+          )}
         </section>
       )}
       <button
@@ -1965,6 +2286,66 @@ function CanvasFeedbackPanel({
         {total > 0 && <span style={STYLES.canvasFeedbackCount}>{total}</span>}
       </button>
     </div>
+  );
+}
+
+// Connector overlay: outlines each target shape of the active feedback item and
+// draws lines from the panel card to those shapes. Recomputed every render (the
+// parent re-renders on store changes, so the geometry follows the camera).
+function FeedbackConnectorOverlay({ link, editor, layerEl }) {
+  const item = link?.item;
+  if (!item || !editor) return null;
+  const targets = feedbackConnectorRects(editor, item.shapeIds || []);
+  if (!targets.length) return null;
+  const color = item.author?.kind === 'expert'
+    ? (item.author.color || '#7c3aed')
+    : (item.expertName ? expertColorByName(item.expertName) : '#7c3aed');
+  let source = null;
+  if (link.element?.isConnected && layerEl) {
+    const layerRect = layerEl.getBoundingClientRect();
+    const itemRect = link.element.getBoundingClientRect();
+    source = {
+      x: itemRect.right - layerRect.left + 4,
+      y: itemRect.top - layerRect.top + Math.min(28, itemRect.height / 2),
+    };
+  }
+  const levelByShapeId = new Map((item.targets || []).map((target) => [target.shape_id, target.level]));
+  return (
+    <>
+      {source && (
+        <svg data-testid="vd-feedback-connector" style={STYLES.feedbackConnectorSvg} aria-hidden="true">
+          {targets.map((rect) => {
+            const endX = source.x <= rect.x ? rect.x : (source.x >= rect.x + rect.w ? rect.x + rect.w : rect.cx);
+            const endY = rect.cy;
+            const bendX = source.x + (endX - source.x) * 0.4;
+            return (
+              <path
+                key={`line-${rect.shapeId}`}
+                d={`M ${source.x} ${source.y} C ${bendX} ${source.y}, ${bendX} ${endY}, ${endX} ${endY}`}
+                fill="none"
+                stroke={color}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+                opacity={0.9}
+              />
+            );
+          })}
+          <circle cx={source.x} cy={source.y} r={4} fill={color} />
+        </svg>
+      )}
+      {targets.map((rect) => (
+        <div
+          key={`outline-${rect.shapeId}`}
+          data-testid="vd-feedback-connector-outline"
+          data-shape-target={rect.shapeId}
+          style={STYLES.feedbackConnectorOutline(rect, color)}
+        >
+          <span style={STYLES.feedbackConnectorTag(color)}>
+            {TARGET_LEVEL_LABEL[levelByShapeId.get(rect.shapeId)] || '元素'}
+          </span>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -2229,7 +2610,7 @@ const STYLES = {
     top: '50%',
     transform: 'translateY(-50%)',
     zIndex: 420,
-    width: hasExperts ? 112 : 188,
+    width: hasExperts ? 60 : 188,
     maxHeight: 'min(620px, calc(100% - 96px))',
     display: 'flex',
     flexDirection: 'column',
@@ -2239,17 +2620,18 @@ const STYLES = {
   }),
   activeExpertsDock: (hasExperts) => ({
     width: '100%',
+    flexShrink: 0,
     maxHeight: hasExperts ? 'min(520px, calc(100vh - 180px))' : 'none',
-    padding: hasExperts ? '18px 12px' : '14px 12px 12px',
+    padding: hasExperts ? '9px 6px' : '14px 12px 12px',
     border: '1px solid rgba(226, 232, 240, .82)',
-    borderRadius: hasExperts ? 28 : 20,
+    borderRadius: hasExperts ? 16 : 20,
     background: 'rgba(255, 255, 255, .94)',
-    boxShadow: '0 18px 44px rgba(15, 23, 42, .14)',
+    boxShadow: '0 12px 30px rgba(15, 23, 42, .14)',
     backdropFilter: 'blur(14px)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: hasExperts ? 18 : 0,
+    gap: hasExperts ? 10 : 0,
     pointerEvents: 'auto',
     overflowY: 'auto',
   }),
@@ -2308,20 +2690,45 @@ const STYLES = {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 18,
+    gap: 10,
   },
-  expertParticipantButton: (selected) => ({
+  expertParticipantButton: (selected, hasPending = false) => ({
     width: '100%',
     border: 'none',
-    borderRadius: 18,
-    background: selected ? 'rgba(15, 23, 42, .06)' : 'transparent',
-    padding: '6px 4px',
+    borderRadius: 12,
+    background: selected ? 'rgba(15, 23, 42, .06)' : (hasPending ? 'rgba(124, 58, 237, .07)' : 'transparent'),
+    padding: '3px 2px',
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
     color: 'var(--vd-text-primary)',
+  }),
+  expertAvatarWrap: {
+    position: 'relative',
+    display: 'inline-flex',
+    borderRadius: 999,
+  },
+  expertPendingBadge: (color) => ({
+    position: 'absolute',
+    top: -3,
+    right: -4,
+    minWidth: 14,
+    height: 14,
+    padding: '0 3px',
+    borderRadius: 999,
+    background: color || '#7c3aed',
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: 700,
+    lineHeight: '11px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: '1.5px solid #fff',
+    boxShadow: `0 0 0 1.5px ${color ? `${color}44` : 'rgba(124, 58, 237, .28)'}, 0 2px 6px rgba(15, 23, 42, .22)`,
+    zIndex: 1,
   }),
   expertAvatar: (color, selected, size = 58) => ({
     width: size,
@@ -2363,12 +2770,188 @@ const STYLES = {
   expertParticipantName: (selected) => ({
     maxWidth: '100%',
     color: selected ? 'var(--vd-text-primary)' : '#0f172a',
-    fontSize: 'var(--vd-font-size-base)',
+    fontSize: 11,
     fontWeight: selected ? 'var(--vd-font-weight-bold)' : 'var(--vd-font-weight-semibold)',
-    lineHeight: 1.18,
+    lineHeight: 1.15,
     textAlign: 'center',
     letterSpacing: 0,
     overflowWrap: 'anywhere',
+  }),
+  canvasFeedbackItem2: (expanded, color) => ({
+    border: `1px solid ${expanded && color ? `${color}66` : 'var(--vd-border-default)'}`,
+    borderLeft: `3px solid ${color || 'var(--vd-border-default)'}`,
+    borderRadius: 10,
+    padding: '8px 10px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    background: expanded ? (color ? `${color}0d` : 'rgba(15, 23, 42, .03)') : '#fff',
+    cursor: 'pointer',
+  }),
+  canvasFeedbackFilterBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    padding: '8px 12px',
+    borderBottom: '1px solid var(--vd-border-default)',
+  },
+  canvasFeedbackFilterChip: (active, color) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    border: `1px solid ${active ? (color || '#7c3aed') : 'var(--vd-border-default)'}`,
+    borderRadius: 999,
+    padding: '2px 10px',
+    fontSize: 12,
+    fontWeight: active ? 700 : 500,
+    color: active ? (color || '#7c3aed') : 'var(--vd-text-secondary)',
+    background: active && color ? `${color}14` : (active ? 'rgba(124, 58, 237, .08)' : '#fff'),
+    cursor: 'pointer',
+  }),
+  canvasFeedbackFilterCount: {
+    fontSize: 11,
+    fontWeight: 700,
+    opacity: 0.75,
+  },
+  canvasFeedbackAuthorRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+  },
+  canvasFeedbackAuthorDot: (color) => ({
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    background: color || '#94a3b8',
+    flexShrink: 0,
+  }),
+  canvasFeedbackAuthorName: (color) => ({
+    fontSize: 12,
+    fontWeight: 700,
+    color: color || 'var(--vd-text-secondary)',
+  }),
+  canvasFeedbackDirection: {
+    fontSize: 11,
+    color: 'var(--vd-text-tertiary)',
+  },
+  canvasFeedbackTargetRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  canvasFeedbackTargetChip: (color) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 3,
+    border: `1px dashed ${color ? `${color}88` : 'rgba(124, 58, 237, .5)'}`,
+    borderRadius: 6,
+    padding: '1px 7px',
+    fontSize: 11,
+    color: color || '#6d28d9',
+    background: '#fff',
+    cursor: 'pointer',
+  }),
+  canvasFeedbackThreadHint: {
+    fontSize: 11,
+    color: 'var(--vd-text-tertiary)',
+  },
+  canvasFeedbackThread: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    borderTop: '1px dashed var(--vd-border-default)',
+    paddingTop: 6,
+  },
+  canvasFeedbackThreadMsg: (isExpert, color) => ({
+    borderRadius: 8,
+    padding: '6px 8px',
+    border: `1px solid ${isExpert && color ? `${color}44` : 'var(--vd-border-default)'}`,
+    background: isExpert && color ? `${color}0d` : 'var(--vd-page-bg, #f8fafc)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+  }),
+  canvasFeedbackThreadMsgTop: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  canvasFeedbackThreadMsgText: {
+    fontSize: 12,
+    lineHeight: 1.55,
+    color: 'var(--vd-text-primary)',
+    whiteSpace: 'pre-wrap',
+  },
+  canvasFeedbackReplyRow: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  canvasFeedbackComposeRow: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: 6,
+    padding: '8px 12px',
+    borderTop: '1px solid var(--vd-border-default)',
+    background: 'rgba(124, 58, 237, .04)',
+  },
+  canvasFeedbackReplyInput: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    lineHeight: 1.5,
+    fontFamily: 'inherit',
+    padding: '6px 9px',
+    border: '1px solid var(--vd-border-default)',
+    borderRadius: 8,
+    resize: 'none',
+    background: '#fff',
+  },
+  canvasFeedbackReplyButton: (disabled) => ({
+    border: 'none',
+    borderRadius: 8,
+    padding: '6px 12px',
+    fontSize: 12,
+    fontWeight: 600,
+    color: '#fff',
+    background: disabled ? 'rgba(124, 58, 237, .35)' : 'rgba(124, 58, 237, .95)',
+    cursor: disabled ? 'default' : 'pointer',
+    flexShrink: 0,
+  }),
+  feedbackConnectorSvg: {
+    position: 'absolute',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    pointerEvents: 'none',
+    overflow: 'visible',
+  },
+  feedbackConnectorOutline: (rect, color) => ({
+    position: 'absolute',
+    left: rect.x,
+    top: rect.y,
+    width: rect.w,
+    height: rect.h,
+    border: `2px solid ${color}`,
+    background: `${color}14`,
+    borderRadius: 8,
+    boxShadow: `0 0 0 3px ${color}22, 0 0 18px ${color}55`,
+    pointerEvents: 'none',
+  }),
+  feedbackConnectorTag: (color) => ({
+    position: 'absolute',
+    top: -22,
+    left: -2,
+    padding: '1px 8px',
+    borderRadius: 6,
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#fff',
+    background: color,
+    whiteSpace: 'nowrap',
   }),
   htmlOverlayLayer: {
     position: 'absolute',
@@ -2376,55 +2959,64 @@ const STYLES = {
     pointerEvents: 'none',
     zIndex: 20,
   },
-  canvasFeedbackDock: {
+  canvasFeedbackDock: (hasExperts) => ({
     position: 'relative',
     zIndex: 1,
+    width: '100%',
+    flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'stretch',
     gap: 8,
     pointerEvents: 'auto',
-  },
+  }),
   canvasFeedbackButton: (active) => ({
-    display: 'inline-flex',
+    display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 2,
     width: '100%',
-    minHeight: 38,
-    padding: '0 13px',
+    padding: '7px 4px',
     border: '1px solid rgba(124, 58, 237, .38)',
-    borderRadius: 8,
+    borderRadius: 12,
     background: active ? 'rgba(124, 58, 237, .98)' : 'rgba(255, 255, 255, .96)',
     color: active ? '#fff' : '#5b21b6',
-    boxShadow: '0 12px 28px rgba(76, 29, 149, .18)',
+    boxShadow: '0 10px 24px rgba(76, 29, 149, .18)',
     cursor: 'pointer',
-    fontSize: 'var(--vd-font-size-sm)',
+    fontSize: 12,
     fontWeight: 'var(--vd-font-weight-semibold)',
+    lineHeight: 1.1,
   }),
   canvasFeedbackCount: {
-    minWidth: 20,
-    height: 20,
+    minWidth: 18,
+    height: 16,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
+    padding: '0 5px',
     borderRadius: 999,
-    background: 'rgba(124, 58, 237, .12)',
+    background: 'rgba(124, 58, 237, .16)',
     color: 'inherit',
     fontSize: 11,
     fontWeight: 'var(--vd-font-weight-bold)',
   },
-  canvasFeedbackPanel: {
-    width: 'min(380px, calc(100vw - 40px))',
-    maxHeight: 'min(460px, calc(100vh - 176px))',
+  canvasFeedbackPanel: (hasExperts) => ({
+    // Float to the right of the vertical expert rail + feedback button stack.
+    position: 'absolute',
+    left: 'calc(100% + 12px)',
+    bottom: 0,
+    width: hasExperts ? 'min(360px, calc(100vw - 96px))' : 'min(360px, calc(100vw - 232px))',
+    maxHeight: 'min(560px, calc(100vh - 120px))',
     display: 'flex',
     flexDirection: 'column',
     border: '1px solid rgba(124, 58, 237, .28)',
-    borderRadius: 8,
+    borderRadius: 10,
     background: 'rgba(255, 255, 255, .98)',
     boxShadow: '0 20px 42px rgba(76, 29, 149, .18)',
     overflow: 'hidden',
-  },
+    zIndex: 5,
+  }),
   canvasFeedbackPanelHeader: {
     display: 'flex',
     alignItems: 'flex-start',
@@ -2761,6 +3353,22 @@ export default function CanvasWorkspace() {
     () => feedbackPanelItems.filter(isFeedbackItemPending).length,
     [feedbackPanelItems],
   );
+  // Per-expert badge: user-submitted items that are still awaiting that
+  // expert's response (last thread message is not from an expert).
+  const pendingFeedbackByExpert = useMemo(() => {
+    const map = new Map();
+    feedbackPanelItems.forEach((item) => {
+      if (!item.expertName) return;
+      if (!isFeedbackItemPending(item)) return;
+      const lastMessage = item.thread?.[item.thread.length - 1];
+      if (lastMessage?.role === 'expert') return;
+      if (item.author?.kind !== 'user' && lastMessage?.role !== 'user') return;
+      map.set(item.expertName, (map.get(item.expertName) || 0) + 1);
+    });
+    return map;
+  }, [feedbackPanelItems]);
+  const [activeFeedbackLink, setActiveFeedbackLink] = useState(null);
+  const overlayLayerRef = useRef(null);
   const discussionExperts = useMemo(() => collectDiscussionExperts(workspace), [workspace]);
   const highlightedAuthorOverlays = useMemo(() => {
     if (previewMode !== 'highlight') return [];
@@ -2893,12 +3501,20 @@ export default function CanvasWorkspace() {
   }
 
   function handleSelectDiscussionExpert(expert) {
+    if (!expert?.name) {
+      setPreviewMode('normal');
+      setSelectedExpertName(null);
+      return;
+    }
     setSelectedExpertName((current) => {
       if (current === expert.name) {
         setPreviewMode('normal');
         return null;
       }
       setPreviewMode('highlight');
+      // Focusing an expert also opens the global feedback panel filtered to
+      // that expert's conversation thread.
+      setFeedbackPanelOpen(true);
       return expert.name;
     });
   }
@@ -2939,6 +3555,63 @@ export default function CanvasWorkspace() {
       markToolMessage('召唤专家请求提交失败，请稍后重试。');
     } finally {
       setExpertSummonSubmitting(false);
+    }
+  }
+
+  async function handleReplyFeedbackPanelItem(item, text) {
+    const feedbackId = item?.raw?.id || item?.sourceId;
+    if (!workspace || !feedbackId || !text) return;
+    try {
+      const updated = await replyCanvasWorkspaceFeedback(workspace.id, feedbackId, {
+        text,
+        role: 'user',
+        author: 'user',
+      });
+      setWorkspace((current) => {
+        if (!current || current.id !== workspace.id) return current;
+        return {
+          ...current,
+          feedback: (current.feedback || []).map((entry) => (entry.id === updated.id ? updated : entry)),
+        };
+      });
+      markToolMessage('已发送回复，等待专家下一轮回应。');
+    } catch {
+      markToolMessage('回复发送失败，请稍后重试。');
+    }
+  }
+
+  async function handleComposeFeedbackToExpert(text) {
+    if (!workspace || !selectedExpertName || !text) return;
+    const editor = editorRef.current;
+    const selectedIds = readSelectedShapeIds(editor).map(String);
+    try {
+      const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
+        kind: 'expert_dialog',
+        content: text,
+        author: 'user',
+        direction: 'user_to_expert',
+        targets: selectedIds.map((shapeId) => ({ shape_id: shapeId })),
+        target: selectedIds.length
+          ? { kind: 'canvas_selection', workspace_id: workspace.id, shape_ids: selectedIds }
+          : { kind: 'expert_dialog', workspace_id: workspace.id },
+        meta: {
+          flagged: true,
+          mentions: [{ type: 'expert', name: selectedExpertName }],
+        },
+      });
+      setWorkspace((current) => {
+        if (!current || current.id !== workspace.id) return current;
+        return {
+          ...current,
+          feedback: [...(current.feedback || []), feedback],
+          pending_feedback_count: (current.pending_feedback_count || 0) + 1,
+        };
+      });
+      markToolMessage(selectedIds.length
+        ? `已向 ${selectedExpertName} 发送反馈，并关联 ${selectedIds.length} 个画布元素。`
+        : `已向 ${selectedExpertName} 发送反馈。`);
+    } catch {
+      markToolMessage('反馈发送失败，请稍后重试。');
     }
   }
 
@@ -4260,6 +4933,13 @@ export default function CanvasWorkspace() {
     mounted.current = true;
     const handleResize = () => refreshHtmlComponents(editor);
     window.addEventListener('resize', handleResize);
+    // Ctrl + wheel（以及触控板双指捏合，也会带 ctrlKey）只缩放画布，绝不触发浏览器
+    // chrome 的页面缩放。用捕获阶段、非 passive 的监听阻止默认页面缩放；不做
+    // stopPropagation，tldraw 仍能读取 wheel delta 缩放画布。
+    const preventBrowserZoom = (event) => {
+      if (event.ctrlKey) event.preventDefault();
+    };
+    window.addEventListener('wheel', preventBrowserZoom, { passive: false, capture: true });
     const container = editor.getContainer?.();
     const isCanvasCommunicationToolEvent = (event) => {
       if (event.button !== 0) return false;
@@ -4362,6 +5042,7 @@ export default function CanvasWorkspace() {
       setHtmlComponents([]);
       setSelectedAnnotationTarget(null);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('wheel', preventBrowserZoom, { capture: true });
       document.removeEventListener('pointerdown', handleCanvasPointerDown, true);
       document.removeEventListener('pointermove', handleCanvasPointerMove, true);
       document.removeEventListener('pointerup', handleCanvasPointerUp, true);
@@ -4515,12 +5196,24 @@ export default function CanvasWorkspace() {
                   feedbackPanelItems={feedbackPanelItems}
                   feedbackPanelOpen={feedbackPanelOpen}
                   feedbackPanelPendingCount={feedbackPanelPendingCount}
+                  pendingByExpert={pendingFeedbackByExpert}
                   onSelectExpert={handleSelectDiscussionExpert}
                   onSummonDraftChange={setExpertSummonDraft}
                   onSubmitSummon={handleSubmitExpertSummon}
-                  onToggleFeedback={() => setFeedbackPanelOpen((value) => !value)}
-                  onCloseFeedback={() => setFeedbackPanelOpen(false)}
+                  onToggleFeedback={() => {
+                    setFeedbackPanelOpen((value) => {
+                      if (value) setActiveFeedbackLink(null);
+                      return !value;
+                    });
+                  }}
+                  onCloseFeedback={() => {
+                    setFeedbackPanelOpen(false);
+                    setActiveFeedbackLink(null);
+                  }}
                   onFocusFeedback={handleFocusFeedbackPanelItem}
+                  onActiveFeedbackChange={setActiveFeedbackLink}
+                  onReplyFeedback={handleReplyFeedbackPanelItem}
+                  onComposeFeedback={handleComposeFeedbackToExpert}
                 />
                 {scaffoldPickerOpen && (
                   <div
@@ -4555,10 +5248,17 @@ export default function CanvasWorkspace() {
                     </div>
                   </div>
                 )}
-                <div style={STYLES.htmlOverlayLayer}>
+                <div style={STYLES.htmlOverlayLayer} ref={overlayLayerRef}>
                   {authoredOverlays.filter((item) => item.kind === REGION_ANNOTATION_KIND || item.kind === LEGACY_COMPLETION_KIND).map((item) => (
                     <div key={`region-${item.shapeId}`} style={STYLES.regionAnnotationOverlay(item)} />
                   ))}
+                  {feedbackPanelOpen && activeFeedbackLink?.item && (
+                    <FeedbackConnectorOverlay
+                      link={activeFeedbackLink}
+                      editor={editorRef.current}
+                      layerEl={overlayLayerRef.current}
+                    />
+                  )}
                   {highlightedAuthorOverlays.map((item) => (
                     <div key={item.shapeId} style={STYLES.highlightOverlay(item)} />
                   ))}

@@ -778,6 +778,7 @@ function compileCanvasIR(input, options = {}) {
     shapeIdsByNodeId,
     now,
   });
+  addConnectorRecords({ ir, records, layout, shapeIdsByNodeId, targetPageId, now });
   removeDanglingBindings(records);
 
   const pages = pagesFromStore(records, targetPageId);
@@ -1017,6 +1018,9 @@ function buildBaseStoreRecords(previousStore = {}, layoutPolicy = DEFAULT_LAYOUT
   const records = {};
   for (const [id, record] of Object.entries(previousStore || {})) {
     if (id === 'document:document') continue;
+    // IR-managed connector bindings and image assets are rebuilt each compile,
+    // so drop the old ones instead of preserving stale copies.
+    if (String(id).startsWith('binding:vd-ir-') || String(id).startsWith('asset:vd-ir-')) continue;
     if (record?.typeName === 'page') {
       records[id] = cloneRecord(record);
       continue;
@@ -1148,6 +1152,13 @@ function addRecordsForNodes(ctx) {
       ? createFrameRecord(node, parentShapeId, index, localBounds, ctx.now)
       : createContentRecord(node, parentShapeId, index, localBounds, ctx.now);
     ctx.records[shapeId] = shape;
+    if (!shouldCreateFrame && shape.type === 'image') {
+      const asset = buildImageAsset(node, shape, ctx.now);
+      if (asset) {
+        ctx.records[asset.id] = asset;
+        shape.props.assetId = asset.id;
+      }
+    }
     ctx.shapeIdsByNodeId.set(node.id, shapeId);
     if (shouldCreateFrame) ctx.tldrawSections.push({ node, shape, bounds: absBounds });
     else ctx.tldrawNodes.push({ node, shape, bounds: absBounds });
@@ -1208,35 +1219,133 @@ function createFrameRecord(node, parentId, index, bounds, now) {
   };
 }
 
+// Each content kind maps to its native tldraw tool (see SKILL.md「画板节点语义」).
+// text = prose (no box), sticky = real note, shape = meaning-typed geo diagram
+// node, image = real image + asset. Widgets / completion / other kinds keep the
+// transparent-or-solid geo anchor. Do NOT draw a shape as a text box for words.
 function createContentRecord(node, parentId, index, bounds, now) {
-  const color = node.color || colorForNode(node);
+  switch (node.kind) {
+    case 'text':
+      return createTextRecord(node, parentId, index, bounds, now);
+    case 'sticky':
+    case 'sticky_note':
+      return createNoteRecord(node, parentId, index, bounds, now);
+    case 'shape':
+      return createGeoRecord(node, parentId, index, bounds, now);
+    case 'image':
+      return createImageRecord(node, parentId, index, bounds, now);
+    default:
+      return createGeoAnchorRecord(node, parentId, index, bounds, now);
+  }
+}
+
+function contentText(node) {
   const title = node.title || compactText(node.content || node.id, 48);
   const body = node.content || node.title || '';
-  // Widget anchors stay visually empty: the transparent iframe overlay renders
-  // the real content, so no solid fill and no body text behind it.
-  const isWidget = node.kind === 'html_component';
-  const text = isWidget ? title : (body && body !== title ? `${title}\n\n${body}` : title);
+  return body && body !== title ? `${title}\n\n${body}` : title;
+}
 
-  // Kind -> native tldraw tool (see SKILL.md「画板节点语义」). Plain text renders
-  // as a real tldraw text shape (no frame, no fill), not a bordered geo box.
-  // Do NOT draw a shape as a text box just to place words.
-  if (node.kind === 'text') {
-    return {
-      ...baseShapeRecord(node, parentId, index, bounds, now),
-      type: 'text',
-      props: {
-        color: color === 'black' ? 'black' : color,
-        size: bounds.h < 88 || bounds.w < 200 ? 's' : 'm',
-        font: 'draw',
-        textAlign: 'start',
-        w: Math.max(120, Math.round(bounds.w)),
-        richText: makeRichText(text),
-        scale: 1,
-        autoSize: false,
-      },
-    };
+// text tool: prose on the canvas — no border, no fill.
+function createTextRecord(node, parentId, index, bounds, now) {
+  const width = Math.max(120, Math.round(bounds.w || DEFAULT_NODE_SIZE.text.w));
+  return {
+    ...baseShapeRecord(node, parentId, index, bounds, now),
+    type: 'text',
+    props: {
+      color: node.color || 'black',
+      size: bounds.h < 88 || width < 200 ? 's' : 'm',
+      font: 'draw',
+      textAlign: 'start',
+      w: width,
+      richText: makeRichText(node.content || node.title || ''),
+      scale: 1,
+      autoSize: false,
+    },
+  };
+}
+
+// note tool: a real sticky note — one participant-style idea per note.
+function createNoteRecord(node, parentId, index, bounds, now) {
+  const scale = Math.max(0.75, Math.min(1.25, Math.round(bounds.w || 200) / 200));
+  return {
+    ...baseShapeRecord(node, parentId, index, bounds, now),
+    type: 'note',
+    props: {
+      color: node.color || 'yellow',
+      labelColor: 'black',
+      size: 'm',
+      font: 'draw',
+      fontSizeAdjustment: null,
+      align: 'middle',
+      verticalAlign: 'middle',
+      growY: 0,
+      url: '',
+      richText: makeRichText(node.content || node.title || ''),
+      scale,
+      textFirstEditedBy: null,
+    },
+  };
+}
+
+// geo tool: a diagram node whose shape carries meaning (rectangle = process,
+// diamond = decision, ellipse = start/end/state, cloud = fuzzy).
+function createGeoRecord(node, parentId, index, bounds, now) {
+  const color = node.color || colorForNode(node);
+  return {
+    ...baseShapeRecord(node, parentId, index, bounds, now),
+    type: 'geo',
+    props: {
+      w: bounds.w,
+      h: bounds.h,
+      geo: geoSubtypeForShapeNode(node),
+      dash: 'draw',
+      growY: 0,
+      url: '',
+      scale: 1,
+      color: color === 'black' ? 'blue' : color,
+      labelColor: 'black',
+      fill: 'solid',
+      size: bounds.w < 150 || bounds.h < 88 ? 's' : 'm',
+      font: 'draw',
+      align: 'middle',
+      verticalAlign: 'middle',
+      richText: makeRichText(contentText(node)),
+    },
+  };
+}
+
+// image tool: agent artifact output or reference material — a real image shape
+// backed by an asset. Without a resolvable source, fall back to a labeled
+// placeholder so the snapshot stays valid.
+function createImageRecord(node, parentId, index, bounds, now) {
+  if (!imageSrc(node)) {
+    return createGeoAnchorRecord(node, parentId, index, bounds, now);
   }
+  return {
+    ...baseShapeRecord(node, parentId, index, bounds, now),
+    type: 'image',
+    props: {
+      w: Math.max(1, bounds.w),
+      h: Math.max(1, bounds.h),
+      playing: true,
+      url: '',
+      assetId: null, // attached in addRecordsForNodes once the asset exists
+      crop: null,
+      flipX: false,
+      flipY: false,
+      altText: node.alt_text || node.title || '',
+    },
+  };
+}
 
+// Fallback geo anchor: widget anchors stay transparent (the iframe overlay
+// renders real content), completion requests use a cloud, everything else is a
+// solid rectangle.
+function createGeoAnchorRecord(node, parentId, index, bounds, now) {
+  const color = node.color || colorForNode(node);
+  const title = node.title || compactText(node.content || node.id, 48);
+  const isWidget = node.kind === 'html_component';
+  const text = isWidget ? title : contentText(node);
   return {
     ...baseShapeRecord(node, parentId, index, bounds, now),
     type: 'geo',
@@ -1250,12 +1359,152 @@ function createContentRecord(node, parentId, index, bounds, now) {
       scale: 1,
       color: isWidget ? 'violet' : color,
       labelColor: 'black',
-      fill: node.kind === 'text' || isWidget ? 'none' : 'solid',
+      fill: isWidget ? 'none' : 'solid',
       size: bounds.w < 150 || bounds.h < 88 ? 's' : 'm',
       font: 'draw',
       align: 'middle',
       verticalAlign: 'middle',
       richText: makeRichText(text),
+    },
+  };
+}
+
+function imageSrc(node) {
+  const candidate = node.src || node.meta?.vd_src || node.meta?.src || '';
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+}
+
+function guessImageMime(src) {
+  const value = String(src || '');
+  const dataMatch = value.match(/^data:([^;,]+)[;,]/i);
+  if (dataMatch) return dataMatch[1];
+  const ext = (value.split('?')[0].match(/\.([a-z0-9]+)$/i) || [])[1];
+  const map = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
+  return map[String(ext || '').toLowerCase()] || 'image/png';
+}
+
+function buildImageAsset(node, shape, now) {
+  const src = imageSrc(node);
+  if (!src) return null;
+  return {
+    id: assetIdFor(node.id),
+    typeName: 'asset',
+    type: 'image',
+    props: {
+      name: node.title || node.alt_text || 'image',
+      src,
+      w: Math.max(1, shape.props.w),
+      h: Math.max(1, shape.props.h),
+      mimeType: guessImageMime(src),
+      isAnimated: false,
+    },
+    meta: {
+      vd_ir_id: node.id,
+      vd_kind: 'image',
+      vd_created_at: now,
+    },
+  };
+}
+
+function connectorColor(rel) {
+  const type = String(rel.type || '').toLowerCase();
+  if (/risk|conflict|block|tension|冲突|风险|阻/.test(type)) return 'red';
+  if (/evidence|support|证据|支持/.test(type)) return 'green';
+  return 'grey';
+}
+
+function connectorArrowheads(rel) {
+  const type = String(rel.type || '').toLowerCase();
+  if (/relate|related|association|associate|compare|comparison|link|对比|关联|相关/.test(type)) {
+    return { start: 'none', end: 'none' };
+  }
+  return { start: 'none', end: 'arrow' };
+}
+
+// Compile IR relationships into real tldraw arrow shapes bound to their from/to
+// node shapes, so connectors are visible on the canvas and follow the nodes
+// they link. Endpoints fall back to node centers if a binding is dropped.
+function addConnectorRecords({ ir, records, layout, shapeIdsByNodeId, targetPageId, now }) {
+  const relationships = Array.isArray(ir.relationships) ? ir.relationships : [];
+  relationships.forEach((rel, index) => {
+    const fromId = safeId(rel.from);
+    const toId = safeId(rel.to);
+    const fromShapeId = shapeIdsByNodeId.get(fromId);
+    const toShapeId = shapeIdsByNodeId.get(toId);
+    if (!fromShapeId || !toShapeId || fromShapeId === toShapeId) return;
+    const fromBounds = layout.get(fromId)?.bounds;
+    const toBounds = layout.get(toId)?.bounds;
+    if (!fromBounds || !toBounds) return;
+
+    const fromCenter = { x: fromBounds.x + fromBounds.w / 2, y: fromBounds.y + fromBounds.h / 2 };
+    const toCenter = { x: toBounds.x + toBounds.w / 2, y: toBounds.y + toBounds.h / 2 };
+    let dx = Math.round(toCenter.x - fromCenter.x);
+    let dy = Math.round(toCenter.y - fromCenter.y);
+    if (dx === 0 && dy === 0) dx = 1; // avoid a degenerate zero-length arrow
+
+    const arrowId = connectorShapeId(rel.id);
+    const heads = connectorArrowheads(rel);
+    records[arrowId] = {
+      x: Math.round(fromCenter.x),
+      y: Math.round(fromCenter.y),
+      rotation: 0,
+      isLocked: false,
+      opacity: 1,
+      meta: {
+        vd_ir_id: rel.id,
+        vd_kind: 'connector',
+        vd_rel_type: rel.type || 'related_to',
+        vd_from_ir_id: fromId,
+        vd_to_ir_id: toId,
+        vd_created_by: 'agent',
+        vd_created_at: now,
+      },
+      id: arrowId,
+      parentId: targetPageId,
+      index: indexKeyAt(900 + index),
+      typeName: 'shape',
+      type: 'arrow',
+      props: {
+        kind: 'arc',
+        labelColor: 'black',
+        color: connectorColor(rel),
+        fill: 'none',
+        dash: 'draw',
+        size: 'm',
+        arrowheadStart: heads.start,
+        arrowheadEnd: heads.end,
+        font: 'draw',
+        start: { x: 0, y: 0 },
+        end: { x: dx, y: dy },
+        bend: 0,
+        richText: makeRichText(rel.label || ''),
+        labelPosition: 0.5,
+        scale: 1,
+        elbowMidPoint: 0.5,
+      },
+    };
+
+    const startId = connectorBindingId(rel.id, 'start');
+    const endId = connectorBindingId(rel.id, 'end');
+    records[startId] = arrowBindingRecord(startId, arrowId, fromShapeId, 'start');
+    records[endId] = arrowBindingRecord(endId, arrowId, toShapeId, 'end');
+  });
+}
+
+function arrowBindingRecord(id, arrowShapeId, targetShapeId, terminal) {
+  return {
+    id,
+    typeName: 'binding',
+    type: 'arrow',
+    fromId: arrowShapeId,
+    toId: targetShapeId,
+    meta: {},
+    props: {
+      terminal,
+      normalizedAnchor: { x: 0.5, y: 0.5 },
+      isExact: false,
+      isPrecise: false,
+      snap: 'none',
     },
   };
 }
@@ -1370,8 +1619,8 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
     y: bounds.y,
     w: bounds.w,
     h: bounds.h,
-    asset_id: null,
-    alt_text: '',
+    asset_id: shape.props?.assetId || null,
+    alt_text: shape.props?.altText || node.alt_text || '',
     authorship: { created_by: 'agent', last_edited_by: 'agent', created_at: now, updated_at: now },
     meta: shape.meta,
   }));
