@@ -2092,6 +2092,19 @@ function CanvasFeedbackPanel({
     }
   }
 
+  function handleFeedbackItemHover(item, element) {
+    if (expandedId && expandedId !== item.id) return;
+    onActiveItemChange({ item, element });
+  }
+
+  function handleFeedbackItemClick(item, element) {
+    setExpandedId((prev) => {
+      const next = prev === item.id ? null : item.id;
+      onActiveItemChange(next ? { item, element } : null);
+      return next;
+    });
+  }
+
   return (
     <div
       style={STYLES.canvasFeedbackDock(hasExperts)}
@@ -2158,8 +2171,8 @@ function CanvasFeedbackPanel({
                   key={item.id}
                   data-testid="canvas.feedback-panel.item"
                   style={STYLES.canvasFeedbackItem2(expanded, itemColor)}
-                  onMouseEnter={(event) => onActiveItemChange({ item, element: event.currentTarget })}
-                  onClick={() => setExpandedId((prev) => (prev === item.id ? null : item.id))}
+                  onMouseEnter={(event) => handleFeedbackItemHover(item, event.currentTarget)}
+                  onClick={(event) => handleFeedbackItemClick(item, event.currentTarget)}
                 >
                   <div style={STYLES.canvasFeedbackItemTop}>
                     <span style={STYLES.canvasFeedbackKind}>{item.label}</span>
