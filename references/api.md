@@ -663,8 +663,23 @@ Compact agent-facing context for CanvasIR and template workflows.
   "available_templates": [
     { "id": "business_model_canvas", "title": "商业模式画布" }
   ],
+  "available_widget_templates": [
+    { "id": "vote", "title": "投票器", "params_schema": { "type": "object" } }
+  ],
+  "widget_instances": [
+    {
+      "id": "vote-directions",
+      "shape_id": "shape:vd-ir-vote-directions",
+      "title": "哪个方向继续深化？",
+      "template_id": "vote",
+      "state": { "counts": [2, 5, 1], "total": 8, "closed": false },
+      "state_version": 8,
+      "state_actor": "user",
+      "review": { "status": "passed" }
+    }
+  ],
   "command_schema": {
-    "ops": ["insert_template", "add_node", "edit_node", "delete_node", "move_node", "locate_node"]
+    "ops": ["insert_template", "add_node", "edit_node", "delete_node", "move_node", "locate_node", "add_widget", "update_widget"]
   }
 }
 ```
@@ -735,6 +750,15 @@ Supported commands:
 - `delete_node`
 - `move_node`
 - `locate_node`
+- `add_widget`
+- `update_widget`
+
+Widget commands follow [canvas-widgets.md](canvas-widgets.md). `add_widget`
+takes `template_id` + `params` (preferred) or a freeform `html` fragment plus
+optional `state`, `input_schema`, `output_schema`, `sizing`; the response's
+`results[]` entry carries the `widget_review`. A failed review rejects only
+that command. `update_widget` takes `id` plus `state_patch` / `state` / `html`
+/ `title` / `description`.
 
 `insert_template` supports optional `scale` and `anchor` / `position` / `x` +
 `y`. Template scaling preserves the root frame, child frame proportions, and
@@ -745,6 +769,19 @@ below the current CanvasIR extents.
 CanvasIR writes replace only shapes managed by CanvasIR
 (`meta.vd_ir_id` / `shape:vd-ir-*`) and preserve user-authored canvas shapes,
 including shapes nested inside agent-created frames.
+
+### `GET /api/canvas-widget-templates`
+
+Widget template catalog for Tier 1/2 widget generation. Each entry carries
+`id`, `title`, `description`, `params_schema`, `defaults`, and `sizing`.
+
+### `POST /api/canvas-widgets/validate`
+
+Stateless dry run of the widget validation ladder. Accepts the same body as an
+`add_widget` command (minus `op`); returns the static `review`
+(`passed | needs_adjustment | failed` with `errors`, `warnings`, `repairs`)
+and the normalized spec summary. Use it before sending an uncertain Tier 3
+fragment.
 
 ### `PUT /api/canvas-workspaces/:id/snapshot`
 
@@ -804,6 +841,14 @@ records both section summaries and `contains` relationships.
   }
 }
 ```
+
+`semantic_index.annotations[]` contains user-submitted in-canvas annotations and
+purple `annotation_arrow` marks. Selection annotations are mirrored from
+`shape.meta.vd_annotations` and also create `canvas_annotation` feedback items
+with `target.kind = canvas_section | canvas_node | html_component |
+canvas_asset | canvas_selection`. Annotation arrows are native tldraw arrow
+shapes with `meta.vd_kind = "annotation_arrow"` and should be treated as
+feedback marks rather than ordinary connectors.
 
 The request may include an `event` object. Use it to record an agent command
 batch whenever the agent writes to the canvas. The server stores the event in
@@ -884,6 +929,8 @@ Recommended command operations:
 | `add_collaboration_scaffold` | Add a reusable project scaffold with structure, seed content, slots, widgets, and next actions |
 | `review_scaffold_layout` | Record the scaffold layout review result and mirror it into `semantic_index.layout_reviews` |
 | `add_completion_request` | Add a purple bounded user request and mirror it into `semantic_index.completion_requests` |
+| `add_canvas_annotation` | Submit an in-canvas annotation on selected shapes and mirror it into feedback plus `semantic_index.annotations` |
+| `add_annotation_arrow` | Draw a purple native arrow tagged as an annotation feedback mark |
 | `add_table` | Add row-column data as a first-class semantic object |
 | `add_code_block` | Add code content with language metadata |
 | `add_label` | Add a numbered or lettered callout marker |

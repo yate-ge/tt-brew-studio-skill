@@ -194,6 +194,24 @@ shape. Aspect ratio is enforced by snapping the anchor shape's height to
 When content grows (intrinsic size changes), the host resizes the anchor shape
 to `intrinsic × scale`, clamped by `sizing` min/max, keeping scale stable.
 
+### Select And Drag
+
+Widgets behave like canvas objects, FigJam-style:
+
+- **Border ring**: a thin grab ring along the widget edges (host-side strips
+  over the dotted placeholder border) selects the anchor shape on click and
+  drags it with the pointer.
+- **Background**: pointerdown on a non-interactive background area inside the
+  widget (the widget root, the fragment root's own padding/gaps, or any element
+  inside `[data-vd-drag-handle]`) also selects and drags. The bridge forwards
+  `vd:widget:drag {phase, dx, dy}` in iframe px; the host converts to page
+  units with `shape.w / intrinsic.w`, which is zoom-independent.
+- **Excluded from drag**: buttons, links, inputs, selects, textareas, labels,
+  forms, `[contenteditable]`, feedback elements, and nested text content —
+  these keep in-widget interaction and text selection/annotation.
+- A click with no movement is a plain select. Widget fragments may opt extra
+  regions into dragging with the `data-vd-drag-handle` attribute.
+
 ## 8. State Model And Data Flow
 
 State is a JSON object stored in the anchor shape's `meta.vd_widget_state`,

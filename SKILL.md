@@ -242,19 +242,32 @@ Canvas workspace behavior:
   frames should scale from their container's top-left corner; non-frame content
   should keep its local offset and size.
 - User can annotate, add material, select regions, and submit feedback in the
-  same canvas space.
+  same canvas space. Selecting any canvas element (frame, shape, image, sticky
+  note, widget, arrow, or text) opens an in-canvas annotation popover; submitted
+  annotations are stored on the target shape, mirrored into
+  `semantic_index.annotations`, and written to the project feedback pool.
 - The canvas toolbar exposes a project-private scaffold library inside the
   canvas workspace. Saved scaffolds are scoped to the current project and may
   be inserted as templates or widgets without leaving the canvas.
-- Use `html_component` canvas nodes when the board needs a localized interactive
-  widget: calculators, comparison dashboards, small charts, simulators,
-  decision pickers, or custom review controls. The tldraw shape is the
-  position/size placeholder; the actual HTML lives in `semantic_index.nodes[]`
-  and renders as a sandboxed iframe overlay inside the canvas.
-- First-version widgets use transparent-background HTML iframes plus JSON-like
-  state/schema metadata in shape `meta` and `semantic_index.widget_instances`.
-  Widget sizing should follow the internal content contract with min/max bounds;
-  avoid fixed oversized white boxes.
+- Use canvas widgets (`html_component` nodes) only when native canvas nodes
+  cannot support the needed interaction: interaction produces durable state
+  (votes, scores), presentation needs live computation, canvas content needs
+  interactive aggregation, the agent needs schema-shaped user input, or the
+  interaction form exceeds native shapes (drag-rank, sliders, card flip).
+  Otherwise prefer CanvasIR native nodes. Widgets must not swallow content
+  that belongs on the canvas as native nodes.
+- Create widgets through the `add_widget` command using the three-tier
+  strategy: first check `available_widget_templates` in agent-context (or
+  `GET /api/canvas-widget-templates`) and instantiate with `template_id` +
+  `params`; only write a freeform HTML fragment when no template fits. Freeform
+  fragments must not contain `<html>/<head>/<body>` or fixed root sizes — the
+  runtime owns transparency, intrinsic sizing, proportional scaling, and the
+  `window.vd` state bridge. Validate uncertain fragments first with
+  `POST /api/canvas-widgets/validate`.
+- Each widget instance has its own persistent JSON state in shape meta and
+  `semantic_index.widget_instances[].state`. Read it from agent-context; change
+  it with `update_widget` + `state_patch`. Widget `vd.emit` outputs arrive as
+  `widget_output` feedback. Full contract: references/canvas-widgets.md.
 - After creating or modifying a scaffold, run a layout review before presenting
   the canvas as done. The review should check overlap, section containment,
   sticky note shape types, readable sizes, viewport focus, and semantic
@@ -264,6 +277,9 @@ Canvas workspace behavior:
   prompt. The agent should fulfill content inside that region, then mark or
   remove the request after saving the result. Selection-based rewrite requests
   remain ordinary canvas annotations in the first version.
+- Users can draw purple `annotation_arrow` shapes from the canvas toolbar. These
+  arrows and selected annotation targets should use the purple annotation style
+  so they read as feedback marks rather than ordinary connectors.
 - Use tldraw frame shapes as Visual Delivery canvas sections. A section is a
   named container with a visible top-left title; shapes reparented under that
   frame are treated as the section's children in the semantic index.
@@ -328,8 +344,11 @@ Use `POST /api/canvas-workspaces/{WORKSPACE_ID}/ir/validate` for dry runs and
 `PUT /api/canvas-workspaces/{WORKSPACE_ID}/ir` to save a complete CanvasIR. Use
 `POST /api/canvas-workspaces/{WORKSPACE_ID}/commands` for incremental changes
 such as `insert_template`, `add_node`, `edit_node`, `delete_node`, `move_node`,
-and `locate_node`. Direct `PUT /snapshot` writes are a debug-only fallback for
-runtime maintenance and migration.
+`locate_node`, `add_widget`, and `update_widget`. For widgets prefer
+`add_widget` with `template_id` + `params` from `available_widget_templates`;
+read widget state from `widget_instances` and patch it with `update_widget`.
+Direct `PUT /snapshot` writes are a debug-only fallback for runtime maintenance
+and migration.
 
 For scaffold work, include `review_scaffold_layout` in the command batch and
 mirror the review into `semantic_index.layout_reviews`. If a rendered browser or
@@ -610,6 +629,7 @@ should use `/api/reports`.
 - API endpoints: [references/api.md](references/api.md)
 - Canvas workspace model: [references/canvas-workspace-model.md](references/canvas-workspace-model.md)
 - CanvasIR and templates: [references/canvas-ir.md](references/canvas-ir.md)
+- Canvas widgets contract: [references/canvas-widgets.md](references/canvas-widgets.md)
 - Generative UI guide: [references/generative-ui-guide.md](references/generative-ui-guide.md)
 - Feedback payload model: [references/feedback-schema.md](references/feedback-schema.md)
 - Design tokens: [references/design-system.md](references/design-system.md)

@@ -113,7 +113,9 @@ Content kinds:
 - `text`: structural guidance, heading, question, or analysis.
 - `shape`: diagram option, state, process, or decision.
 - `connector`: represented as a semantic relationship in v1.
-- `html_component`: embedded widget; keep local to a slot or section.
+- `html_component`: embedded interactive widget (`widget` is accepted as an
+  alias); keep local to a slot or section. Create through `add_widget`, not by
+  hand-writing node meta. Contract: [canvas-widgets.md](canvas-widgets.md).
 
 ## Grid Layout
 
@@ -184,6 +186,8 @@ Supported v1 commands:
 - `delete_node`
 - `move_node`
 - `locate_node`
+- `add_widget` (widget from `template_id` + `params`, or freeform `html`)
+- `update_widget` (`state_patch` / `state` / `html` / `title` / `description`)
 
 `insert_template` accepts optional `scale` and `anchor` / `position` / `x` +
 `y`. Scaling keeps the template root frame and child frames in proportion while
@@ -215,6 +219,32 @@ Examples:
   "id": "cost-risk-2"
 }
 ```
+
+```json
+{
+  "op": "add_widget",
+  "id": "vote-directions",
+  "parent": "decision_zone",
+  "template_id": "vote",
+  "params": {
+    "question": "哪个视觉方向继续深化？",
+    "options": ["方向 A", "方向 B", "方向 C"]
+  }
+}
+```
+
+```json
+{
+  "op": "update_widget",
+  "id": "vote-directions",
+  "state_patch": { "closed": true }
+}
+```
+
+Widget commands run the static validation ladder from
+[canvas-widgets.md](canvas-widgets.md); a failed review rejects only that
+command. Live widget state in the snapshot is hydrated back into the IR before
+commands apply, so recompiles never wipe user interaction data.
 
 ## Validation
 

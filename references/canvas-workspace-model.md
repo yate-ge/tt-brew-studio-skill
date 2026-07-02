@@ -157,11 +157,13 @@ Scaffolds live under `.visual-delivery/data/scaffolds/` and are scoped to the
 current project in the MVP. The canvas UI exposes them from the in-canvas
 toolbar's Scaffold Library.
 
-Widget scaffolds use `html_component` with transparent-background iframe HTML
-and JSON-like `state`, `input_schema`, `output_schema`, and `sizing` metadata.
-The first implementation uses HTML iframe + state metadata rather than a full
-widget SDK. Widget sizing should follow intrinsic content with min/max bounds,
-and widget HTML should avoid fixed oversized opaque backgrounds.
+Widget scaffolds use `html_component` nodes that follow the canvas widget
+contract in [canvas-widgets.md](canvas-widgets.md): the agent supplies a
+template instantiation (`template_id` + `params`) or a bare HTML fragment plus
+`state`, `input_schema`, `output_schema`, and `sizing`; the runtime owns
+transparent background, intrinsic sizing, proportional scaling, the
+`window.vd` state bridge, and the validation/repair ladder. Widget instances
+persist their state in shape meta and `semantic_index.widget_instances`.
 
 ## Completion Requests
 
@@ -182,6 +184,24 @@ canvas toolbar. It is a bounded instruction to the agent:
 
 The MVP supports rectangle-based completion requests only. Selection-based
 rewrite or reconstruction requests are represented as ordinary annotations.
+
+## Canvas Annotations
+
+Annotations are canvas-native feedback marks, not an external sidebar tool. When
+the user selects a frame, shape, image, sticky note, widget, arrow, text, or a
+multi-selection, the canvas displays a local annotation popover near the
+selection. Submitting the popover:
+
+- writes a `canvas_annotation` item into the workspace feedback pool,
+- appends the annotation to each target shape's `meta.vd_annotations`,
+- mirrors the entry into `semantic_index.annotations`,
+- records whether the user set the submit/track flag.
+
+The canvas toolbar also exposes an `annotation_arrow` tool. It uses tldraw's
+native arrow behavior but stamps new arrows with `meta.vd_kind =
+"annotation_arrow"` and purple annotation styling. Annotation arrows are stored
+in the semantic index as annotations so agents can treat them as feedback marks,
+not ordinary diagram connectors.
 
 ## Scaffold Layout Review
 
@@ -345,8 +365,24 @@ fields: `text`, `shape`, `bounds`. Optional fields: `section_id`, `color`,
 `to_shape_id`. Optional fields: `label`, `direction`, `line_type`,
 `relationship_type`. Mirror the relation into `semantic_index.relationships`.
 
+`add_widget`
+: Add an interactive canvas widget. Preferred form: `template_id` + `params`
+validated against the widget template catalog. Freeform form: `html` fragment
+plus optional `state`, `input_schema`, `output_schema`, `sizing`. The server
+runs the static validation ladder and rejects failed specs with a
+`widget_review`. See [canvas-widgets.md](canvas-widgets.md).
+
+`update_widget`
+: Update an existing widget instance by CanvasIR node id. `state_patch`
+shallow-merges top-level state keys (bumps `vd_state_version`, actor `agent`);
+`state` replaces the whole state; `html` replaces the fragment after
+validation (bumps `vd_widget_version`, keeps previous html for rollback);
+`title` / `description` update display text. Widget state survives html
+updates and later CanvasIR recompiles (runtime state is hydrated from the
+snapshot before commands apply).
+
 `add_html_component`
-: Add an interactive HTML widget to the canvas. Required fields: `html`,
+: Legacy alias of the freeform `add_widget` path. Required fields: `html`,
 `bounds`. Optional fields: `title`, `description`, `section_id`,
 `component_id`. Create a tldraw placeholder shape with
 `meta.vd_kind = "html_component"` and mirror the same `html` into
