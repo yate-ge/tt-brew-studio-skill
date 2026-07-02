@@ -2841,8 +2841,9 @@ export default function CanvasWorkspace() {
   async function handleInitializeWorkspace() {
     const created = await createCanvasWorkspace({
       title: '项目画布',
-      purpose: '承载本项目的 tldraw 多页面视觉协作。',
-      tags: ['canvas-pages'],
+      purpose: '承载本项目的四阶段设计导师协作。',
+      tags: ['design-stage-canvas'],
+      context: { vd_project_document: true, vd_initialize_stage_canvas: true },
       make_active: true,
     });
     snapshotRevRef.current = created.snapshot_rev || 0;

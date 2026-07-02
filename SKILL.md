@@ -218,7 +218,7 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
         "op": "add_node",
         "id": "idea-1",
         "kind": "sticky",
-        "parent": "discussion-section",
+        "stage": "discover",
         "content": "One user-editable idea"
       }
     ]

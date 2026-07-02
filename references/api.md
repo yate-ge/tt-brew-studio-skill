@@ -176,7 +176,7 @@ or status. The `id` and resource `type` are preserved by the server.
 {
   "title": "协作画布",
   "purpose": "视觉协作、标注和设计决策",
-  "tags": ["design", "canvas-pages"],
+  "tags": ["design", "design-stage-canvas"],
   "make_active": true
 }
 ```

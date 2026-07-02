@@ -1075,7 +1075,7 @@ function setupRoutes(app, dataDir) {
       type: scaffold.type === 'widget' ? 'widget' : 'template',
       scope: 'project',
       title: scaffold.title || '未命名脚手架',
-      stage: scaffold.stage || 'exploration',
+      stage: scaffold.stage || 'discover',
       description: scaffold.description || '',
       agent_note: scaffold.agent_note || '',
       structure: Array.isArray(scaffold.structure) ? scaffold.structure : [],
