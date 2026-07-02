@@ -569,6 +569,9 @@ function normalizeIRNode(node = {}, index = 0) {
     grid: node.grid ? normalizeGrid(node.grid) : null,
     content: typeof node.content === 'string' ? node.content : (typeof node.text === 'string' ? node.text : ''),
     color: node.color || null,
+    shape_type: typeof node.shape_type === 'string' ? node.shape_type : (typeof node.geo === 'string' ? node.geo : null),
+    src: typeof node.src === 'string' ? node.src : (typeof node.image_src === 'string' ? node.image_src : null),
+    alt_text: typeof node.alt_text === 'string' ? node.alt_text : (typeof node.alt === 'string' ? node.alt : ''),
     items: Array.isArray(node.items) ? node.items : [],
     meta: node.meta && typeof node.meta === 'object' ? node.meta : {},
   };
