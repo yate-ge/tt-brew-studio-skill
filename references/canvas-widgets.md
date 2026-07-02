@@ -1,71 +1,73 @@
-# Canvas Widgets
+# 交互组件（Canvas Widgets）
 
-Canvas widgets are interactive HTML components anchored on the canvas workspace.
-This document is the widget contract: what a widget is, when an agent should
-create one, what the agent writes, what the runtime guarantees, and how widget
-data flows between user, canvas, and agent.
+交互组件（Widget）是锚定在画板上的状态化微型设计工具。它不同于方法模板：方法模板
+（CanvasIR Template）负责承载静态设计方法脚手架；Widget 负责承载原生画板节点无法完成的
+动态设计动作，例如输入、提交请求、投票、评分、排序、筛选、实时计算、结果可视化或
+结构化输出。
 
-Design goal: an agent that can generate plain HTML fragments can generate
-widgets with the same reliability. Every widget-specific concern (transparent
-background, intrinsic sizing, proportional scaling, state persistence) is owned
-by the runtime, not by the generated HTML.
+本文是 Widget 合约：什么是 Widget，何时应该创建 Widget，agent 写什么，运行时保证什么，
+以及 Widget 数据如何在学生、画板和 agent 之间流动。本文和内置模板只提供规则与示例；
+具体 Widget 由智能体根据当前项目、阶段、画板证据和用户目标自行决定、生成或组合。
 
-## 1. What A Widget Is (And Is Not)
+设计目标：只要 agent 能生成普通 HTML fragment，就能可靠生成 Widget。透明背景、intrinsic
+sizing、等比例缩放、状态持久化等 Widget 专属问题都由运行时负责，而不是由生成 HTML 自己
+解决。
 
-A widget is a canvas-native interactive object:
+## 1. Widget 是什么，不是什么
 
-- rendered as a sandboxed transparent iframe anchored to a tldraw placeholder
-  shape (`meta.vd_kind = "html_component"`)
-- scaled proportionally like an image, never reflowed, when the canvas zooms or
-  the user resizes the anchor shape
-- owner of a per-instance JSON `state` that persists in the snapshot and is
-  readable/writable by both the user (through interaction) and the agent
-  (through commands)
+Widget 是画板原生的交互对象，也可以表现为一个微型 App：
 
-Boundary rule (borrowed from FigJam, which forbids nesting stickies/shapes/
-connectors inside widgets): a widget must not swallow content that belongs on
-the canvas as native nodes. A word-cloud widget may *read* sticky notes; the
-brainstorm itself stays as stickies. When a widget produces a durable artifact
-(a chosen palette, a final ranking), prefer materializing the result as native
-canvas nodes and keep the widget disposable.
+- 渲染为沙箱化透明 iframe，并锚定在一个 tldraw placeholder shape 上
+  （`meta.vd_kind = "html_component"`）。
+- 当画布缩放或用户调整锚点 shape 尺寸时，像图片一样等比例缩放，不重新排版。
+- 拥有实例级 JSON `state`；state 持久化在 snapshot 中，学生可通过交互写入，
+  agent 可通过命令读取和更新。
+- 可以通过 `vd.emit` 提交结构化请求或结果。Widget 不直接调用智能体；智能体在下一轮读取
+  widget output / feedback / state 后处理请求，并用 `update_widget` 回写结果，或把稳定结果
+  物化为画板 artifact。
 
-## 2. When To Create A Widget (Trigger Rubric)
+边界规则（借鉴 FigJam：不允许把 sticky / shape / connector 嵌进 widget）：Widget 不应该吞掉
+本该作为画板原生节点存在的内容。词云 Widget 可以读取 sticky notes；但头脑风暴本身仍应作为
+stickies 留在画板上。当 Widget 产出持久 artifact（如最终调色板、最终排序）时，优先把结果
+物化为画板原生节点，让 Widget 保持可丢弃。
 
-Create a widget only when at least one condition holds:
+## 2. 什么时候创建 Widget（触发 Rubric）
 
-1. **Interaction produces state** that should live on the canvas (votes,
-   choices, scores).
-2. **Presentation needs live computation** (weighted matrix, simulator,
-   calculator).
-3. **Canvas content needs interactive aggregation** (word cloud or chart over
-   stickies with hover/filter). Static charts may instead be drawn as native
-   shapes.
-4. **The agent needs machine-readable input** conforming to a schema (rubric
-   scoring, structured poll).
-5. **The interaction form exceeds native canvas ability** (drag-to-rank, card
-   flip, slider, before/after compare).
+只有至少满足以下条件之一时才创建 Widget：
 
-Otherwise use CanvasIR native nodes. Static statements, freely editable
-material, and anything users should move/connect/edit belongs to native nodes.
+1. **交互会产生需要留在画板上的状态**，例如投票、选择、评分。
+2. **呈现依赖实时计算**，例如加权矩阵、参数模拟器、计算器。
+3. **画板内容需要交互式聚合**，例如对 sticky notes 生成可 hover / filter 的词云或图表。
+   静态图表应优先用原生 shape 绘制。
+4. **agent 需要结构化、机器可读的输入**，例如 rubric 评分、结构化投票。
+5. **交互形态超出原生画板能力**，例如拖拽排序、翻卡、滑杆、前后对比。
+6. **用户需要向智能体提交一个带结构的数据请求**，例如 persona 生成、竞品调研、海报方向
+   生成、主题分析或设计检查；Widget 负责收集输入和保存请求状态，智能体负责异步处理。
 
-## 3. Three-Tier Generation Strategy
+否则使用 CanvasIR 原生节点或方法模板。静态说明、可自由编辑的材料，以及学生应该移动、连接、
+编辑的内容，都属于原生画板节点。
 
-Stability comes from shrinking the generation surface, in order of preference:
+## 3. 三层生成策略
 
-- **Tier 1 — parameterized template**: the agent sends only
-  `{ "template_id": "...", "params": {...} }`. Params are validated against the
-  template's `params_schema`; HTML and interaction logic come from the curated
-  template. Always check `GET /api/canvas-widget-templates` (also included in
-  agent-context) before generating HTML.
-- **Tier 2 — template + overrides**: a template instance with agent-supplied
-  copy, options, labels, or seeded state. Same `params` path; templates accept
-  content-bearing params.
-- **Tier 3 — freeform fragment**: only for interaction forms no template
-  covers. The agent writes an HTML *fragment* (no `<html>`, `<head>`, `<body>`)
-  plus state/schema/sizing metadata, and it passes the validation pipeline
-  before mounting.
+稳定性来自缩小生成面，优先级如下：
 
-## 4. Widget Spec (What The Agent Writes)
+- **Tier 1 — 参数化交互组件模板**：agent 只发送
+  `{ "template_id": "...", "params": {...} }`。`params` 按该交互组件模板的
+  `params_schema` 校验；HTML 与交互逻辑来自内置模板。生成自由 HTML 前，必须先检查
+  `GET /api/canvas-widget-templates`（也会出现在 agent-context 中）。
+- **Tier 2 — 交互组件模板 + 内容覆盖**：仍走 `template_id` + `params`，但由 agent
+  提供文案、选项、标签或初始状态。交互组件模板可以接收带内容的参数。
+- **Tier 3 — 自由 HTML fragment**：只用于现有交互组件模板无法覆盖的形态。agent 写
+  HTML *fragment*（不能包含 `<html>`、`<head>`、`<body>`），并提供
+  state / schema / sizing metadata；挂载前必须通过校验管线。
+
+注意：这里的“交互组件模板”只是 Widget 的参数化外壳，不是方法模板。方法模板只指
+CanvasIR Template。
+
+示例不是限制。`vote`、`rubric`、`word_cloud`、`bar_chart`、`timer` 等内置模板是通用
+交互原语；项目需要更具体的工具时，智能体应生成自由 HTML fragment，并遵守本合约。
+
+## 4. Widget 规格（agent 写什么）
 
 ```json
 {
@@ -80,7 +82,7 @@ Stability comes from shrinking the generation surface, in order of preference:
 }
 ```
 
-Tier 3 form:
+Tier 3 形式：
 
 ```json
 {
@@ -102,16 +104,16 @@ Tier 3 form:
 }
 ```
 
-Canonical widget spec fields (all optional except one of `template_id`/`html`):
+标准 Widget 字段如下。除 `template_id` / `html` 必须二选一外，其余字段可选：
 
-| Field | Meaning |
+| 字段 | 含义 |
 | --- | --- |
-| `template_id` + `params` | Tier 1/2 instantiation |
-| `html` | Tier 3 fragment; forbidden to contain `<html>/<head>/<body>` |
-| `title`, `description` | Display + semantic index text |
-| `state` | Initial per-instance JSON state |
-| `input_schema` | Shape of state the agent may patch (documentation-level) |
-| `output_schema` | Shape of `vd.emit` payloads; runtime validates emits |
+| `template_id` + `params` | Tier 1/2 的交互组件模板实例化 |
+| `html` | Tier 3 的 HTML fragment；不能包含 `<html>/<head>/<body>` |
+| `title`, `description` | 展示文字与 semantic index 文本 |
+| `state` | 实例级初始 JSON state |
+| `input_schema` | agent 可 patch 的 state 结构说明（文档级） |
+| `output_schema` | `vd.emit` payload 结构；运行时会校验 emit |
 | `sizing` | `{ mode, min_width, max_width, min_height, max_height }` |
 
 `update_widget` patches an existing instance:
@@ -121,12 +123,11 @@ Canonical widget spec fields (all optional except one of `template_id`/`html`):
 { "op": "update_widget", "id": "pricing-simulator", "html": "<section>v2...</section>" }
 ```
 
-`state_patch` shallow-merges top-level keys. Replacing `html` bumps
-`widget_version` and preserves `state` (state and HTML are stored separately by
-design). Legacy `add_html_component` remains as an alias for the raw Tier 3
-path.
+`state_patch` 只 shallow-merge 顶层 keys。替换 `html` 会递增 `widget_version`，
+但保留 `state`（state 与 HTML 按设计分开存储）。旧的 `add_html_component` 仍作为
+原始 Tier 3 路径的 alias 保留。
 
-## 5. Runtime Assembly Contract (What The Agent Never Writes)
+## 5. 运行时组装合约（agent 不需要写什么）
 
 At render time the runtime assembles the final iframe document:
 
@@ -139,15 +140,14 @@ final document =
 + bridge script    window.vd API, ResizeObserver, feedback, error trap
 ```
 
-Consequences the agent can rely on and must not re-implement:
+agent 可以依赖以下保证，不要在 HTML 里重复实现：
 
-- background is transparent; do not paint `html/body`, style your own card
-- intrinsic size is measured automatically from `#vd-widget-root`; never set
-  fixed pixel width/height on the root element
-- scaling is external; widget HTML renders at intrinsic size, always
-- `window.vd` is always present; scripts may assume it after `DOMContentLoaded`
+- 背景透明；不要给 `html/body` 涂底色，只样式化自己的组件卡片。
+- intrinsic size 会自动从 `#vd-widget-root` 测量；不要给根元素写固定像素宽高。
+- 缩放由外部承担；Widget HTML 始终按 intrinsic size 渲染。
+- `window.vd` 始终存在；脚本可在 `DOMContentLoaded` 后使用它。
 
-## 6. `window.vd` API And Message Protocol
+## 6. `window.vd` API 与消息协议
 
 ```js
 vd.instance                 // { component_id, shape_id, workspace_id, title }
@@ -174,50 +174,51 @@ vd:widget:state        { state, actor }            external (agent) state update
 vd:tokens-update       { css }                     design token refresh
 ```
 
-Feedback attributes (`data-vd-feedback-action`) keep working inside widgets and
-route to the existing feedback pipeline.
+反馈属性（`data-vd-feedback-action`）在 Widget 内仍然有效，并路由到既有 feedback
+管线。
 
-## 7. Sizing And Scaling Model
+## 7. 尺寸与缩放模型
 
-Every widget instance tracks:
+每个 Widget 实例都会记录：
 
-- `intrinsic` — natural content size in CSS px, reported by the bridge and
-  stored in `meta.vd_intrinsic_size`
-- `scale` — `anchor_shape.w / intrinsic.w`
+- `intrinsic`：内容自然尺寸，单位为 CSS px，由 bridge 上报并存入
+  `meta.vd_intrinsic_size`。
+- `scale`：`anchor_shape.w / intrinsic.w`。
 
-Rendering: the iframe is laid out at `intrinsic` size and transformed with
-`scale × canvas_zoom`, origin top-left. Content therefore scales like an image
-in both cases required by the spec: canvas zoom and user resize of the anchor
-shape. Aspect ratio is enforced by snapping the anchor shape's height to
-`w × intrinsic.h / intrinsic.w` after edits settle.
+渲染时，iframe 以 `intrinsic` 尺寸布局，并用 `scale × canvas_zoom` 做 transform，
+origin 为左上角。因此无论画布缩放，还是用户调整锚点 shape，内容都像图片一样等比例缩放。
+编辑结束后，锚点 shape 的高度会吸附到 `w × intrinsic.h / intrinsic.w`，以维持比例。
 
-When content grows (intrinsic size changes), the host resizes the anchor shape
-to `intrinsic × scale`, clamped by `sizing` min/max, keeping scale stable.
+当内容变大（intrinsic size 改变）时，host 会把锚点 shape 调整为 `intrinsic × scale`，
+并受 `sizing` min/max 限制，同时保持 scale 稳定。
 
-### Select And Drag
+### 选择与拖拽
 
-Widgets behave like canvas objects, FigJam-style:
+Widget 的行为应像画板对象，接近 FigJam 的使用方式：
 
-- **Border ring**: a thin grab ring along the widget edges (host-side strips
-  over the dotted placeholder border) selects the anchor shape on click and
-  drags it with the pointer.
-- **Background**: pointerdown on a non-interactive background area inside the
-  widget (the widget root, the fragment root's own padding/gaps, or any element
-  inside `[data-vd-drag-handle]`) also selects and drags. The bridge forwards
-  `vd:widget:drag {phase, dx, dy}` in iframe px; the host converts to page
-  units with `shape.w / intrinsic.w`, which is zoom-independent.
-- **Excluded from drag**: buttons, links, inputs, selects, textareas, labels,
-  forms, `[contenteditable]`, feedback elements, and nested text content —
-  these keep in-widget interaction and text selection/annotation.
-- A click with no movement is a plain select. Widget fragments may opt extra
-  regions into dragging with the `data-vd-drag-handle` attribute.
+- **边缘环**：Widget 边缘有一圈很细的可抓取区域（host 侧覆盖在虚线 placeholder
+  边框上），点击选择锚点 shape，拖动移动它。
+- **背景区**：在 Widget 内部非交互背景区域 pointerdown（Widget root、fragment root
+  自身的 padding / gaps，或 `[data-vd-drag-handle]` 内元素）也会选择并拖拽。bridge
+  转发 iframe px 单位的 `vd:widget:drag {phase, dx, dy}`；host 用
+  `shape.w / intrinsic.w` 换算为 page units，与缩放无关。
+- **排除拖拽的区域**：button、link、input、select、textarea、label、form、
+  `[contenteditable]`、feedback 元素和嵌套文本内容。这些区域保留组件内交互、文本选择
+  与标注能力。
+- 没有移动的 click 是普通选择。Widget fragment 可用 `data-vd-drag-handle` 把额外区域
+  加入可拖拽范围。
 
-## 8. State Model And Data Flow
+## 8. 状态模型与数据流
 
-State is a JSON object stored in the anchor shape's `meta.vd_widget_state`,
-mirrored into `semantic_index.widget_instances[]`. Merge semantics: shallow
-merge of top-level keys, last-write-wins per key, with `vd_state_version`
-(monotonic counter) and `vd_state_actor` (`user` | `agent`) stamps.
+State 是一个 JSON object，存储在锚点 shape 的 `meta.vd_widget_state` 中，并镜像到
+`semantic_index.widget_instances[]`。合并语义：顶层 key shallow merge；每个 key
+last-write-wins；同时写入 `vd_state_version`（单调递增计数）和 `vd_state_actor`
+（`user` | `agent`）。
+
+`vd_state_version` / `vd_widget_version` 在两个写入方向都生效：CanvasIR 重新编译前会
+先从 snapshot hydrate 更新的 state，再生成 shapes；客户端 full-snapshot PUT 时会保留
+服务器端更新的 widget state / html（见 canvas-workspace-model.md 的 Snapshot Write
+Protection）。因此，过期客户端既不能删除 agent 写入的 Widget，也不能回滚它的 state。
 
 ```text
 user loop:   interaction -> vd.state.set(patch) -> host merges into shape meta
@@ -225,7 +226,7 @@ user loop:   interaction -> vd.state.set(patch) -> host merges into shape meta
              -> agent reads via agent-context next turn
 
 agent loop:  update_widget command -> server merges state in IR + snapshot
-             -> workspace update event -> host pushes vd:widget:state into
+             -> project canvas update event -> host pushes vd:widget:state into
              live iframes -> vd.state.subscribe fires
 
 output loop: vd.emit(type, payload) -> validated vs output_schema ->
@@ -233,38 +234,34 @@ output loop: vd.emit(type, payload) -> validated vs output_schema ->
              agent handles it like any structured feedback
 ```
 
-Routing rule: continuous state changes go to the snapshot only; explicit
-`vd.emit` events go to the feedback pool. This keeps the feedback pool free of
-interaction noise.
+路由规则：连续状态变化只进入 snapshot；显式 `vd.emit` 事件进入 feedback pool。这样可以
+避免 feedback pool 被交互噪音淹没。
 
-## 9. Validation And Repair Ladder
+## 9. 校验与修复阶梯
 
-Every widget passes validation before mounting. The same pipeline runs in
-`add_widget` / `update_widget`, in `POST /api/canvas-widgets/validate` (dry
-run), and the mounted result is checked in the browser.
+每个 Widget 挂载前都要通过校验。同一套管线用于 `add_widget` / `update_widget`、
+`POST /api/canvas-widgets/validate`（dry run），并在浏览器中检查挂载结果。
 
-Static checks (server, before accept):
+静态检查（服务器端，接受前）：
 
-- fragment parses; no `<html>/<head>/<body>` (auto-repair: unwrap body content)
-- no opaque background painted on the document root
-- inline `<script>` contents pass a syntax check (`new Function`)
-- no external script/frame sources; external images allowed with warning
-- `sizing` clamped to global bounds (min 160×80, max 1200×900); html size cap
+- fragment 可解析；不能包含 `<html>/<head>/<body>`（自动修复：unwrap body content）。
+- document root 不能绘制不透明背景。
+- inline `<script>` 内容必须通过语法检查（`new Function`）。
+- 不允许外部 script / frame sources；外部图片允许但给 warning。
+- `sizing` 受全局边界限制（min 160×80，max 1200×900）；HTML 有体积上限。
 
-Mount checks (browser, after render — recorded as the instance's
-`widget_review`):
+挂载检查（浏览器端，渲染后；记录为实例的 `widget_review`）：
 
-- iframe mounted and bridge sent `vd:widget:ready`
-- intrinsic size reported within bounds and non-degenerate
-- no `vd:widget:error` during the first seconds
+- iframe 已挂载，bridge 已发送 `vd:widget:ready`。
+- intrinsic size 已上报，在边界内且非退化。
+- 前几秒没有 `vd:widget:error`。
 
-Repair ladder on failure:
+失败时的修复阶梯：
 
-1. auto-repair (unwrap wrappers, strip forbidden styles, clamp sizing)
-2. reject with structured errors so the agent can regenerate once
-3. degrade to a static card (title + description + generic feedback buttons) —
-   the widget falls back to exactly the plain-HTML capability floor, never
-   blocking the collaboration
+1. 自动修复（unwrap wrappers、移除禁用样式、clamp sizing）。
+2. 带结构化错误拒绝，让 agent 可重新生成一次。
+3. 降级为静态卡片（title + description + 通用 feedback buttons）：Widget 回落到
+   plain-HTML 能力底线，不阻塞协作。
 
 `widget_review` record (stored in `meta.vd_widget_review`, surfaced through
 `semantic_index.widget_instances[].review`):
@@ -281,43 +278,41 @@ Repair ladder on failure:
 }
 ```
 
-## 10. Commands And Endpoints
+## 10. 命令与端点
 
 ```text
-GET  /api/canvas-widget-templates                 template catalog + params_schema
-POST /api/canvas-widgets/validate                 dry-run a widget spec
+GET  /api/canvas-widget-templates                 交互组件模板目录 + params_schema
+POST /api/canvas-widgets/validate                 dry-run 一个 Widget 规格
 POST /api/canvas-workspaces/{ID}/commands         add_widget / update_widget ops
-GET  /api/canvas-workspaces/{ID}/agent-context    includes widget_templates and
-                                                  widget_instances with state
+GET  /api/canvas-workspaces/{ID}/agent-context    包含 widget_templates 和带 state 的
+                                                  widget_instances
 ```
 
-## 11. Built-In Template Catalog (Tier 1)
+## 11. 内置交互组件模板目录（Tier 1）
 
-| id | Purpose | Key params |
+| id | 用途 | 关键 params |
 | --- | --- | --- |
-| `vote` | Dot-vote options, live tally | `question`, `options[]`, `max_votes_per_user` |
-| `alignment_scale` | 1–5 agreement/confidence scale with average | `statement`, `min_label`, `max_label` |
-| `rubric` | Criteria × 1–5 scoring, submit emits scores | `title`, `criteria[]` |
-| `bar_chart` | Compare counts/values, hover highlight | `title`, `data[{label,value}]`, `unit` |
-| `word_cloud` | Weighted terms, click emits term | `title`, `words[{text,weight}]` |
-| `timer` | Workshop countdown, start/pause/reset | `label`, `duration_sec` |
+| `vote` | 点投选项，实时计票 | `question`, `options[]`, `max_votes_per_user` |
+| `alignment_scale` | 1–5 同意度 / 信心量表，显示平均值 | `statement`, `min_label`, `max_label` |
+| `rubric` | criteria × 1–5 评分，提交时 emit scores | `title`, `criteria[]` |
+| `bar_chart` | 比较数量 / 数值，支持 hover highlight | `title`, `data[{label,value}]`, `unit` |
+| `word_cloud` | 加权词云，点击 emit term | `title`, `words[{text,weight}]` |
+| `timer` | 工作坊倒计时，支持 start / pause / reset | `label`, `duration_sec` |
 
-Templates are seedable: content-bearing params (`options`, `criteria`, `data`,
-`words`) accept agent-analyzed canvas content.
+交互组件模板可以被 seed：带内容的 params（`options`、`criteria`、`data`、`words`）可以
+接收 agent 从画板内容中分析出的结果。
 
-## 12. Security And Versioning
+## 12. 安全与版本
 
-- Widget iframes run sandboxed **without** `allow-same-origin`: opaque origin,
-  no access to the host DOM or storage; the postMessage bridge is the only
-  channel.
-- No external scripts. Network access is not part of the v1 contract.
-- `vd_widget_version` increments on html replacement; the previous html is kept
-  in `vd_html_prev` for one-step rollback. State survives html updates.
+- Widget iframe 以 sandbox 运行，且**不带** `allow-same-origin`：opaque origin，
+  不能访问 host DOM 或 storage；postMessage bridge 是唯一通道。
+- 不允许外部 scripts。网络访问不属于 v1 合约。
+- 替换 HTML 时 `vd_widget_version` 递增；前一个 HTML 保存在 `vd_html_prev` 中，支持
+  单步回滚。State 会跨 HTML 更新保留。
 
-## 13. Renderer Note
+## 13. 渲染器说明
 
-The v1 renderer is a viewport overlay anchored to a placeholder shape. The
-contract above (spec, vd API, sizing/scaling, state) is renderer-independent; a
-future migration to a custom tldraw shape (`HTMLContainer`) changes only the
-anchoring/rendering internals and is the planned path for native selection,
-z-order, and export behavior.
+v1 renderer 是锚定在 placeholder shape 上的 viewport overlay。上面的合约（spec、
+vd API、尺寸 / 缩放、state）与具体渲染器无关；未来迁移到自定义 tldraw shape
+（`HTMLContainer`）时，只改变锚定 / 渲染内部实现。这是获得原生选择、z-order 和导出行为的
+计划路径。

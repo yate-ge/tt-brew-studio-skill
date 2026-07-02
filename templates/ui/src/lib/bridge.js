@@ -40,8 +40,8 @@ export function getBridgeScript(lang) {
   const isZh = lang === 'zh';
   const i18n = {
     selectedText: isZh ? '选中文本' : 'Selected Text',
-    notePlaceholder: isZh ? '为选中内容添加反馈...' : 'Add feedback for this selection...',
-    addToSidebar: isZh ? '加入侧边栏' : 'Add to sidebar',
+    notePlaceholder: isZh ? '添加反馈...' : 'Add feedback...',
+    submitAnnotation: isZh ? '提交标注' : 'Submit annotation',
     close: isZh ? '关闭' : 'Close',
   };
 
@@ -148,7 +148,7 @@ export function getBridgeScript(lang) {
       '<div id="vd-sel-text" style="font-size:13px;line-height:1.5;max-height:56px;overflow:auto;margin-bottom:8px;color:#1e293b"></div>',
       '<textarea id="vd-sel-note" rows="2" placeholder="' + I18N.notePlaceholder + '" style="width:100%;resize:vertical;border:1px solid #e2e8f0;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box"></textarea>',
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">',
-        '<button id="vd-sel-submit" style="border:none;border-radius:8px;padding:6px 10px;background:var(--vds-colors-primary,#3b82f6);color:#fff;font-size:13px;cursor:pointer;font-family:inherit">' + I18N.addToSidebar + '</button>',
+        '<button id="vd-sel-submit" style="border:none;border-radius:8px;padding:6px 10px;background:var(--vds-colors-primary,#3b82f6);color:#fff;font-size:13px;cursor:pointer;font-family:inherit">' + I18N.submitAnnotation + '</button>',
         '<button id="vd-sel-cancel" style="border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;background:#fff;color:#64748b;font-size:13px;cursor:pointer;font-family:inherit">' + I18N.close + '</button>',
       '</div>',
     ].join('');

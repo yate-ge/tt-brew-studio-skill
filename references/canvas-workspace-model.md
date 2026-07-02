@@ -1,54 +1,16 @@
-# Canvas Workspace Model
+# Project Canvas Document Model
 
-Visual Delivery now uses two first-class delivery surfaces:
+Visual Delivery has one product surface:
 
-- `document_report`: an interactive delivery document.
-- `canvas_workspace`: a persistent project collaboration canvas.
+- `canvas_workspace`: a persistent project canvas document container.
 
-`table` and `slides` are not first-class delivery surfaces. Tables may appear
-inside a document report. Slide-like sequencing may be represented as document
-sections.
+默认产品路径是一个项目画板文档中的一个工作 Page。所有设计阶段、方法模板、专家批注、
+学生回应和交互组件默认都写入这个 Page。tldraw Pages 作为底层兼容能力保留，但不是默认
+协作模型；agent 不应主动创建、切换或引导用户使用多个 Pages，除非用户明确要求。
 
-## Document Report
+## Project Canvas Document
 
-Reports are stored under:
-
-```text
-.visual-delivery/data/reports/{REPORT_ID}/report.json
-.visual-delivery/data/reports/{REPORT_ID}/feedback.json
-.visual-delivery/data/reports/{REPORT_ID}/drafts.json
-```
-
-Core shape:
-
-```json
-{
-  "id": "r_...",
-  "type": "document_report",
-  "title": "交付汇报",
-  "structure": "standard-report|complex-review",
-  "presentation": "document_report",
-  "content": {
-    "type": "document_report",
-    "surface_type": "document_report",
-    "sections": [
-      {
-        "id": "sec-...",
-        "title": "核心交付内容",
-        "presentation": "document_report",
-        "artifact": {
-          "type": "document",
-          "body": "# Markdown document"
-        }
-      }
-    ]
-  }
-}
-```
-
-## Canvas Workspace
-
-Canvas workspaces are stored under:
+Project canvas documents are stored under:
 
 ```text
 .visual-delivery/data/canvas-workspaces/index.json
@@ -67,17 +29,22 @@ Core shape:
   "id": "cw_...",
   "type": "canvas_workspace",
   "title": "协作画布",
-  "purpose": "moodboard、图片标注、结构图和设计决策协作",
+  "purpose": "承载设计方法模板、专家批注、学生回应和交互组件共创",
   "status": "active",
   "tags": ["design"],
   "context": {},
   "semantic_index": {
     "version": 2,
+    "active_page_id": "page:...",
+    "pages": [
+      { "id": "page:...", "name": "Page 1", "is_active": true }
+    ],
     "zones": [],
     "sections": [],
     "nodes": [
       {
         "shape_id": "shape:...",
+        "page_id": "page:...",
         "kind": "canvas_node|html_component",
         "type": "geo|text|image|arrow|html_component",
         "title": "节点标题",
@@ -100,6 +67,7 @@ Core shape:
     ],
     "assets": [],
     "annotations": [],
+    "region_annotations": [],
     "completion_requests": [],
     "scaffold_instances": [],
     "widget_instances": [],
@@ -109,28 +77,31 @@ Core shape:
     "edit_summary": null,
     "updated_at": "ISO timestamp"
   },
-  "selection_policy": {
-    "default": "reuse_related_active_workspace",
-    "create_when": [
-      "user_explicitly_requests_new_canvas",
-      "no_active_canvas_exists",
-      "task_context_is_unrelated_to_existing_canvases",
-      "existing_canvas_is_archived_or_too_crowded"
-    ]
+  "page_policy": {
+    "manager": "single_default_work_page",
+    "default": "write_to_current_work_page",
+    "preserve": "do_not_switch_or_create_pages_unless_user_requests_multi_page"
   }
 }
 ```
 
-## Canvas Selection Policy
+## Page And Document Policy
 
-By default, reuse a canvas if it is active, recent, and semantically related to
-the current task title, purpose, tags, or prompt. Create a new canvas when:
+By default, reuse the active project canvas document. Create a new
+`canvas_workspace` only when no project document exists or the user explicitly
+asks for a separate project-level document.
 
-- the user explicitly asks for a new canvas,
-- no active canvas exists,
-- the task belongs to a clearly different design/problem space,
-- the existing canvas is archived or too crowded,
-- context separation is important.
+Within that document, the default collaboration model is one current work Page:
+
+- `semantic_index.active_page_id` names the current work Page represented by the
+  semantic index. Agents use it for orientation, not as an instruction to switch.
+- `semantic_index.pages` may mirror underlying tldraw Pages for compatibility,
+  but normal work should not create or switch Pages.
+- CanvasIR and command writes target the current work Page from the saved
+  snapshot session.
+- Recompiling CanvasIR replaces IR-managed shapes on the current work Page.
+  Other Pages, if they exist from explicit user action or legacy data, are preserved
+  but should not be part of the default workflow.
 
 ## Technology Choice
 
@@ -154,70 +125,124 @@ empty templates. A scaffold may include:
 - `agent_note`: a short explanation of why the scaffold fits the current stage.
 
 Scaffolds live under `.visual-delivery/data/scaffolds/` and are scoped to the
-current project in the MVP. The canvas UI exposes them from the in-canvas
-toolbar's Scaffold Library.
+current project in the MVP. The canvas UI may expose saved project scaffold
+instances from the in-canvas toolbar's Scaffold Library. This is not the design
+method library: methods remain agent-facing references, while saved scaffolds
+are project-specific reusable artifacts.
 
-Widget scaffolds use `html_component` nodes that follow the canvas widget
-contract in [canvas-widgets.md](canvas-widgets.md): the agent supplies a
-template instantiation (`template_id` + `params`) or a bare HTML fragment plus
-`state`, `input_schema`, `output_schema`, and `sizing`; the runtime owns
-transparent background, intrinsic sizing, proportional scaling, the
-`window.vd` state bridge, and the validation/repair ladder. Widget instances
-persist their state in shape meta and `semantic_index.widget_instances`.
+## Canvas Tool Boundary
 
-## Completion Requests
+Canvas tools support two kinds of in-canvas action:
 
-A completion request is a purple glowing rectangle created by the user from the
-canvas toolbar. It is a bounded instruction to the agent:
+- **Student design actions**: native tldraw tools for frame, shape, sticky,
+  text, image, connector, selection, editing, and movement on the current work
+  Page. Do not guide normal users into Page switching; organize large work with
+  sections and spatial regions in the same Page.
+- **Collaboration actions**: object annotation tool, purple region annotation
+  rectangles, annotation popovers, purple annotation arrows, the bottom-right
+  feedback panel, and `@expert` mentions in annotations.
+
+Do not expose the design method library as a student-facing method picker.
+Agents read the method library and decide what to add to the current work Page
+as a project-specific visual scaffold: CanvasIR Template, Widget, or both.
+
+交互组件脚手架使用 `html_component` nodes，并遵循 [canvas-widgets.md](canvas-widgets.md)
+中的 Widget 合约：agent 提供交互组件模板实例（`template_id` + `params`），或提供裸 HTML
+fragment 加 `state`、`input_schema`、`output_schema` 和 `sizing`；运行时负责透明背景、
+intrinsic sizing、等比例缩放、`window.vd` state bridge，以及 validation/repair ladder。
+Widget 实例的 state 持久化在 shape meta 和 `semantic_index.widget_instances` 中。
+
+术语边界：方法模板 = CanvasIR Template，用于静态设计方法脚手架；交互组件 = Widget，
+用于原生画板节点无法承载的动态判断动作。
+
+## Region Annotations
+
+A region annotation is a purple glowing rectangle created by the user from the
+canvas toolbar. It marks a bounded canvas area that the user wants an expert or
+agent to inspect and respond to:
 
 ```json
 {
-  "kind": "completion_request",
+  "kind": "region_annotation",
   "shape_id": "shape:...",
   "status": "open|in_progress|completed|dismissed",
-  "prompt": "请在这里补充三种视觉方向",
+  "note": "这里的关系好像不成立，请帮我看一下",
   "bounds": { "x": 0, "y": 0, "w": 640, "h": 360 },
+  "page_id": "page:...",
+  "contained_in_frame": true,
+  "frame_id": "shape:frame",
+  "frame_title": "发现 Discover",
+  "target_shape_ids": ["shape:..."],
+  "screenshot": {
+    "status": "pending_agent_capture",
+    "asset_id": null,
+    "url": null,
+    "capture_hint": {
+      "kind": "canvas_region_screenshot",
+      "shape_id": "shape:...",
+      "page_id": "page:...",
+      "bounds": { "x": 0, "y": 0, "w": 640, "h": 360 }
+    }
+  },
   "created_by": "user",
   "resolved_by_event_id": null
 }
 ```
 
-The MVP supports rectangle-based completion requests only. Selection-based
-rewrite or reconstruction requests are represented as ordinary annotations.
+The rectangle form is unchanged from the old completion rectangle, but the
+semantics are now annotation-first. Legacy `completion_request` entries may
+still be read for compatibility, but new UI-created rectangles should write
+`region_annotation`.
 
 ## Canvas Annotations
 
-Annotations are canvas-native feedback marks, not an external sidebar tool. When
-the user selects a frame, shape, image, sticky note, widget, arrow, text, or a
-multi-selection, the canvas displays a local annotation popover near the
-selection. Submitting the popover:
+Annotations are canvas-native feedback marks. The user first chooses the canvas
+annotation tool, which changes the pointer to a purple comment cursor. Clicking
+a frame, shape, image, sticky note, widget, arrow, or text object opens a local
+annotation popover near that object. Ordinary selection does not open the
+annotation popover. Submitting the popover:
 
-- writes a `canvas_annotation` item into the workspace feedback pool,
+- writes a `canvas_annotation` item into the project canvas feedback pool,
 - appends the annotation to each target shape's `meta.vd_annotations`,
 - mirrors the entry into `semantic_index.annotations`,
-- records whether the user set the submit/track flag.
+- records whether the user set the submit/track flag,
+- records `mentions` when the text contains `@专家名` such as `@马谨`,
+  `@孙效华`, or `@虚拟品牌专家`.
 
-The canvas toolbar also exposes an `annotation_arrow` tool. It uses tldraw's
-native arrow behavior but stamps new arrows with `meta.vd_kind =
-"annotation_arrow"` and purple annotation styling. Annotation arrows are stored
-in the semantic index as annotations so agents can treat them as feedback marks,
-not ordinary diagram connectors.
+Mention records use this shape:
+
+```json
+{ "type": "expert", "name": "孙效华", "domain": "智能交互设计", "virtual": false }
+```
+
+Mentions are mirrored in feedback `meta.mentions`, shape
+`meta.vd_annotations[].mentions`, and `semantic_index.annotations[].mentions`.
+Agents should prioritize the mentioned expert in the next design mentor round.
+
+The canvas toolbar also exposes an `annotation_arrow` tool. The pointer down
+position is the arrow's pointed end, and the pointer up position is the arrow's
+start. During drag, the canvas shows a live purple arrow preview. After release,
+the same annotation popover opens for the new arrow so the user can enter the
+annotation text. Annotation arrows are stamped with `meta.vd_kind =
+"annotation_arrow"` and purple annotation styling. They are stored in the
+semantic index as annotations so agents can treat them as feedback marks, not
+ordinary diagram connectors.
 
 ## Canvas Feedback Panel
 
-Canvas workspaces expose a bottom-right in-canvas feedback button. Clicking it
-opens a floating panel over the canvas, not an external sidebar. The panel is a
-readable review queue for content the user has submitted during collaboration:
+Project canvas documents expose a bottom-right in-canvas feedback button. Clicking it
+opens a floating panel over the canvas. The panel is a readable review queue for
+content the user has submitted during collaboration:
 
-- workspace feedback pool entries such as `canvas_annotation`, `widget_output`,
+- project canvas feedback pool entries such as `canvas_annotation`, `widget_output`,
   and `html_component` feedback,
-- `semantic_index.annotations`, including selected-object annotations and
+- `semantic_index.annotations`, including object-targeted annotations and
   purple annotation arrows,
-- `semantic_index.completion_requests`, including open purple completion
+- `semantic_index.region_annotations`, including open purple region annotation
   rectangles.
 
 Panel items are de-duplicated by feedback id when an annotation has already
-created a workspace feedback entry. Items should preserve `target.shape_ids`,
+created a project canvas feedback entry. Items should preserve `target.shape_ids`,
 `target.shape_id`, `section_id`, or `component_id` when available so the UI can
 select and zoom to the referenced canvas object.
 
@@ -253,31 +278,58 @@ unreadable, off-screen, or semantically mismatched.
 
 ## Agent Inspect Requirement
 
-Before any agent writes to a canvas workspace, it must read:
+Before any agent writes to a project canvas document, it must read:
 
 ```text
-GET /api/canvas-workspaces/{WORKSPACE_ID}/context
+GET /api/canvas-workspaces/{PROJECT_CANVAS_ID}/context
 ```
 
 The debug context payload contains the current `snapshot`, `semantic_index`,
-`events`, `open_feedback`, and `open_completion_requests`. Ordinary agents
+`events`, `open_feedback`, `open_region_annotations`, and legacy
+`open_completion_requests`. Ordinary agents
 should instead read:
 
 ```text
-GET /api/canvas-workspaces/{WORKSPACE_ID}/agent-context
+GET /api/canvas-workspaces/{PROJECT_CANVAS_ID}/agent-context
 ```
 
 Then write through CanvasIR:
 
 ```text
-POST /api/canvas-workspaces/{WORKSPACE_ID}/ir/validate
-PUT /api/canvas-workspaces/{WORKSPACE_ID}/ir
-POST /api/canvas-workspaces/{WORKSPACE_ID}/commands
+POST /api/canvas-workspaces/{PROJECT_CANVAS_ID}/ir/validate
+PUT /api/canvas-workspaces/{PROJECT_CANVAS_ID}/ir
+POST /api/canvas-workspaces/{PROJECT_CANVAS_ID}/commands
 ```
 
-Direct `PUT /api/canvas-workspaces/{WORKSPACE_ID}/snapshot` writes are reserved
+Direct `PUT /api/canvas-workspaces/{PROJECT_CANVAS_ID}/snapshot` writes are reserved
 for runtime debugging and migration. The server records semantic diffs in
 `semantic_index.edit_summary` and in the event when an event is supplied.
+
+## Snapshot Write Protection
+
+Full-store snapshot writes are guarded against stale clients. The project canvas document
+tracks two monotonic revisions:
+
+- `snapshot_rev`: bumped on every snapshot write (UI save, IR write, commands).
+- `agent_rev`: the `snapshot_rev` of the latest agent (CanvasIR) write.
+
+Clients echo the `snapshot_rev` they loaded back as `base_rev` when saving. On
+`PUT /snapshot` the server applies:
+
+1. If `base_rev < agent_rev` (or `base_rev` is missing — old clients), the
+   writer has not seen the latest agent write: IR-managed shapes
+   (`shape:vd-ir-*` / `meta.vd_ir_id`) missing from the incoming store are
+   merged back instead of deleted, and their previous semantic index entries
+   are re-attached.
+2. If `base_rev >= agent_rev`, missing IR-managed shapes are treated as
+   intentional deletions and allowed.
+3. Widget 实例始终按实例级 last-write-wins 处理：更高的 `vd_state_version` 保留 state，
+   更高的 `vd_widget_version` 保留 html/schemas，不受整体 snapshot 新旧影响。
+
+Protected writes return a `write_protection` summary, append a
+`snapshot_write_protected` canvas event, and the canvas UI reloads the merged
+snapshot so the editor converges. The client-side rule remains: no tldraw
+`persistenceKey` — the server snapshot is the single source of truth.
 
 Use Cowart as a product and workflow reference rather than a runtime dependency.
 Cowart validates the direction: local tldraw canvas, project-local persistence,
@@ -384,20 +436,17 @@ fields: `text`, `shape`, `bounds`. Optional fields: `section_id`, `color`,
 `relationship_type`. Mirror the relation into `semantic_index.relationships`.
 
 `add_widget`
-: Add an interactive canvas widget. Preferred form: `template_id` + `params`
-validated against the widget template catalog. Freeform form: `html` fragment
-plus optional `state`, `input_schema`, `output_schema`, `sizing`. The server
-runs the static validation ladder and rejects failed specs with a
-`widget_review`. See [canvas-widgets.md](canvas-widgets.md).
+: 添加交互组件。优先形式为 `template_id` + `params`，并按交互组件模板目录校验。
+自由形式为 `html` fragment，加可选 `state`、`input_schema`、`output_schema`、`sizing`。
+server 会运行静态 validation ladder，并用 `widget_review` 拒绝失败规格。见
+[canvas-widgets.md](canvas-widgets.md)。
 
 `update_widget`
-: Update an existing widget instance by CanvasIR node id. `state_patch`
-shallow-merges top-level state keys (bumps `vd_state_version`, actor `agent`);
-`state` replaces the whole state; `html` replaces the fragment after
-validation (bumps `vd_widget_version`, keeps previous html for rollback);
-`title` / `description` update display text. Widget state survives html
-updates and later CanvasIR recompiles (runtime state is hydrated from the
-snapshot before commands apply).
+: 通过 CanvasIR node id 更新已有 Widget 实例。`state_patch` shallow-merge 顶层 state keys
+（提升 `vd_state_version`，actor 为 `agent`）；`state` 替换整个 state；`html` 经过校验后
+替换 fragment（提升 `vd_widget_version`，保留 previous html 供 rollback）；`title` /
+`description` 更新展示文字。Widget state 会跨 html 更新和后续 CanvasIR 重新编译保留
+（commands 应用前会从 snapshot hydrate runtime state）。
 
 `add_html_component`
 : Legacy alias of the freeform `add_widget` path. Required fields: `html`,
@@ -415,10 +464,11 @@ slots, widgets, and next actions. Required fields: `scaffold_id`, `title`,
 : Record layout review after scaffold creation or mutation. Required fields:
 `scaffold_id`, `status`, `checks`. Optional fields: `repairs`.
 
-`add_completion_request`
-: Add the user's purple bounded completion request. Required fields: `prompt`,
+`add_region_annotation`
+: Add the user's purple bounded region annotation. Required fields: `note`,
 `bounds`. The semantic index mirrors the request into
-`completion_requests[]`.
+`region_annotations[]`, including page/frame containment and screenshot
+capture hint when available.
 
 `add_table`
 : Add row/column data as a first-class semantic object. Required fields:
@@ -454,7 +504,7 @@ Use semantic kinds consistently even when the renderer uses a tldraw fallback:
 | `shape` | `geo` | Diagram nodes, states, options, decisions |
 | `connector` | `arrow` | Flow, dependency, evidence, reference link |
 | `html_component` | tldraw placeholder + iframe overlay | Interactive HTML widget anchored on the canvas |
-| `completion_request` | violet geo rectangle | User asks agent to fill or revise a bounded region |
+| `region_annotation` | violet geo rectangle | User marks a bounded canvas area for expert/agent feedback |
 | `table` | grouped shapes / future table renderer | Row-column data |
 | `code_block` | styled text / future code renderer | Code with language metadata |
 | `label` | ellipse/geo | Short callout marker |

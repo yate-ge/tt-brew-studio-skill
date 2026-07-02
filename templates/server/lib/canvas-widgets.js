@@ -2,7 +2,7 @@
  * Canvas widget runtime support (server side).
  *
  * Implements the contract in references/canvas-widgets.md:
- *   - Tier 1/2: parameterized widget templates (vote, alignment_scale, rubric,
+ *   - Tier 1/2: parameterized interaction-component templates (vote, alignment_scale, rubric,
  *     bar_chart, word_cloud, timer)
  *   - Tier 3: freeform HTML fragments
  *   - normalizeWidgetSpec / validation / repair ladder (static half)

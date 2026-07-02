@@ -1,31 +1,33 @@
-# CanvasIR and Templates
+# CanvasIR 与方法模板
 
-CanvasIR is the agent-facing intermediate representation for Visual Delivery
-canvas work. It lets agents describe a thinking scaffold with semantic hierarchy
-and grid layout without writing tldraw snapshot records directly.
+CanvasIR 是 Visual Delivery 面向 agent 的中间表达。agent 用它描述设计方法脚手架的语义层级
+和布局，不直接手写 tldraw snapshot records。
 
-## Core Rule
+在本 skill 中，**CanvasIR Template 就是方法模板的运行时表达**。设计方法库中的静态脚手架
+（如 Persona、用户旅程、HMW、服务蓝图）应落地为 CanvasIR Template 或 CanvasIR commands。
+不要把 CanvasIR Template 理解成独立于设计方法之外的通用模板系统，也不要把它暴露成学生
+直接选择的方法市场。学生看见的是 agent 按项目语境放到画布上的具体视觉脚手架。
+
+## 核心规则
 
 Ordinary agents should use CanvasIR or canvas commands. Direct writes to
 `snapshot.document.store` are reserved for runtime debugging, migration, or
 front-end editor persistence.
 
-The agent's role on the canvas is like a mentor providing a visual thinking
-scaffold. Agents should express the learning/design intent: questions,
-sections, slots, seed ideas, tradeoffs, and next discussion spaces. The runtime
-owns stable execution details: wrapping new generated structures, preserving
-user-authored canvas marks, placing content from the top-left, growing
-containers to fit content, and keeping template geometry stable under scaling.
+agent 在画板上的角色是导师，负责提供视觉思考脚手架。agent 应表达学习 / 设计意图：
+问题、section、slot、种子想法、取舍点和下一步讨论区。运行时负责稳定执行细节：包裹新生成
+结构、保留学生亲手写下的画板痕迹、从左上角放置内容、让容器随内容增长，并在缩放时保持
+方法模板几何稳定。
 
 ```text
-Agent intent
+agent 意图
   -> CanvasIR / commands
   -> server compiler
   -> valid tldraw snapshot + semantic_index
   -> canvas event
 ```
 
-## CanvasIR Shape
+## CanvasIR 结构
 
 ```json
 {
@@ -85,9 +87,9 @@ Agent intent
 }
 ```
 
-## Hierarchy
+## 层级
 
-CanvasIR hierarchy is explicit and stable:
+CanvasIR 层级是显式且稳定的：
 
 ```text
 board
@@ -96,38 +98,35 @@ board
       sticky / text / shape / widget
 ```
 
-Use `parent` to place a node inside a section or slot. The compiler maps visible
-container nodes to tldraw frame shapes and records the same containment in
-`semantic_index.relationships`.
+用 `parent` 把节点放进 section 或 slot。compiler 会把可见容器节点映射为 tldraw frame
+shapes，并把同样的包含关系记录到 `semantic_index.relationships`。
 
-Container kinds:
+容器类型：
 
 - `section`: large navigational region, compiled to a tldraw frame.
 - `slot`: semantic area inside a pattern, visible by default as a nested frame.
 - `cluster`: loose group of related nodes, visible as a frame when needed.
 - `pattern`: reusable top-level thinking construct.
 
-Content kinds:
+内容类型：
 
 - `sticky`: one participant-style idea or hypothesis.
 - `text`: structural guidance, heading, question, or analysis.
 - `shape`: diagram option, state, process, or decision.
 - `connector`: represented as a semantic relationship in v1.
-- `html_component`: embedded interactive widget (`widget` is accepted as an
-  alias); keep local to a slot or section. Create through `add_widget`, not by
-  hand-writing node meta. Contract: [canvas-widgets.md](canvas-widgets.md).
+- `html_component`：嵌入式交互组件（`widget` 可作为 alias）；应放在某个 slot 或 section
+  内。通过 `add_widget` 创建，不要手写 node meta。合约见：[canvas-widgets.md](canvas-widgets.md)。
 
 ## Grid Layout
 
-Agents describe layout with grid areas instead of pixels:
+agent 用 grid areas 描述布局，而不是直接写 pixels：
 
 ```json
 { "col": 1, "row": 1, "colSpan": 4, "rowSpan": 3 }
 ```
 
-Areas are relative to the node's parent grid. A top-level section uses the board
-grid. A slot inside a section uses that section's derived grid unless it defines
-its own `grid`.
+area 相对于节点父级 grid。顶层 section 使用 board grid；section 内部 slot 默认使用该 section
+派生出的 grid，除非自己定义 `grid`。
 
 Nodes may also specify `bounds` when a command or template needs stable
 geometry. Child `bounds` are interpreted relative to the parent container's
@@ -136,25 +135,23 @@ server for generated scaffold wrappers and template scaling.
 
 When a content node has no `area`, the compiler auto-places it inside the parent
 from the top-left with a readable size. Containers grow to fit their children
-instead of shrinking or evenly distributing children across the frame. This keeps
-agent prompts small while preserving section containment and leaving room for
-user collaboration.
+而不是缩小内容或把子节点平均分散到 frame 中。这样可以保持 agent prompt 简洁，同时保留
+section containment，并给学生协作留出空间。
 
-When generated CanvasIR has multiple root nodes, the compiler wraps them in a
-single `section` with `role = "scaffold.root"`. A single mature template with
-its own root frame is not wrapped again.
+当生成的 CanvasIR 有多个 root nodes 时，compiler 会把它们包进一个
+`role = "scaffold.root"` 的 `section`。如果一个成熟方法模板已经有自己的 root frame，则不再
+二次包裹。
 
-## Templates
+## 方法模板（CanvasIR Templates）
 
-Templates are PatternSpec / CanvasIR fragments, not fixed work processes. A
-template defines slots, relationships, and a grid structure that agents can
-seed, rewrite, duplicate, and combine.
+方法模板是 PatternSpec / CanvasIR fragments，不是固定工作流程。一个方法模板定义 slots、
+relationships 和 grid structure，agent 可以按项目语境 seed、rewrite、duplicate 和 combine。
 
-Current built-in template:
+当前内置方法模板：
 
 - `business_model_canvas`
 
-Use templates through commands:
+通过 commands 使用方法模板：
 
 ```json
 {
@@ -176,25 +173,23 @@ Use templates through commands:
 
 ## Commands
 
-Use node ids from CanvasIR, not tldraw shape ids.
+使用 CanvasIR node ids，不使用 tldraw shape ids。
 
-Supported v1 commands:
+v1 支持的 commands：
 
-- `insert_template`
+- `insert_template`：插入方法模板（CanvasIR Template）
 - `add_node`
 - `edit_node`
 - `delete_node`
 - `move_node`
 - `locate_node`
-- `add_widget` (widget from `template_id` + `params`, or freeform `html`)
-- `update_widget` (`state_patch` / `state` / `html` / `title` / `description`)
+- `add_widget`：添加交互组件，可来自交互组件模板（`template_id` + `params`）或自由 `html`
+- `update_widget`：更新交互组件（`state_patch` / `state` / `html` / `title` / `description`）
 
-`insert_template` accepts optional `scale` and `anchor` / `position` / `x` +
-`y`. Scaling keeps the template root frame and child frames in proportion while
-preserving non-frame seeded content offsets and sizes from the container
-top-left.
+`insert_template` 接受可选 `scale` 和 `anchor` / `position` / `x` + `y`。缩放会保持方法模板
+root frame 和 child frames 的比例，同时保留非 frame seed 内容相对容器左上角的偏移与尺寸。
 
-Examples:
+示例：
 
 ```json
 {
@@ -241,14 +236,13 @@ Examples:
 }
 ```
 
-Widget commands run the static validation ladder from
-[canvas-widgets.md](canvas-widgets.md); a failed review rejects only that
-command. Live widget state in the snapshot is hydrated back into the IR before
-commands apply, so recompiles never wipe user interaction data.
+Widget commands 会运行 [canvas-widgets.md](canvas-widgets.md) 中的静态 validation ladder；
+review 失败只拒绝该 command。commands 应用前，snapshot 中的 live widget state 会 hydrate 回 IR，
+因此重新编译不会抹掉学生交互数据。
 
 ## Validation
 
-Before saving, the server checks:
+保存前，server 会检查：
 
 - unique IR ids
 - parent existence
@@ -259,4 +253,4 @@ Before saving, the server checks:
 - semantic hierarchy and containment
 - user-authored non-CanvasIR shapes are preserved across CanvasIR writes
 
-The API returns `layout_report` with counts, extents, warnings, and repairs.
+API 返回 `layout_report`，包含 counts、extents、warnings 和 repairs。

@@ -1,13 +1,6 @@
-import { Routes, Route } from 'react-router-dom';
+import { Navigate, Routes, Route } from 'react-router-dom';
 import { useEffect } from 'react';
-import AppLayout from './components/layout/AppLayout';
-import ProjectHome from './pages/ProjectHome';
-import Reports from './pages/Reports';
-import ReportNew from './pages/ReportNew';
 import CanvasWorkspace from './pages/CanvasWorkspace';
-import Logs from './pages/Logs';
-import Settings from './pages/Settings';
-import DeliveryPage from './pages/DeliveryPage';
 import { initTheme } from './lib/theme';
 
 export default function App() {
@@ -15,16 +8,9 @@ export default function App() {
 
   return (
     <Routes>
-      <Route element={<AppLayout />}>
-        <Route path="/" element={<ProjectHome />} />
-        <Route path="/logs" element={<Logs />} />
-        <Route path="/reports" element={<Reports />} />
-        <Route path="/reports/new" element={<ReportNew />} />
-        <Route path="/reports/:reportId" element={<Reports />} />
-        <Route path="/canvas" element={<CanvasWorkspace />} />
-        <Route path="/d/:id" element={<DeliveryPage />} />
-        <Route path="/settings" element={<Settings />} />
-      </Route>
+      <Route path="/" element={<CanvasWorkspace />} />
+      <Route path="/canvas" element={<CanvasWorkspace />} />
+      <Route path="*" element={<Navigate to="/canvas" replace />} />
     </Routes>
   );
 }

@@ -87,6 +87,7 @@ const CONTENT_KINDS = new Set([
   'code_block',
   'image',
   'html_component',
+  'region_annotation',
   'completion_request',
 ]);
 
@@ -446,10 +447,16 @@ function compileCanvasIR(input, options = {}) {
   const now = options.now || new Date().toISOString();
   const previousSnapshot = options.previousSnapshot && typeof options.previousSnapshot === 'object' ? options.previousSnapshot : {};
   const schema = previousSnapshot.document?.schema || DEFAULT_TLDRAW_SCHEMA;
+  const previousStore = previousSnapshot.document?.store || {};
+  const targetPageId = resolveTargetPageId({
+    previousSnapshot,
+    store: previousStore,
+    pageId: options.page_id || options.pageId,
+  });
   const nodesById = new Map(ir.nodes.map((node) => [node.id, node]));
   const childrenByParent = buildChildrenByParent(ir.nodes);
   const layout = resolveLayout(ir, nodesById, childrenByParent);
-  const records = buildBaseStoreRecords(previousSnapshot.document?.store || {}, normalizeLayoutPolicy(ir.layout_policy));
+  const records = buildBaseStoreRecords(previousStore, normalizeLayoutPolicy(ir.layout_policy), targetPageId);
 
   const tldrawSections = [];
   const tldrawNodes = [];
@@ -458,7 +465,7 @@ function compileCanvasIR(input, options = {}) {
 
   addRecordsForNodes({
     nodes: topLevelNodes,
-    parentShapeId: 'page:page',
+    parentShapeId: targetPageId,
     childrenByParent,
     layout,
     records,
@@ -469,9 +476,10 @@ function compileCanvasIR(input, options = {}) {
   });
   removeDanglingBindings(records);
 
+  const pages = pagesFromStore(records, targetPageId);
   const snapshot = {
     document: { schema, store: records },
-    session: buildSessionState(layout),
+    session: buildSessionState(layout, previousSnapshot.session, targetPageId),
   };
   const semantic_index = buildSemanticIndex({
     ir,
@@ -479,6 +487,8 @@ function compileCanvasIR(input, options = {}) {
     tldrawSections,
     tldrawNodes,
     shapeIdsByNodeId,
+    pageId: targetPageId,
+    pages,
     now,
   });
   const layout_report = buildLayoutReport({ ir, layout, validation, tldrawSections, tldrawNodes });
@@ -649,12 +659,72 @@ function computeAutoFlow(parentBounds, parentGrid, desiredSize, kind, siblingCou
   };
 }
 
-function buildBaseStoreRecords(previousStore = {}, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
+function resolveTargetPageId({ previousSnapshot = {}, store = {}, pageId = null } = {}) {
+  if (typeof pageId === 'string' && pageId.startsWith('page:')) return pageId;
+  const sessionPageId = previousSnapshot?.session?.currentPageId || null;
+  if (typeof sessionPageId === 'string' && store?.[sessionPageId]?.typeName === 'page') return sessionPageId;
+  const firstPage = Object.values(store || {}).find((record) => record?.typeName === 'page');
+  return firstPage?.id || 'page:page';
+}
+
+function makePageRecord(id, name = 'Page 1', index = 'a1') {
+  return {
+    meta: {},
+    id,
+    name,
+    index,
+    typeName: 'page',
+  };
+}
+
+function recordPageId(record, store = {}) {
+  if (!record || typeof record !== 'object') return null;
+  if (typeof record.pageId === 'string') return record.pageId;
+  if (typeof record.props?.pageId === 'string') return record.props.pageId;
+
+  let parentId = record.parentId;
+  const seen = new Set();
+  while (typeof parentId === 'string' && parentId && !seen.has(parentId)) {
+    if (parentId.startsWith('page:')) return parentId;
+    seen.add(parentId);
+    const parent = store[parentId];
+    if (!parent || typeof parent !== 'object') return null;
+    if (parent.typeName === 'page') return parent.id || parentId;
+    parentId = parent.parentId;
+  }
+  return null;
+}
+
+function pagesFromStore(store = {}, activePageId = 'page:page') {
+  const pages = Object.values(store || {})
+    .filter((record) => record?.typeName === 'page' && typeof record.id === 'string')
+    .sort((a, b) => String(a.index || '').localeCompare(String(b.index || '')))
+    .map((page, index) => ({
+      id: page.id,
+      name: page.name || page.props?.name || `Page ${index + 1}`,
+      is_active: page.id === activePageId,
+    }));
+  if (pages.length > 0) return pages;
+  return [{ id: activePageId, name: 'Page 1', is_active: true }];
+}
+
+function buildBaseStoreRecords(previousStore = {}, layoutPolicy = DEFAULT_LAYOUT_POLICY, targetPageId = 'page:page') {
   const policy = normalizeLayoutPolicy(layoutPolicy);
   const records = {};
   for (const [id, record] of Object.entries(previousStore || {})) {
-    if (id === 'document:document' || id === 'page:page') continue;
-    if (policy.preserve_user_content && !isIRManagedRecord(id, record)) {
+    if (id === 'document:document') continue;
+    if (record?.typeName === 'page') {
+      records[id] = cloneRecord(record);
+      continue;
+    }
+
+    const pageId = recordPageId(record, previousStore);
+    const onTargetPage = pageId === targetPageId;
+    if (isIRManagedRecord(id, record)) {
+      if (!onTargetPage) records[id] = cloneRecord(record);
+      continue;
+    }
+    if (policy.preserve_user_content || !onTargetPage) {
       records[id] = cloneRecord(record);
     }
   }
@@ -665,13 +735,13 @@ function buildBaseStoreRecords(previousStore = {}, layoutPolicy = DEFAULT_LAYOUT
     id: 'document:document',
     typeName: 'document',
   };
-  records['page:page'] = cloneRecord(previousStore['page:page']) || {
-    meta: {},
-    id: 'page:page',
-    name: 'Page 1',
-    index: 'a1',
-    typeName: 'page',
-  };
+  if (!Object.values(records).some((record) => record?.typeName === 'page')) {
+    records['page:page'] = cloneRecord(previousStore['page:page']) || makePageRecord('page:page');
+  }
+  if (!records[targetPageId]) {
+    const index = indexKeyAt(Object.values(records).filter((record) => record?.typeName === 'page').length + 1);
+    records[targetPageId] = cloneRecord(previousStore[targetPageId]) || makePageRecord(targetPageId, 'Page', index);
+  }
   return records;
 }
 
@@ -762,7 +832,7 @@ function addRecordsForNodes(ctx) {
     const childNodes = childrenByParent.get(node.id) || [];
     const shouldCreateFrame = CONTAINER_KINDS.has(node.kind) && node.visible !== false;
     const absBounds = ctx.layout.get(node.id).bounds;
-    const parentBounds = parentShapeId === 'page:page'
+    const parentBounds = isPageId(parentShapeId)
       ? { x: 0, y: 0 }
       : findParentBounds(parentShapeId, ctx.layout, ctx.shapeIdsByNodeId);
     const localBounds = {
@@ -785,6 +855,10 @@ function addRecordsForNodes(ctx) {
       });
     }
   });
+}
+
+function isPageId(id) {
+  return typeof id === 'string' && id.startsWith('page:');
 }
 
 function findParentBounds(parentShapeId, layout, shapeIdsByNodeId) {
@@ -879,39 +953,48 @@ function colorForNode(node) {
   return 'light-blue';
 }
 
-function buildSessionState(layout) {
+function buildSessionState(layout, previousSession = {}, pageId = 'page:page') {
   const allBounds = Array.from(layout.values()).map((item) => item.bounds);
   const minX = allBounds.length ? Math.min(...allBounds.map((bounds) => bounds.x)) : 0;
   const minY = allBounds.length ? Math.min(...allBounds.map((bounds) => bounds.y)) : 0;
+  const previous = previousSession && typeof previousSession === 'object' ? cloneRecord(previousSession) : {};
+  const previousPageStates = Array.isArray(previous.pageStates) ? previous.pageStates : [];
+  const existingPageState = previousPageStates.find((state) => state?.pageId === pageId) || {};
+  const currentPageState = {
+    ...existingPageState,
+    pageId,
+    camera: { x: Math.round(80 - minX * 0.1), y: Math.round(60 - minY * 0.1), z: 0.42 },
+    selectedShapeIds: [],
+    focusedGroupId: null,
+  };
+  const pageStates = [
+    ...previousPageStates.filter((state) => state?.pageId && state.pageId !== pageId),
+    currentPageState,
+  ];
   return {
+    ...previous,
     version: 0,
-    currentPageId: 'page:page',
-    exportBackground: true,
-    isFocusMode: false,
-    isDebugMode: false,
-    isToolLocked: false,
-    isGridMode: false,
-    pageStates: [
-      {
-        pageId: 'page:page',
-        camera: { x: Math.round(80 - minX * 0.1), y: Math.round(60 - minY * 0.1), z: 0.42 },
-        selectedShapeIds: [],
-        focusedGroupId: null,
-      },
-    ],
+    currentPageId: pageId,
+    exportBackground: previous.exportBackground ?? true,
+    isFocusMode: previous.isFocusMode ?? false,
+    isDebugMode: previous.isDebugMode ?? false,
+    isToolLocked: previous.isToolLocked ?? false,
+    isGridMode: previous.isGridMode ?? false,
+    pageStates,
   };
 }
 
-function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsByNodeId, now }) {
+function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsByNodeId, pageId = 'page:page', pages = null, now }) {
   const sections = tldrawSections.map(({ node, shape, bounds }) => ({
     shape_id: shape.id,
+    page_id: pageId,
     ir_id: node.id,
     kind: node.kind === 'slot' ? 'canvas_slot' : 'canvas_section',
     type: 'frame',
     title: node.title,
     text: node.title,
     role: node.role || '',
-    parent_id: node.parent ? shapeIdsByNodeId.get(safeId(node.parent)) : 'page:page',
+    parent_id: node.parent ? shapeIdsByNodeId.get(safeId(node.parent)) : pageId,
     parent_ir_id: node.parent || null,
     section_id: shape.id,
     section_title: node.title,
@@ -928,13 +1011,14 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
   }));
   const nodes = tldrawNodes.map(({ node, shape, bounds }) => ({
     shape_id: shape.id,
+    page_id: pageId,
     ir_id: node.id,
     kind: node.kind === 'sticky' ? 'sticky_note' : node.kind,
     type: shape.type,
     title: node.title,
     text: node.content || node.title,
     role: node.role || '',
-    parent_id: node.parent ? shapeIdsByNodeId.get(safeId(node.parent)) : 'page:page',
+    parent_id: node.parent ? shapeIdsByNodeId.get(safeId(node.parent)) : pageId,
     parent_ir_id: node.parent || null,
     section_id: node.parent ? nearestSectionShapeId(node.parent, ir, shapeIdsByNodeId) : null,
     section_title: node.parent ? nearestSectionTitle(node.parent, ir) : null,
@@ -981,16 +1065,22 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
 
   return {
     version: 2,
+    active_page_id: pageId,
+    pages: Array.isArray(pages) && pages.length > 0
+      ? pages
+      : [{ id: pageId, name: ir.board.title || 'Page 1', is_active: true }],
     zones: [],
     sections,
     nodes,
     assets: [],
     annotations: [],
+    region_annotations: [],
     completion_requests: [],
     scaffold_instances: [{
       id: `canvas_ir_${safeId(ir.board.title || 'board')}`,
       type: 'canvas_ir',
       title: ir.board.title,
+      page_id: pageId,
       section_ids: sections.map((section) => section.shape_id),
       ir_node_ids: ir.nodes.map((node) => node.id),
       created_by: 'agent',
@@ -1001,6 +1091,7 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
       id: node.ir_id,
       kind: 'html_component',
       shape_id: node.shape_id,
+      page_id: pageId,
       title: node.title,
       section_id: node.section_id,
       template_id: node.meta?.vd_widget_template || null,
@@ -1670,7 +1761,13 @@ function collectDescendantIds(ir, rootId) {
   return ids;
 }
 
-function buildCanvasAgentContext({ workspace, semanticIndex, openFeedback = [], openCompletionRequests = [] }) {
+function buildCanvasAgentContext({
+  workspace,
+  semanticIndex,
+  openFeedback = [],
+  openRegionAnnotations = [],
+  openCompletionRequests = [],
+}) {
   const ir = semanticIndex?.canvas_ir || null;
   const nodeIndex = Array.isArray(semanticIndex?.ir_node_index) ? semanticIndex.ir_node_index : [];
   return {
@@ -1683,6 +1780,8 @@ function buildCanvasAgentContext({ workspace, semanticIndex, openFeedback = [], 
       purpose: workspace.purpose,
       tags: workspace.tags || [],
       updated_at: workspace.updated_at,
+      snapshot_rev: workspace.snapshot_rev || 0,
+      agent_rev: workspace.agent_rev || 0,
     },
     current_ir_summary: ir ? {
       board: ir.board,
@@ -1691,18 +1790,21 @@ function buildCanvasAgentContext({ workspace, semanticIndex, openFeedback = [], 
       nodes: nodeIndex,
     } : null,
     open_feedback: openFeedback,
+    open_region_annotations: openRegionAnnotations,
     open_completion_requests: openCompletionRequests,
     available_templates: listCanvasTemplates(),
     available_widget_templates: canvasWidgets.listWidgetTemplates(),
     widget_instances: Array.isArray(semanticIndex?.widget_instances) ? semanticIndex.widget_instances : [],
     command_schema: {
       ops: ['insert_template', 'add_node', 'edit_node', 'delete_node', 'move_node', 'locate_node', 'add_widget', 'update_widget'],
-      target_ids: 'Use CanvasIR node id / slot id / template instance id, not tldraw shape id.',
+      target_ids: '使用 CanvasIR node id / slot id / 方法模板实例 id，不要使用 tldraw shape id。',
+      page_rule: '默认所有内容都写入当前工作 Page；不要主动创建、切换或要求用户切换 tldraw Page，除非用户明确要求多 Page 工作。',
+      template_terms: 'available_templates 是方法模板（CanvasIR Template），用于静态设计方法脚手架；available_widget_templates 是交互组件模板，用于参数化创建 Widget。',
       insert_template_options: ['template_id', 'title', 'seed', 'scale', 'anchor', 'position', 'x', 'y'],
-      widget_rule: 'Prefer add_widget with template_id + params from available_widget_templates. '
-        + 'Freeform html must be a fragment (no <html>/<head>/<body>, no fixed root size, no external scripts); '
-        + 'it is validated before mounting. Use update_widget with state_patch to change widget data; '
-        + 'read current widget state from widget_instances.',
+      widget_rule: '优先用 add_widget + template_id + params 调用 available_widget_templates 中的交互组件模板。'
+        + '只有现有交互组件模板无法承载时，才生成自由 HTML fragment（不能有 <html>/<head>/<body>，不能固定根尺寸，不能有外部 scripts）；'
+        + '挂载前会被校验。用 update_widget + state_patch 修改交互组件数据；'
+        + '从 widget_instances 读取当前交互组件 state。',
     },
     minimal_examples: [
       {

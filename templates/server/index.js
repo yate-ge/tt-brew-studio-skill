@@ -25,17 +25,11 @@ const dataDir = args['data-dir'] || path.join(process.cwd(), '.visual-delivery')
 const port = parseInt(args.port, 10) || 3847;
 const host = args.host || '127.0.0.1';
 const uiDir = args['ui-dir'] || path.join(dataDir, 'ui', 'dist');
-const projectDir = path.resolve(args['project-dir'] || path.dirname(dataDir));
 
-fs.mkdirSync(path.join(dataDir, 'data', 'deliveries'), { recursive: true });
-fs.mkdirSync(path.join(dataDir, 'data', 'sessions'), { recursive: true });
-fs.mkdirSync(path.join(dataDir, 'data', 'reports'), { recursive: true });
+fs.mkdirSync(path.join(dataDir, 'data'), { recursive: true });
+fs.mkdirSync(path.join(dataDir, 'data', 'canvas-workspaces'), { recursive: true });
+fs.mkdirSync(path.join(dataDir, 'data', 'scaffolds'), { recursive: true });
 fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
-
-const indexPath = path.join(dataDir, 'data', 'index.json');
-if (!fs.existsSync(indexPath)) {
-  fs.writeFileSync(indexPath, '[]', 'utf8');
-}
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -127,7 +121,13 @@ function accessKeyMiddleware(req, res, next) {
 
 app.use(accessKeyMiddleware);
 
-setupRoutes(app, dataDir, { projectDir });
+setupRoutes(app, dataDir);
+
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    error: { code: 'NOT_FOUND', message: `API route not found: ${req.path}` },
+  });
+});
 
 if (fs.existsSync(uiDir)) {
   // Serve static assets but NOT index.html (we inject locale into it)

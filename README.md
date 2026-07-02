@@ -1,29 +1,32 @@
-[English](./README.md) | [中文](./README.zh-CN.md)
+[中文](./README.zh-CN.md)
 
-# Visual Delivery Skill
+# TT 设计精酿 Studio Skill
 
-An agent skill that turns task results into visual, interactive web pages — and lets users give feedback right on the page. Works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), [OpenClaw](https://github.com/anthropics/open-claw), and other agent frameworks that support the skill protocol.
+一个面向设计教育的多专家设计协作 Agent Skill。设计如同一杯精酿，需要不断调配、发酵、
+品鉴；本 skill 把 TT 设计学院知识库中的多位设计专家分身组织到同一份学生设计过程中：
+每位专家从自己的领域、研究方法和审美取向出发，在本地持久画板上进行引导、批注、评审
+与共创；智能体本体则根据用户目标生成设计草案、画板补全、方法模板和项目化 Widget。
 
-## What It Does
+画板不是通用汇报工具，而是设计学习的工作台。它把显性方法论和难以言传的隐性审美，沉淀为
+可追踪的专家判断、可操作的方法模板（CanvasIR Template），以及可交互的交互组件（Widget），
+让学生在持续调整自己的设计配方时逐步内化设计判断力。
 
-Instead of dumping results as plain text in the chat, the agent **generates a web page** tailored for reviewing task results — dashboards, comparison tables, code reviews, data visualizations, or any layout that makes the output easy to read and act on.
+## 核心特性
 
-You open the page in a browser, review the results visually, and **provide feedback directly on the page**: annotate text, click action buttons, or type comments. The agent reads your feedback and continues working — fix the code you flagged, revise the section you commented on, or explore the direction you chose.
+- **多专家审美引导**：专家分身围绕同一份学生设计过程协同判断，并标明专家、领域、审美取向、
+  方法依据和下一步动作。
+- **持久设计画板**：运行时在 `.visual-delivery/` 下保存一个项目画板文档；默认所有阶段、
+  方法模板、专家批注、学生回应和交互组件都在同一个工作 Page 中完成。
+- **设计方法脚手架**：专家可以添加 frame、提示、方法模板、关系线、示例草稿和下一步讨论区。
+- **画板内批注与共创**：学生可以选中画板对象提交标注，绘制紫色标注箭头，或创建紫色补全矩形。
+- **交互组件**：专家可以通过交互组件模板添加沙箱 HTML 组件，例如投票、rubric、柱状图、
+  词云、计时器和对齐量表。
+- **CanvasIR 命令**：智能体优先写语义化 canvas command，而不是直接写 tldraw snapshot。
+- **本地优先运行时**：默认运行在 `localhost:3847`，需要时可通过服务设置开启远程访问。
 
-This closes the loop between "agent does work" and "human reviews work", making collaboration faster and more precise than going back and forth in chat.
+## 安装
 
-### Key Features
-
-- **Generative UI** — Every delivery page is uniquely generated to match the task. No fixed templates; the agent designs the layout, content, and interactions from scratch.
-- **Structured Feedback** — Annotate any text, click per-item action buttons (e.g., "Accept Fix", "Defer"), or type free-text comments. Feedback flows back to the agent automatically.
-- **Design Tokens** — Customizable colors, typography, and spacing. Edit through the Settings page or just ask the agent to restyle.
-- **Multi-Language** — Built-in English locale. For any other language, the agent generates the UI locale at startup.
-- **Real-Time Updates** — Deliveries and feedback appear instantly via WebSocket.
-- **Local-First** — Runs on `localhost:3847`. Optional remote access via [cloudflared](https://github.com/cloudflare/cloudflared) tunnel.
-
-## Installation
-
-Clone or copy this repo into the skills directory of your agent framework:
+将本仓库克隆或复制到 Agent 框架的 skills 目录下：
 
 ```bash
 # Claude Code
@@ -33,93 +36,53 @@ cp -r visual-delivery-skill your-project/.claude/skills/
 cp -r visual-delivery-skill your-project/.codex/skills/
 ```
 
-The agent will automatically discover and load the skill.
+Agent 会自动发现并加载该技能。
 
-## Usage
+## 使用方法
 
-Start a conversation with the agent and trigger the skill:
+让 Agent 启动设计导师画板：
 
+```text
+启动设计导师画板
 ```
-You: Start visual delivery
-```
 
-The agent will:
+Agent 会依次：
 
-1. **Start the service** — launches a local server on port 3847
-2. **Show the URL** — `http://localhost:3847`
-3. **Ask about remote access** — local only, or start a tunnel for external access
+1. 启动本地 Visual Delivery 服务。
+2. 打开或初始化项目设计画板。
+3. 返回 `http://localhost:3847/canvas`。
+4. 通过读取和写入画板上下文继续设计指导与共创。
 
-Once running, task results that benefit from visual presentation are automatically delivered as interactive web pages.
+## 架构
 
-### Trigger Modes
-
-Control when the agent uses visual delivery (configurable in Settings):
-
-| Mode | Behavior |
-|------|----------|
-| **Smart** (default) | Agent decides — visual for complex results, plain text for simple answers |
-| **Auto** | Always deliver visually |
-| **Manual** | Only when you explicitly ask |
-
-### Feedback Workflow
-
-1. The agent delivers a visual page with per-item feedback options
-2. You review and provide feedback:
-   - **Annotate** — select any text to add a comment
-   - **Action buttons** — context-specific choices per item (e.g., "Accept Fix", "Defer", "Won't Fix")
-   - **Free text** — "Other..." input for each item, plus a global comment box
-3. Submit feedback from the sidebar
-4. The agent processes feedback, updates the page, and continues working
-
-## Architecture
-
-```
+```text
 visual-delivery-skill/
-├── SKILL.md                  # Agent instructions (skill entry point)
+├── SKILL.md                  # 中文 Agent 指令
 ├── scripts/
-│   ├── start.js              # Launch server + build frontend
-│   ├── reinitialize.js       # Reset runtime data and initialize again
-│   └── stop.js               # Graceful shutdown
-├── references/               # Supplementary docs for SKILL.md
-│   ├── api.md
-│   ├── generative-ui-guide.md
-│   ├── feedback-schema.md
+│   ├── start.js              # 启动服务 + 构建前端
+│   ├── reinitialize.js       # 清空运行时数据后重新初始化
+│   └── stop.js               # 优雅停止
+├── references/
+│   ├── api.md                # API 参考
+│   ├── canvas-ir.md          # CanvasIR 与模板命令模型
+│   ├── canvas-widgets.md     # 交互组件合约
+│   ├── canvas-workspace-model.md
 │   └── design-system.md
-└── templates/                # Copied to runtime dir on first start
-    ├── server/               # Express + WebSocket backend
-    ├── ui/                   # React + Vite frontend
-    ├── locales/              # Built-in locale files
-    └── design/               # Default design tokens
+└── templates/
+    ├── server/               # Express + WebSocket 后端
+    ├── ui/                   # React + Vite 画板前端
+    ├── locales/              # 内置语言包
+    └── design/               # 默认设计令牌
 ```
 
-### Runtime
+## 运行时
 
-On first start, `start.js` copies `templates/` into the project's `.visual-delivery/` directory, installs dependencies, builds the frontend, and starts the server. Later `start.js` runs preserve existing data while syncing templates and restarting the server. To initialize a clean runtime, use `scripts/reinitialize.js`; it backs up the old `.visual-delivery/` directory before generating a fresh one. This runtime directory is gitignored and regenerated as needed.
+首次启动时，`start.js` 会将 `templates/` 复制到项目的 `.visual-delivery/` 目录，安装依赖、
+构建前端并启动服务。后续 `start.js` 会保留已有画板数据，只同步模板并重启服务。
 
-### How It Works
+需要重新初始化干净运行时时，使用 `scripts/reinitialize.js`；它会先备份旧 `.visual-delivery/`，
+再生成新的运行时目录。运行时目录已被 gitignore，会按需重新生成。
 
-1. The agent analyzes the task result and designs a page layout
-2. It generates a self-contained web page with inline styles and scripts
-3. The page is published to the local server
-4. The frontend renders it in a sandboxed iframe
-5. A bridge script enables communication between the page and the feedback sidebar
+## 许可证
 
-The agent can use CDN libraries like Tailwind CSS, Chart.js, Mermaid, D3.js, and Highlight.js to build rich visualizations.
-
-## Configuration
-
-### Design Tokens
-
-Customize the visual appearance through the Settings page, or just ask the agent:
-
-> "Change the primary color to purple"
-
-Tokens cover colors (primary, background, surface, text, border), typography (font family, sizes), and spacing.
-
-### Platform Branding
-
-Set a custom platform name, logo, slogan, and visual style through the Settings page.
-
-## License
-
-This project is licensed under the [MIT License](./LICENSE).
+本项目基于 [MIT 许可证](./LICENSE) 开源。

@@ -53,62 +53,6 @@ function detectEnvLang() {
   return envLang || 'en';
 }
 
-function firstMarkdownHeading(filePath) {
-  try {
-    const text = fs.readFileSync(filePath, 'utf8');
-    const line = text.split(/\r?\n/).find((item) => item.startsWith('# '));
-    return line ? line.replace(/^#\s+/, '').trim() : '';
-  } catch {
-    return '';
-  }
-}
-
-function firstReadmeParagraph(filePath) {
-  try {
-    const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
-    let passedHeading = false;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      if (trimmed.startsWith('# ')) {
-        passedHeading = true;
-        continue;
-      }
-      if (!passedHeading || trimmed.startsWith('[') || trimmed.startsWith('![')) continue;
-      return trimmed.replace(/\s+/g, ' ');
-    }
-  } catch {
-    return '';
-  }
-  return '';
-}
-
-function inferProjectInfo(projectDir) {
-  const fallbackName = path.basename(projectDir);
-  const packagePath = path.join(projectDir, 'package.json');
-  const readmePath = ['README.md', 'README.zh-CN.md']
-    .map((file) => path.join(projectDir, file))
-    .find((file) => fs.existsSync(file));
-
-  let pkg = {};
-  try {
-    pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-  } catch {
-    pkg = {};
-  }
-
-  const readmeName = readmePath ? firstMarkdownHeading(readmePath) : '';
-  const readmeDescription = readmePath ? firstReadmeParagraph(readmePath) : '';
-  const name = pkg.name || readmeName || fallbackName || '未命名项目';
-  const description = pkg.description || readmeDescription || '';
-
-  return {
-    name,
-    description,
-    initial: name.charAt(0).toUpperCase(),
-  };
-}
-
 function isProcessAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -194,30 +138,10 @@ async function main() {
   if (firstRun) {
     log('Initializing work directory...');
 
-    // Create data directories
-    fs.mkdirSync(path.join(dataDir, 'data', 'deliveries'), { recursive: true });
+    // Create canvas runtime data directories.
+    fs.mkdirSync(path.join(dataDir, 'data', 'canvas-workspaces'), { recursive: true });
+    fs.mkdirSync(path.join(dataDir, 'data', 'scaffolds'), { recursive: true });
     fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
-
-    // Initialize project.json from the current project so the UI is consistent on first load
-    const detectedProject = inferProjectInfo(process.cwd());
-    const projectConfigPath = path.join(dataDir, 'data', 'project.json');
-    const projectConfig = {
-      name: detectedProject.name,
-      description: detectedProject.description,
-      stage: 'dev',
-      initial: detectedProject.initial,
-      theme: 'system',
-      accent: 'blue',
-      density: 'comfortable',
-      host_mode: 'local',
-    };
-    fs.writeFileSync(projectConfigPath, JSON.stringify(projectConfig, null, 2), 'utf8');
-
-    // Initialize index.json
-    const indexPath = path.join(dataDir, 'data', 'index.json');
-    if (!fs.existsSync(indexPath)) {
-      fs.writeFileSync(indexPath, '[]', 'utf8');
-    }
 
     // Copy server template
     log('  Copying server template...');
@@ -240,7 +164,8 @@ async function main() {
     }
   } else {
     // Ensure data dirs exist on subsequent runs
-    fs.mkdirSync(path.join(dataDir, 'data', 'deliveries'), { recursive: true });
+    fs.mkdirSync(path.join(dataDir, 'data', 'canvas-workspaces'), { recursive: true });
+    fs.mkdirSync(path.join(dataDir, 'data', 'scaffolds'), { recursive: true });
     fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
 
     if (shouldSyncTemplates) {
@@ -295,7 +220,7 @@ async function main() {
   }
 
   // Platform defaults — English uses a named default; non-English falls back to locale values in frontend
-  const PLATFORM_DEFAULTS_EN = { name: 'Task Delivery Center', slogan: 'Make feedback clear. Let agents work easier.', favicon: '🐂' };
+  const PLATFORM_DEFAULTS_EN = { name: 'Visual Delivery Canvas', slogan: 'Think together on a canvas.', favicon: '' };
 
   // Read existing settings to check if platform needs update
   const existingSettings = (() => {
@@ -317,9 +242,9 @@ async function main() {
     const platformValue = (() => {
       const ep = existingSettings.platform || {};
       if (hasCustomPlatform && !isStaleEnPlatform) {
-        return { name: ep.name, slogan: ep.slogan, favicon: ep.favicon || '🐂' };
+        return { name: ep.name, slogan: ep.slogan, favicon: ep.favicon || '' };
       }
-      return isPresetLang ? PLATFORM_DEFAULTS_EN : { name: '', slogan: '', favicon: '🐂' };
+      return isPresetLang ? PLATFORM_DEFAULTS_EN : { name: '', slogan: '', favicon: '' };
     })();
 
     fs.writeFileSync(
