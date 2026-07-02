@@ -26,6 +26,7 @@ import {
 } from '../lib/api';
 import { useDesignTokens } from '../hooks/useDesignTokens';
 import GeneratedContentFrame from '../components/GeneratedContentFrame';
+import ttBrewStudioLogo from '../assets/brand/tt-brew-studio-logo.png';
 import expertLiuYang from '../assets/experts/liuyang.jpg';
 import expertLouYongqi from '../assets/experts/louyongqi.jpg';
 import expertMaJin from '../assets/experts/majin.jpg';
@@ -40,9 +41,18 @@ const DEFAULT_SECTION_SIZE = { w: 960, h: 640 };
 const SECTION_DUPLICATE_OFFSET = { x: 160, y: 120 };
 const DEFAULT_HTML_COMPONENT_SIZE = { w: 360, h: 220 };
 const DEFAULT_COMPLETION_SIZE = { w: 520, h: 300 };
+const DEFAULT_STAGE_CONTENT_ORIGIN = { x: 56, y: 172 };
+const DEFAULT_STAGE_FLOW_GAP = 56;
+const DEFAULT_STAGE_RIGHT_PADDING = 72;
 const ANNOTATION_PURPLE = '#7c3aed';
 const REGION_ANNOTATION_KIND = 'region_annotation';
 const LEGACY_COMPLETION_KIND = 'completion_request';
+const DESIGN_STAGE_ALIASES = new Map([
+  ['discover', 'discover'], ['discovery', 'discover'], ['explore', 'discover'], ['exploration', 'discover'], ['research', 'discover'], ['发现', 'discover'], ['探索', 'discover'], ['调研', 'discover'],
+  ['define', 'define'], ['definition', 'define'], ['framing', 'define'], ['synthesis', 'define'], ['problem', 'define'], ['定义', 'define'], ['收束', 'define'],
+  ['develop', 'develop'], ['development', 'develop'], ['ideate', 'develop'], ['ideation', 'develop'], ['prototype', 'develop'], ['review', 'develop'], ['发展', 'develop'], ['方案', 'develop'], ['原型', 'develop'], ['评审', 'develop'],
+  ['deliver', 'deliver'], ['delivery', 'deliver'], ['handoff', 'deliver'], ['launch', 'deliver'], ['implementation', 'deliver'], ['final', 'deliver'], ['交付', 'deliver'], ['落地', 'deliver'], ['验收', 'deliver'],
+]);
 const PINNED_TLDRAW_TOOL_IDS = ['select', 'hand', 'draw', 'eraser', 'arrow', 'rectangle', 'text', 'frame'];
 const OVERFLOW_TLDRAW_TOOL_IDS = [
   'note',
@@ -137,6 +147,22 @@ function readSelectedShapeIds(editor) {
 
 function isCanvasSectionShape(shape) {
   return shape?.type === 'frame';
+}
+
+function normalizeDesignStageKey(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  const stripped = lower.startsWith('stage.') || lower.startsWith('stage-') ? lower.slice(6) : lower;
+  return DESIGN_STAGE_ALIASES.get(stripped) || DESIGN_STAGE_ALIASES.get(raw) || null;
+}
+
+function stageKeyForShape(shape) {
+  return normalizeDesignStageKey(shape?.meta?.vd_stage_key || shape?.meta?.vd_stage || shape?.meta?.vd_role || shape?.props?.name);
+}
+
+function isCanvasStageFrame(shape) {
+  return isCanvasSectionShape(shape) && Boolean(stageKeyForShape(shape));
 }
 
 function isHtmlComponentShape(shape) {
@@ -762,6 +788,38 @@ function targetShapeIds(target = {}) {
   return Array.from(new Set(ids.filter(Boolean).map(String)));
 }
 
+function annotationShapeIds(annotation = {}) {
+  return targetShapeIds(annotation.target || {})
+    .concat(annotation.shape_id ? [String(annotation.shape_id)] : []);
+}
+
+function workspaceShapeIds(workspace) {
+  const ids = new Set();
+  const add = (value) => {
+    if (value) ids.add(String(value));
+  };
+  const index = workspace?.semantic_index || {};
+  [
+    ...(index.sections || []),
+    ...(index.nodes || []),
+    ...(index.assets || []),
+    ...(index.region_annotations || []),
+    ...(index.completion_requests || []),
+    ...(index.widget_instances || []),
+  ].forEach((item) => add(item.shape_id));
+  const store = workspace?.snapshot?.document?.store || {};
+  Object.entries(store).forEach(([id, record]) => {
+    if (record?.typeName === 'shape') add(id);
+  });
+  return ids;
+}
+
+function referencesExistingShape(shapeIds, existingShapeIds) {
+  if (!shapeIds || shapeIds.length === 0) return false;
+  if (!existingShapeIds) return true;
+  return shapeIds.some((shapeId) => existingShapeIds.has(String(shapeId)));
+}
+
 function feedbackKindLabel(kind) {
   if (kind === 'canvas_annotation') return '标注';
   if (kind === 'annotation_arrow') return '标注箭头';
@@ -769,6 +827,7 @@ function feedbackKindLabel(kind) {
   if (kind === LEGACY_COMPLETION_KIND) return '区域批注';
   if (kind === 'widget_output') return 'Widget 输出';
   if (kind === 'html_component') return '组件反馈';
+  if (kind === 'expert_summon_request') return '召唤专家';
   if (kind === 'canvas_feedback') return '画布反馈';
   return '反馈';
 }
@@ -793,8 +852,16 @@ function isFeedbackItemPending(item) {
 
 function canvasFeedbackPanelItems(workspace) {
   const items = new Map();
+  const existingShapeIds = workspaceShapeIds(workspace);
+  const shouldShowTargetedItem = (kind, shapeIds) => {
+    if (!['canvas_annotation', 'annotation_arrow', REGION_ANNOTATION_KIND, LEGACY_COMPLETION_KIND].includes(kind)) {
+      return true;
+    }
+    return referencesExistingShape(shapeIds, existingShapeIds);
+  };
   const addItem = (item) => {
     if (!item?.id) return;
+    if (!shouldShowTargetedItem(item.kind, item.shapeIds || [])) return;
     const previous = items.get(item.id) || {};
     items.set(item.id, {
       ...previous,
@@ -894,6 +961,24 @@ function semanticIndexFromEditor(editor, workspace) {
   const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
   const sections = shapes.filter(isCanvasSectionShape).map((shape) => describeShape(shape, editor));
   const nodes = shapes.map((shape) => describeShape(shape, editor));
+  const zones = sections
+    .filter((section) => section.meta?.vd_stage_key || String(section.role || '').startsWith('stage.'))
+    .map((section) => {
+      const stage = normalizeDesignStageKey(section.meta?.vd_stage_key || section.role);
+      return {
+        id: `zone-stage-${stage}`,
+        kind: 'design_stage',
+        stage,
+        role: section.role || `stage.${stage}`,
+        title: section.title,
+        page_id: section.page_id,
+        section_id: section.shape_id,
+        bounds: section.bounds,
+        content_origin: section.meta?.vd_stage_content_origin || DEFAULT_STAGE_CONTENT_ORIGIN,
+        flow: 'left_to_right_then_wrap',
+        accepts: ['CanvasIR Template', 'Widget', 'sticky_note', 'shape', 'text', 'image'],
+      };
+    });
   const relationships = [];
   for (const section of sections) {
     for (const childId of section.child_shape_ids || []) {
@@ -913,8 +998,11 @@ function semanticIndexFromEditor(editor, workspace) {
     if (review?.id) layoutReviewsById.set(review.id, review);
   });
   const annotationsById = new Map();
+  const currentShapeIds = new Set(shapes.map((shape) => String(shape.id)));
   (workspace?.semantic_index?.annotations || []).forEach((annotation) => {
-    if (annotation?.id) annotationsById.set(annotation.id, annotation);
+    if (!annotation?.id) return;
+    if (!referencesExistingShape(annotationShapeIds(annotation), currentShapeIds)) return;
+    annotationsById.set(annotation.id, annotation);
   });
   annotationsFromShapes(editor, shapes).forEach((annotation) => {
     if (annotation?.id) annotationsById.set(annotation.id, annotation);
@@ -924,7 +1012,7 @@ function semanticIndexFromEditor(editor, workspace) {
     workspace_id: workspace?.id,
     active_page_id: currentTldrawPageId(editor),
     pages: tldrawPages(editor),
-    zones: workspace?.semantic_index?.zones || [],
+    zones: zones.length > 0 ? zones : (workspace?.semantic_index?.zones || []),
     sections,
     nodes,
     assets: shapes.filter(isImageLikeShape).map((shape) => ({
@@ -1705,7 +1793,11 @@ function ExpertAvatar({ expert, selected = false, size = 58 }) {
 function ActiveExpertsDock({
   experts,
   selectedExpertName,
+  summonDraft,
+  summonSubmitting,
   onSelectExpert,
+  onSummonDraftChange,
+  onSubmitSummon,
 }) {
   const hasExperts = experts.length > 0;
   return (
@@ -1715,25 +1807,87 @@ function ActiveExpertsDock({
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
-      {hasExperts ? experts.map((expert) => {
-        const selected = selectedExpertName === expert.name;
-        return (
-          <button
-            type="button"
-            key={expert.name}
-            style={STYLES.expertParticipantButton(selected)}
-            onClick={() => onSelectExpert(expert)}
-            title={expert.domain ? `${expert.name} · ${expert.domain}` : expert.name}
-            aria-pressed={selected}
-          >
-            <ExpertAvatar expert={expert} selected={selected} />
-            <span style={STYLES.expertParticipantName(selected)}>{expert.name}</span>
-          </button>
-        );
-      }) : (
-        <div style={STYLES.activeExpertsEmpty}>当前未有专家参与讨论</div>
+      {hasExperts ? (
+        <div style={STYLES.expertParticipantList}>
+          {experts.map((expert) => {
+            const selected = selectedExpertName === expert.name;
+            return (
+              <button
+                type="button"
+                key={expert.name}
+                style={STYLES.expertParticipantButton(selected)}
+                onClick={() => onSelectExpert(expert)}
+                title={expert.domain ? `${expert.name} · ${expert.domain}` : expert.name}
+                aria-pressed={selected}
+              >
+                <ExpertAvatar expert={expert} selected={selected} />
+                <span style={STYLES.expertParticipantName(selected)}>{expert.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <form style={STYLES.activeExpertsEmptyState} onSubmit={onSubmitSummon}>
+          <div style={STYLES.activeExpertsEmpty}>当前未有专家参与讨论</div>
+          <div style={STYLES.expertSummonField}>
+            <input
+              type="text"
+              style={STYLES.expertSummonInput}
+              value={summonDraft}
+              onChange={(event) => onSummonDraftChange(event.target.value)}
+              placeholder="输入召唤专家请求"
+              aria-label="召唤专家请求"
+            />
+            <button
+              type="submit"
+              style={STYLES.expertSummonButton(summonSubmitting || !summonDraft.trim())}
+              disabled={summonSubmitting || !summonDraft.trim()}
+              aria-label="发送召唤专家请求"
+            >
+              发送
+            </button>
+          </div>
+        </form>
       )}
     </aside>
+  );
+}
+
+function CanvasCollaborationDock({
+  experts,
+  selectedExpertName,
+  summonDraft,
+  summonSubmitting,
+  feedbackPanelItems,
+  feedbackPanelOpen,
+  feedbackPanelPendingCount,
+  onSelectExpert,
+  onSummonDraftChange,
+  onSubmitSummon,
+  onToggleFeedback,
+  onCloseFeedback,
+  onFocusFeedback,
+}) {
+  return (
+    <div style={STYLES.canvasCollaborationDock(experts.length > 0)}>
+      <ActiveExpertsDock
+        experts={experts}
+        selectedExpertName={selectedExpertName}
+        summonDraft={summonDraft}
+        summonSubmitting={summonSubmitting}
+        onSelectExpert={onSelectExpert}
+        onSummonDraftChange={onSummonDraftChange}
+        onSubmitSummon={onSubmitSummon}
+      />
+      <CanvasFeedbackPanel
+        items={feedbackPanelItems}
+        open={feedbackPanelOpen}
+        pendingCount={feedbackPanelPendingCount}
+        onToggle={onToggleFeedback}
+        onClose={onCloseFeedback}
+        onFocus={onFocusFeedback}
+      />
+    </div>
   );
 }
 
@@ -1899,11 +2053,12 @@ const STYLES = {
     minHeight: '100dvh',
   },
   canvasHeader: {
-    display: 'flex',
-    justifyContent: 'flex-start',
-    alignItems: 'flex-start',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
+    alignItems: 'center',
     gap: 'var(--vd-space-4)',
-    padding: '12px 16px',
+    minHeight: 58,
+    padding: '8px 16px',
     borderBottom: '1px solid var(--vd-border-subtle)',
     background: 'var(--vd-surface-bg)',
   },
@@ -1929,6 +2084,22 @@ const STYLES = {
     color: 'var(--vd-text-primary)',
     fontSize: 'var(--vd-font-size-lg)',
     fontWeight: 'var(--vd-font-weight-bold)',
+  },
+  headerLogoWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+  },
+  headerLogo: {
+    display: 'block',
+    width: 'min(300px, 42vw)',
+    height: 'auto',
+    maxHeight: 42,
+    objectFit: 'contain',
+  },
+  headerBalance: {
+    minWidth: 0,
   },
   canvasArea: {
     flex: 1,
@@ -2052,17 +2223,26 @@ const STYLES = {
     zIndex: 'var(--tl-layer-panels)',
     pointerEvents: 'all',
   },
-  activeExpertsDock: (hasExperts) => ({
+  canvasCollaborationDock: (hasExperts) => ({
     position: 'absolute',
     left: 16,
     top: '50%',
     transform: 'translateY(-50%)',
-    zIndex: 390,
-    width: hasExperts ? 106 : 132,
-    maxHeight: 'min(520px, calc(100% - 144px))',
-    padding: hasExperts ? '18px 12px' : '14px 12px',
+    zIndex: 420,
+    width: hasExperts ? 112 : 188,
+    maxHeight: 'min(620px, calc(100% - 96px))',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+    pointerEvents: 'auto',
+  }),
+  activeExpertsDock: (hasExperts) => ({
+    width: '100%',
+    maxHeight: hasExperts ? 'min(520px, calc(100vh - 180px))' : 'none',
+    padding: hasExperts ? '18px 12px' : '14px 12px 12px',
     border: '1px solid rgba(226, 232, 240, .82)',
-    borderRadius: 28,
+    borderRadius: hasExperts ? 28 : 20,
     background: 'rgba(255, 255, 255, .94)',
     boxShadow: '0 18px 44px rgba(15, 23, 42, .14)',
     backdropFilter: 'blur(14px)',
@@ -2073,6 +2253,13 @@ const STYLES = {
     pointerEvents: 'auto',
     overflowY: 'auto',
   }),
+  activeExpertsEmptyState: {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+    alignItems: 'stretch',
+  },
   activeExpertsEmpty: {
     color: 'var(--vd-text-secondary)',
     fontSize: 'var(--vd-font-size-sm)',
@@ -2080,6 +2267,48 @@ const STYLES = {
     lineHeight: 1.45,
     textAlign: 'center',
     letterSpacing: 0,
+  },
+  expertSummonField: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    width: '100%',
+    minHeight: 36,
+    padding: '4px 4px 4px 10px',
+    border: '1px solid rgba(124, 58, 237, .18)',
+    borderRadius: 999,
+    background: 'rgba(248, 250, 252, .86)',
+  },
+  expertSummonInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 28,
+    border: 'none',
+    outline: 'none',
+    background: 'transparent',
+    color: 'var(--vd-text-primary)',
+    fontFamily: 'var(--vd-font-family)',
+    fontSize: 'var(--vd-font-size-xs)',
+  },
+  expertSummonButton: (disabled) => ({
+    flexShrink: 0,
+    height: 28,
+    minWidth: 42,
+    border: 'none',
+    borderRadius: 999,
+    background: disabled ? 'rgba(124, 58, 237, .22)' : ANNOTATION_PURPLE,
+    color: '#fff',
+    padding: '0 9px',
+    cursor: disabled ? 'default' : 'pointer',
+    fontSize: 11,
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  }),
+  expertParticipantList: {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 18,
   },
   expertParticipantButton: (selected) => ({
     width: '100%',
@@ -2148,20 +2377,20 @@ const STYLES = {
     zIndex: 20,
   },
   canvasFeedbackDock: {
-    position: 'absolute',
-    right: 16,
-    bottom: 16,
-    zIndex: 420,
+    position: 'relative',
+    zIndex: 1,
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'flex-end',
+    alignItems: 'stretch',
     gap: 8,
     pointerEvents: 'auto',
   },
   canvasFeedbackButton: (active) => ({
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
+    width: '100%',
     minHeight: 38,
     padding: '0 13px',
     border: '1px solid rgba(124, 58, 237, .38)',
@@ -2511,6 +2740,8 @@ export default function CanvasWorkspace() {
   const [annotationSubmitting, setAnnotationSubmitting] = useState(false);
   const [feedbackPanelOpen, setFeedbackPanelOpen] = useState(false);
   const [selectedExpertName, setSelectedExpertName] = useState(null);
+  const [expertSummonDraft, setExpertSummonDraft] = useState('');
+  const [expertSummonSubmitting, setExpertSummonSubmitting] = useState(false);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const mounted = useRef(false);
@@ -2671,6 +2902,45 @@ export default function CanvasWorkspace() {
     });
   }
 
+  async function handleSubmitExpertSummon(event) {
+    event.preventDefault();
+    const request = expertSummonDraft.trim();
+    if (!workspace || !request || expertSummonSubmitting) return;
+    setExpertSummonSubmitting(true);
+    try {
+      const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
+        kind: 'expert_summon_request',
+        content: `召唤专家请求：${request}`,
+        author: 'user',
+        status: 'tracked',
+        handled: false,
+        target: {
+          kind: 'expert_participation',
+          workspace_id: workspace.id,
+        },
+        meta: {
+          flagged: true,
+          request,
+        },
+      });
+      setWorkspace((current) => {
+        if (!current || current.id !== workspace.id) return current;
+        return {
+          ...current,
+          feedback: [...(current.feedback || []), feedback],
+          pending_feedback_count: (current.pending_feedback_count || 0) + 1,
+        };
+      });
+      setExpertSummonDraft('');
+      setFeedbackPanelOpen(true);
+      markToolMessage('已提交召唤专家请求。');
+    } catch {
+      markToolMessage('召唤专家请求提交失败，请稍后重试。');
+    } finally {
+      setExpertSummonSubmitting(false);
+    }
+  }
+
   function handleFocusFeedbackPanelItem(item) {
     const editor = editorRef.current;
     if (!editor) return;
@@ -2707,7 +2977,58 @@ export default function CanvasWorkspace() {
     };
   }
 
+  function findCanvasStageFrame(editor, stage) {
+    const stageKey = normalizeDesignStageKey(stage);
+    if (!stageKey) return null;
+    const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+    return shapes.find((shape) => isCanvasStageFrame(shape) && stageKeyForShape(shape) === stageKey) || null;
+  }
+
+  function nextStagePlacement(editor, stageFrame, desiredSize = DEFAULT_SECTION_SIZE) {
+    const stageBounds = getShapePageBounds(editor, stageFrame?.id);
+    if (!stageFrame || !stageBounds) return null;
+    const origin = stageFrame.meta?.vd_stage_content_origin || DEFAULT_STAGE_CONTENT_ORIGIN;
+    const gap = Number(stageFrame.meta?.vd_stage_flow_gap || DEFAULT_STAGE_FLOW_GAP);
+    const rightPadding = Number(stageFrame.meta?.vd_stage_right_padding || DEFAULT_STAGE_RIGHT_PADDING);
+    const start = {
+      x: stageBounds.x + Number(origin.x || DEFAULT_STAGE_CONTENT_ORIGIN.x),
+      y: stageBounds.y + Number(origin.y || DEFAULT_STAGE_CONTENT_ORIGIN.y),
+    };
+    const childIds = editor.getSortedChildIdsForParent?.(stageFrame.id) || [];
+    const childBounds = childIds
+      .map((shapeId) => editor.getShape?.(shapeId))
+      .filter((shape) => shape && !shape.meta?.vd_stage_reserved && !shape.meta?.vd_stage_is_guide)
+      .map((shape) => getShapePageBounds(editor, shape.id))
+      .filter(Boolean);
+    if (childBounds.length === 0) {
+      return {
+        section: stageFrame,
+        bounds: { x: Math.round(start.x), y: Math.round(start.y), w: desiredSize.w, h: desiredSize.h },
+      };
+    }
+    const maxRight = Math.max(...childBounds.map((bounds) => bounds.x + bounds.w));
+    const maxBottom = Math.max(...childBounds.map((bounds) => bounds.y + bounds.h));
+    const minTop = Math.min(...childBounds.map((bounds) => bounds.y));
+    let x = maxRight + gap;
+    let y = minTop;
+    if (x + desiredSize.w > stageBounds.x + stageBounds.w - rightPadding) {
+      x = start.x;
+      y = maxBottom + gap;
+    }
+    return {
+      section: stageFrame,
+      bounds: { x: Math.round(x), y: Math.round(y), w: desiredSize.w, h: desiredSize.h },
+    };
+  }
+
+  function stagePlacementForScaffold(editor, scaffold, desiredSize = DEFAULT_SECTION_SIZE) {
+    const stageFrame = findCanvasStageFrame(editor, scaffold?.stage);
+    if (!stageFrame) return null;
+    return nextStagePlacement(editor, stageFrame, desiredSize);
+  }
+
   function makeCanvasShape({ id, x, y, w, h, text, color = 'blue', kind = 'shape', scaffold = null }) {
+    const normalizedStage = normalizeDesignStageKey(scaffold?.stage) || scaffold?.stage || null;
     if (kind === 'sticky_note') {
       return {
         id,
@@ -2735,7 +3056,7 @@ export default function CanvasWorkspace() {
           ...(scaffold ? {
             vd_scaffold_id: scaffold.id,
             vd_scaffold_title: scaffold.title,
-            vd_stage: scaffold.stage,
+            vd_stage: normalizedStage,
           } : {}),
         },
       };
@@ -2760,13 +3081,14 @@ export default function CanvasWorkspace() {
         ...(scaffold ? {
           vd_scaffold_id: scaffold.id,
           vd_scaffold_title: scaffold.title,
-          vd_stage: scaffold.stage,
+          vd_stage: normalizedStage,
         } : {}),
       },
     };
   }
 
-  function createHtmlComponentShape({ shapeId, title, description, html, bounds, scaffold = null }) {
+  function createHtmlComponentShape({ shapeId, title, description, html, bounds, scaffold = null, stageParent = null }) {
+    const normalizedStage = normalizeDesignStageKey(scaffold?.stage) || scaffold?.stage || null;
     return {
       id: shapeId,
       type: 'geo',
@@ -2807,13 +3129,15 @@ export default function CanvasWorkspace() {
         ...(scaffold ? {
           vd_scaffold_id: scaffold.id,
           vd_scaffold_title: scaffold.title,
-          vd_stage: scaffold.stage,
+          vd_stage: normalizedStage,
+          vd_stage_parent_id: stageParent ? String(stageParent.id) : null,
+          vd_stage_flow_item: Boolean(stageParent),
         } : {}),
       },
     };
   }
 
-  function htmlComponentPlacementBounds(editor) {
+  function htmlComponentPlacementBounds(editor, scaffold = null) {
     const selectedIds = readSelectedShapeIds(editor);
     const activeSection = getActiveSection(editor, selectedIds);
     if (activeSection) {
@@ -2830,6 +3154,8 @@ export default function CanvasWorkspace() {
         };
       }
     }
+    const stagePlacement = stagePlacementForScaffold(editor, scaffold, DEFAULT_HTML_COMPONENT_SIZE);
+    if (stagePlacement) return stagePlacement;
     const viewport = editor?.getViewportPageBounds?.();
     return {
       section: null,
@@ -2845,10 +3171,12 @@ export default function CanvasWorkspace() {
   function handleAddHtmlComponent(scaffold = null) {
     const editor = editorRef.current;
     if (!editor || !workspace) return;
-    const { section, bounds } = htmlComponentPlacementBounds(editor);
+    const { section, bounds } = htmlComponentPlacementBounds(editor, scaffold);
     const shapeId = createShapeId(`vd-html-component-${Date.now()}`);
     const title = scaffold?.title || 'HTML 组件';
     const sizing = scaffold?.sizing || {};
+    const normalizedStage = normalizeDesignStageKey(scaffold?.stage) || scaffold?.stage || null;
+    const stageParent = isCanvasStageFrame(section) ? section : null;
     const finalBounds = {
       ...bounds,
       w: Math.round(Math.min(sizing.max_width || bounds.w, Math.max(sizing.min_width || 240, bounds.w))),
@@ -2862,6 +3190,7 @@ export default function CanvasWorkspace() {
         html: scaffold?.html || DEFAULT_CANVAS_HTML_COMPONENT,
         bounds: finalBounds,
         scaffold,
+        stageParent,
       }),
     ]);
     if (section) editor.reparentShapes?.([shapeId], section.id);
@@ -2875,16 +3204,20 @@ export default function CanvasWorkspace() {
       summary: scaffold ? `从脚手架库添加 widget：${title}。${scaffold.agent_note || ''}` : '添加画布 HTML 组件。',
       target: {
         kind: 'html_component',
-        workspace_id: workspace.id,
-        shape_id: String(shapeId),
-        section_id: section ? String(section.id) : null,
-      },
+          workspace_id: workspace.id,
+          shape_id: String(shapeId),
+          section_id: section ? String(section.id) : null,
+          stage: normalizedStage,
+          parent_stage_shape_id: stageParent ? String(stageParent.id) : null,
+        },
       commands: [
         {
           op: 'add_html_component',
           title,
           shape_id: String(shapeId),
           section_id: section ? String(section.id) : null,
+          stage: normalizedStage,
+          parent_stage_shape_id: stageParent ? String(stageParent.id) : null,
           bounds: finalBounds,
           scaffold_id: scaffold?.id || null,
         },
@@ -3614,9 +3947,20 @@ export default function CanvasWorkspace() {
       handleAddHtmlComponent(scaffold);
       return;
     }
-    const origin = nextOpenCanvasOrigin(editor);
     const sectionSpec = scaffold.structure?.find((item) => item.kind === 'section');
     const sectionBounds = sectionSpec?.bounds || { x: 0, y: 0, w: DEFAULT_SECTION_SIZE.w, h: DEFAULT_SECTION_SIZE.h };
+    const desiredSectionSize = {
+      w: Math.round(sectionBounds.w || DEFAULT_SECTION_SIZE.w),
+      h: Math.round(sectionBounds.h || DEFAULT_SECTION_SIZE.h),
+    };
+    const stagePlacement = stagePlacementForScaffold(editor, scaffold, desiredSectionSize);
+    const origin = stagePlacement
+      ? {
+        x: Math.round(stagePlacement.bounds.x - Math.round(sectionBounds.x || 0)),
+        y: Math.round(stagePlacement.bounds.y - Math.round(sectionBounds.y || 0)),
+      }
+      : nextOpenCanvasOrigin(editor);
+    const normalizedStage = normalizeDesignStageKey(scaffold.stage) || scaffold.stage;
     const sectionId = createShapeId(`vd-scaffold-${scaffold.id}-${Date.now()}`);
     const createdIds = [String(sectionId)];
     const shapes = [
@@ -3637,7 +3981,9 @@ export default function CanvasWorkspace() {
           vd_created_at: new Date().toISOString(),
           vd_scaffold_id: scaffold.id,
           vd_scaffold_title: scaffold.title,
-          vd_stage: scaffold.stage,
+          vd_stage: normalizedStage,
+          vd_stage_parent_id: stagePlacement?.section ? String(stagePlacement.section.id) : null,
+          vd_stage_flow_item: Boolean(stagePlacement?.section),
         },
       },
     ];
@@ -3656,7 +4002,7 @@ export default function CanvasWorkspace() {
         text: `Agent 说明\n\n${scaffold.agent_note}`,
         color: 'violet',
         kind: 'agent_note',
-        scaffold,
+        scaffold: { ...scaffold, stage: normalizedStage },
       }));
     }
 
@@ -3674,7 +4020,7 @@ export default function CanvasWorkspace() {
         text: item.text,
         color: item.color || (item.kind === 'sticky_note' ? 'yellow' : 'blue'),
         kind: item.kind || 'canvas_node',
-        scaffold,
+        scaffold: { ...scaffold, stage: normalizedStage },
       }));
     });
 
@@ -3691,12 +4037,13 @@ export default function CanvasWorkspace() {
         text: `下一步\n${action}`,
         color: 'light-blue',
         kind: 'next_action',
-        scaffold,
+        scaffold: { ...scaffold, stage: normalizedStage },
       }));
     });
 
     editor.createShapes(shapes);
     if (childIds.length > 0) editor.reparentShapes?.(childIds, sectionId);
+    if (stagePlacement?.section) editor.reparentShapes?.([sectionId], stagePlacement.section.id);
     editor.sendToBack?.([sectionId]);
     const scaffoldReview = reviewAndRepairScaffoldLayout(editor, { sectionId, childIds, scaffold });
     editor.setSelectedShapes?.([sectionId]);
@@ -3720,8 +4067,9 @@ export default function CanvasWorkspace() {
           op: 'add_collaboration_scaffold',
           scaffold_id: scaffold.id,
           title: scaffold.title,
-          stage: scaffold.stage,
+          stage: normalizedStage,
           includes_seed_content: (scaffold.seed_content || []).length > 0,
+          parent_stage_shape_id: stagePlacement?.section ? String(stagePlacement.section.id) : null,
           bounds: {
             x: origin.x + Math.round(sectionBounds.x || 0),
             y: origin.y + Math.round(sectionBounds.y || 0),
@@ -4136,6 +4484,10 @@ export default function CanvasWorkspace() {
               <div style={STYLES.headerPrimary}>
                 <h2 style={STYLES.canvasTitle}>{workspace.title}</h2>
               </div>
+              <div style={STYLES.headerLogoWrap}>
+                <img src={ttBrewStudioLogo} alt="TT Brew Studio" style={STYLES.headerLogo} />
+              </div>
+              <div style={STYLES.headerBalance} aria-hidden="true" />
             </header>
             {detailLoading ? (
               <div style={STYLES.empty}>正在加载画布...</div>
@@ -4154,10 +4506,20 @@ export default function CanvasWorkspace() {
                   components={tldrawComponents}
                   onMount={handleMount}
                 />
-                <ActiveExpertsDock
+                <CanvasCollaborationDock
                   experts={discussionExperts}
                   selectedExpertName={selectedExpertName}
+                  summonDraft={expertSummonDraft}
+                  summonSubmitting={expertSummonSubmitting}
+                  feedbackPanelItems={feedbackPanelItems}
+                  feedbackPanelOpen={feedbackPanelOpen}
+                  feedbackPanelPendingCount={feedbackPanelPendingCount}
                   onSelectExpert={handleSelectDiscussionExpert}
+                  onSummonDraftChange={setExpertSummonDraft}
+                  onSubmitSummon={handleSubmitExpertSummon}
+                  onToggleFeedback={() => setFeedbackPanelOpen((value) => !value)}
+                  onCloseFeedback={() => setFeedbackPanelOpen(false)}
+                  onFocusFeedback={handleFocusFeedbackPanelItem}
                 />
                 {scaffoldPickerOpen && (
                   <div
@@ -4227,14 +4589,6 @@ export default function CanvasWorkspace() {
                     />
                   ))}
                 </div>
-                <CanvasFeedbackPanel
-                  items={feedbackPanelItems}
-                  open={feedbackPanelOpen}
-                  pendingCount={feedbackPanelPendingCount}
-                  onToggle={() => setFeedbackPanelOpen((value) => !value)}
-                  onClose={() => setFeedbackPanelOpen(false)}
-                  onFocus={handleFocusFeedbackPanelItem}
-                />
               </div>
             )}
           </>

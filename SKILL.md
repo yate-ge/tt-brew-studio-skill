@@ -77,11 +77,13 @@ DATA_DIR  = {CWD}/.visual-delivery
   （默认 1 位主导 + 2 位支持，其中一个席位必须是方法论锚点；超出专家名册的领域使用
   虚拟专家）→ 向学生说明专家组。路由和专家卡见：
   [references/design-experts.md](references/design-experts.md)。
-- **画板结构**：默认在同一个项目工作 Page 中初始化纵向阶段脊柱：四个全宽阶段带自上而下
-  排列（发现 Discover → 定义 Define → 发展 Develop → 交付 Deliver，角色为 `stage.*`），
-  并添加项目头卡。对已经进行中的项目先做阶段识别，并用一句话向学生确认；已经完成的阶段
-  放回溯归档卡，当前阶段放置对应脚手架包。成熟项目中的新功能也默认在同一工作 Page 内
-  增加独立区域，而不是切换 Page。完整协议见：
+- **画板结构**：默认在同一个项目工作 Page 中初始化四阶段导师工作区：项目头卡 +
+  `发现 Discover`、`定义 Define`、`发展 Develop`、`交付 Deliver` 四个全宽阶段 frame
+  自上而下排列，角色分别为 `stage.discover`、`stage.define`、`stage.develop`、
+  `stage.deliver`。后续方法模板（CanvasIR Template）、Widget、专家批注和学生材料默认放入
+  对应阶段区域，并从该阶段左上工作区开始顺序排列。对已经进行中的项目先做阶段识别，并用
+  一句话向学生确认；已经完成的阶段放回溯归档卡，当前阶段放置对应脚手架包。成熟项目中的
+  新功能也默认在同一工作 Page 内增加独立四阶段区域，而不是切换 Page。完整协议见：
   [references/design-mentor-protocol.md](references/design-mentor-protocol.md)。
 - **方法生成**：脚手架按阶段化方法库即时生成。方法规格是知识，不是预制件；agent 根据
   判断规则决定生成**方法模板（CanvasIR Template）**还是**交互组件（Widget）**，并贴合
@@ -257,9 +259,12 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 - 在 canvas event 中记录创建或修改的 shape ids。
 - 留出足够空白供学生继续协作。
 
-生成的脚手架内容默认从 section 左上角开始流动，容器随内容增长。多 section 的新生成内容
-应包在单个 `scaffold.root` section 中。方法模板（CanvasIR Template）插入可使用 `scale`
-和 `anchor`，同时保持根 frame 比例、子 frame 比例，以及非 frame 内容相对容器左上角的偏移。
+生成的脚手架内容默认放入对应阶段 frame：`discover`、`define`、`develop`、`deliver`。
+当使用 commands 写入时，优先传 `stage`；没有显式 `parent` 时，运行时会把
+`insert_template`、`add_node` 和 `add_widget` 自动放到该阶段区域。阶段内内容从左上角开始
+流动，必要时换行，容器随内容增长。多 section 的新生成内容应包在单个 `scaffold.root`
+section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `anchor`，同时保持根 frame
+比例、子 frame 比例，以及非 frame 内容相对容器左上角的偏移。
 
 ### 画布工具边界
 

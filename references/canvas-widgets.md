@@ -47,6 +47,54 @@ stickies 留在画板上。当 Widget 产出持久 artifact（如最终调色板
 否则使用 CanvasIR 原生节点或方法模板。静态说明、可自由编辑的材料，以及学生应该移动、连接、
 编辑的内容，都属于原生画板节点。
 
+## 项目化 Widget 工程协议
+
+以下约束用于让后续智能体稳定理解 Widget 请求、画板变化和用户反馈。它们不是固定组件菜单，
+而是项目化 Widget 的生成和读取协议。
+
+- **主输入不在 Widget 内完成**：复杂材料来自用户对话、文件上传或已有画板内容；Widget 只做
+  轻量确认、点选、筛选、参数调整、补充一句话和结构化提交。
+- **请求型 Widget 同时写 state 和 emit event**：用户点击提交时，Widget 应先
+  `vd.state.set({ status: "submitted", request_id, request })`，再
+  `vd.emit("*_requested", { request_id, request })`。state 是持续状态，emit 是给智能体的
+  显式处理信号。
+- **智能体读取聚合上下文**：`agent-context` 会暴露 `widget_instances`、
+  `pending_widget_outputs`、`pending_widget_requests`、`open_feedback`、
+  `open_region_annotations`、`recent_events` 和 `edit_summary`。智能体应优先处理这些字段中
+  与当前用户目标相关的变化。
+- **智能体回写状态**：处理请求前先用 `update_widget` 把 Widget 置为
+  `agent_processing`；完成后回写 `result_ready`，材料不足或失败时回写 `error`。
+- **稳定结果要物化**：被用户确认的稳定结果应物化为 CanvasIR 原生画板内容，例如 Persona
+  方法模板、洞察 sticky、竞品墙、海报 artifact、决策记录或关系图。Widget 可以保留为控制台，
+  但不应成为长期设计知识的唯一载体。
+- **Widget 不决定专家介入**：Widget 只提供状态和事件。专家是否、何时、以什么身份介入，
+  由智能体根据当前阶段、风险、用户意图和专家路由自行判断。
+
+推荐项目化 Widget state：
+
+```json
+{
+  "status": "idle|drafting|submitted|agent_processing|result_ready|user_reviewing|accepted|rejected|needs_revision|materialized|error",
+  "request_id": "string|null",
+  "request": {},
+  "result": {},
+  "selected_items": [],
+  "user_notes": "",
+  "error": null,
+  "materialized_shape_ids": []
+}
+```
+
+推荐事件命名：
+
+```text
+*_requested              用户请求智能体处理
+*_updated                本地状态或参数变化
+*_selected               用户选择某个项
+*_accepted               用户确认某个结果
+*_materialize_requested  用户请求物化到画板
+```
+
 ## 3. 三层生成策略
 
 稳定性来自缩小生成面，优先级如下：

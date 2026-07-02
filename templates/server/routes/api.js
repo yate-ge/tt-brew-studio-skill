@@ -6,6 +6,7 @@ const { writeJSON, readJSONArray, readJSONObject, updateJSON } = require('../lib
 const { broadcast } = require('../lib/ws');
 const {
   compileCanvasIR,
+  createProjectStageCanvasIR,
   validateCanvasIR,
   listCanvasTemplates,
   getCanvasTemplate,
@@ -301,6 +302,38 @@ function setupRoutes(app, dataDir) {
     };
   }
 
+  function snapshotShapeIds(snapshot) {
+    const ids = new Set();
+    const store = snapshot?.document?.store || {};
+    Object.entries(store).forEach(([id, record]) => {
+      if (record?.typeName === 'shape') ids.add(String(id));
+    });
+    return ids;
+  }
+
+  function semanticTargetShapeIds(item = {}) {
+    const ids = [];
+    const target = item.target || {};
+    if (Array.isArray(target.shape_ids)) ids.push(...target.shape_ids);
+    else if (target.shape_ids) ids.push(target.shape_ids);
+    if (target.shape_id) ids.push(target.shape_id);
+    if (target.section_id) ids.push(target.section_id);
+    if (item.shape_id) ids.push(item.shape_id);
+    return Array.from(new Set(ids.filter(Boolean).map(String)));
+  }
+
+  function pruneDanglingSemanticAnnotations(index, snapshot) {
+    if (!index || typeof index !== 'object') return index;
+    const ids = snapshotShapeIds(snapshot);
+    const annotations = Array.isArray(index.annotations)
+      ? index.annotations.filter((annotation) => {
+        const targetIds = semanticTargetShapeIds(annotation);
+        return targetIds.length > 0 && targetIds.some((shapeId) => ids.has(shapeId));
+      })
+      : [];
+    return { ...index, annotations };
+  }
+
   function carryCanvasAgentFields(previousIndex = {}, nextIndex = {}) {
     const next = { ...nextIndex };
     if (!Object.prototype.hasOwnProperty.call(next, 'canvas_ir') && previousIndex?.canvas_ir) {
@@ -545,6 +578,39 @@ function setupRoutes(app, dataDir) {
     return readJSONArray(canvasFeedbackFile(workspaceId));
   }
 
+  function canvasSnapshotHasShapes(snapshot = {}) {
+    const store = snapshot?.document?.store || {};
+    return Object.values(store).some((record) => record?.typeName === 'shape');
+  }
+
+  function semanticIndexHasStageSpine(index = {}) {
+    const sections = Array.isArray(index?.sections) ? index.sections : [];
+    const roles = new Set(sections.map((section) => String(section?.role || '')));
+    return ['stage.discover', 'stage.define', 'stage.develop', 'stage.deliver']
+      .every((role) => roles.has(role));
+  }
+
+  async function initializeProjectStageCanvas(workspace, { reason = 'project_stage_canvas_initialized' } = {}) {
+    const ir = createProjectStageCanvasIR({
+      title: workspace.title || '项目画布',
+      purpose: workspace.purpose || '按 Discover / Define / Develop / Deliver 四阶段组织设计导师协作。',
+      current_stage: workspace.context?.current_stage || workspace.context?.stage || 'discover',
+    });
+    const compiled = compileCanvasIR(ir, { previousSnapshot: readCanvasSnapshot(workspace.id) });
+    if (!compiled.valid) {
+      throw new Error(`Failed to initialize project stage canvas: ${compiled.errors?.[0]?.message || compiled.errors?.[0]?.code || 'invalid CanvasIR'}`);
+    }
+    return saveCompiledCanvasIR(workspace, compiled, {
+      summary: '初始化四阶段设计导师画布：Discover / Define / Develop / Deliver。',
+      commands: [{ op: 'initialize_project_stage_canvas', reason }],
+      meta: {
+        template_id: 'project_stage_spine',
+        stage_count: 4,
+        reason,
+      },
+    });
+  }
+
   function pickProjectCanvasWorkspace(workspaces = []) {
     const projectMarked = workspaces.find((workspace) => workspace?.context?.vd_project_document === true);
     if (projectMarked) return projectMarked;
@@ -563,8 +629,8 @@ function setupRoutes(app, dataDir) {
     if (workspaces.length === 0) {
       return createCanvasWorkspace({
         title: '项目画布',
-        purpose: '承载本项目的 tldraw 多页面视觉协作。',
-        tags: ['canvas-pages'],
+        purpose: '承载本项目的四阶段设计导师协作。',
+        tags: ['design-stage-canvas'],
         context: { vd_project_document: true },
         make_active: true,
       });
@@ -576,8 +642,8 @@ function setupRoutes(app, dataDir) {
       target = await writeCanvasWorkspace({
         ...target,
         title: target.title || '项目画布',
-        purpose: target.purpose || '承载本项目的 tldraw 多页面视觉协作。',
-        tags: Array.from(new Set([...(target.tags || []), 'canvas-pages'])),
+        purpose: target.purpose || '承载本项目的四阶段设计导师协作。',
+        tags: Array.from(new Set([...(target.tags || []), 'design-stage-canvas'])),
         context: {
           ...(target.context || {}),
           vd_project_document: true,
@@ -593,7 +659,12 @@ function setupRoutes(app, dataDir) {
       }, { makeActive: true });
     }
 
-    return readCanvasWorkspace(target.id);
+    const refreshed = readCanvasWorkspace(target.id);
+    const snapshot = readCanvasSnapshot(refreshed.id);
+    if (!semanticIndexHasStageSpine(refreshed.semantic_index) && !canvasSnapshotHasShapes(snapshot)) {
+      return initializeProjectStageCanvas(refreshed, { reason: 'empty_project_document_without_stage_spine' });
+    }
+    return refreshed;
   }
 
   function openCanvasFeedback(workspaceId) {
@@ -897,6 +968,9 @@ function setupRoutes(app, dataDir) {
       actor: 'agent',
       summary: '创建 canvas_workspace。',
     });
+    if (context?.vd_project_document === true || context?.vd_initialize_stage_canvas === true) {
+      return initializeProjectStageCanvas(workspace, { reason: 'new_project_document' });
+    }
     return workspace;
   }
 
@@ -906,7 +980,7 @@ function setupRoutes(app, dataDir) {
       type: 'template',
       scope: 'project',
       title: '灵感墙',
-      stage: 'exploration',
+      stage: 'discover',
       description: '用于头脑风暴：包含主题区、灵感 sticky notes、聚类区和用户补充区。',
       agent_note: '当前处于探索阶段，我会先放一个灵感墙和一批启发 sticky notes，方便你删改、移动和继续扩展。',
       structure: [
@@ -929,7 +1003,7 @@ function setupRoutes(app, dataDir) {
       type: 'template',
       scope: 'project',
       title: '需求定义板',
-      stage: 'definition',
+      stage: 'define',
       description: '用于把开放需求收束成目标、约束、用户、成功标准和待确认问题。',
       agent_note: '当前需要定义问题边界，我会放一张需求定义板，并预留用户确认与改写的位置。',
       structure: [
@@ -953,7 +1027,7 @@ function setupRoutes(app, dataDir) {
       type: 'widget',
       scope: 'project',
       title: '优先级选择器',
-      stage: 'review',
+      stage: 'develop',
       description: '透明背景的轻量 HTML widget，用于让用户快速选择下一步优先级。',
       agent_note: '我会放一个可交互的优先级选择器，用户选择会作为 widget 状态和反馈进入上下文。',
       sizing: {
@@ -1248,6 +1322,7 @@ function setupRoutes(app, dataDir) {
       res.json(buildCanvasAgentContext({
         workspace,
         semanticIndex: workspace.semantic_index,
+        events: readCanvasEvents(workspace.id),
         openFeedback: openCanvasFeedback(workspace.id),
         openRegionAnnotations: openRegionAnnotations(workspace),
         openCompletionRequests: openCompletionRequests(workspace),
@@ -1482,7 +1557,10 @@ function setupRoutes(app, dataDir) {
       const normalizedNextIndexBase = guardedIncomingIndex && typeof guardedIncomingIndex === 'object'
         ? carryCanvasAgentFields(
           previousIndex,
-          normalizeCanvasSemanticIndex({ ...guardedIncomingIndex, updated_at: now })
+          pruneDanglingSemanticAnnotations(
+            normalizeCanvasSemanticIndex({ ...guardedIncomingIndex, updated_at: now }),
+            guard.snapshot,
+          )
         )
         : workspace.semantic_index;
       const eventReview = event?.meta?.scaffold_review || null;
@@ -1574,6 +1652,7 @@ function setupRoutes(app, dataDir) {
         handled: false,
         content,
         author: req.body?.author || 'user',
+        meta: req.body?.meta && typeof req.body.meta === 'object' ? req.body.meta : {},
         source: {
           type: 'canvas_workspace',
           workspace_id: workspace.id,
@@ -1590,6 +1669,7 @@ function setupRoutes(app, dataDir) {
         actor: feedback.author,
         summary: content,
         target: feedback.target,
+        meta: feedback.meta,
       });
       res.status(201).json(feedback);
     } catch (err) {

@@ -58,6 +58,97 @@ const DEFAULT_NODE_SIZE = {
   html_component: { w: 360, h: 240 },
 };
 
+const DESIGN_STAGE_SEQUENCE = [
+  {
+    key: 'discover',
+    id: 'stage-discover',
+    role: 'stage.discover',
+    title: '发现 Discover',
+    rhythm: '发散',
+    color: 'yellow',
+    guide: '收集观察、资料、场景和早期疑问；先打开可能性，不急着下结论。',
+  },
+  {
+    key: 'define',
+    id: 'stage-define',
+    role: 'stage.define',
+    title: '定义 Define',
+    rhythm: '收敛',
+    color: 'blue',
+    guide: '把混杂信息收束成问题边界、判断标准、约束和待验证假设。',
+  },
+  {
+    key: 'develop',
+    id: 'stage-develop',
+    role: 'stage.develop',
+    title: '发展 Develop',
+    rhythm: '发散',
+    color: 'green',
+    guide: '生成、比较和迭代多个方案；用低精度原型让讨论具体起来。',
+  },
+  {
+    key: 'deliver',
+    id: 'stage-deliver',
+    role: 'stage.deliver',
+    title: '交付 Deliver',
+    rhythm: '收敛',
+    color: 'violet',
+    guide: '整理可交付物、验收标准、导则、未解决问题和可迁移知识。',
+  },
+];
+
+const DESIGN_STAGE_ALIASES = new Map([
+  ['discover', 'discover'],
+  ['discovery', 'discover'],
+  ['explore', 'discover'],
+  ['exploration', 'discover'],
+  ['research', 'discover'],
+  ['observe', 'discover'],
+  ['immersion', 'discover'],
+  ['发现', 'discover'],
+  ['探索', 'discover'],
+  ['调研', 'discover'],
+  ['define', 'define'],
+  ['definition', 'define'],
+  ['framing', 'define'],
+  ['synthesis', 'define'],
+  ['problem', 'define'],
+  ['定义', 'define'],
+  ['收束', 'define'],
+  ['develop', 'develop'],
+  ['development', 'develop'],
+  ['ideate', 'develop'],
+  ['ideation', 'develop'],
+  ['prototype', 'develop'],
+  ['prototyping', 'develop'],
+  ['create', 'develop'],
+  ['review', 'develop'],
+  ['发展', 'develop'],
+  ['方案', 'develop'],
+  ['原型', 'develop'],
+  ['评审', 'develop'],
+  ['deliver', 'deliver'],
+  ['delivery', 'deliver'],
+  ['handoff', 'deliver'],
+  ['launch', 'deliver'],
+  ['implementation', 'deliver'],
+  ['final', 'deliver'],
+  ['交付', 'deliver'],
+  ['落地', 'deliver'],
+  ['验收', 'deliver'],
+]);
+
+const PROJECT_STAGE_LAYOUT = {
+  width: 2600,
+  headerHeight: 300,
+  stageHeight: 900,
+  stageGap: 96,
+  stageStartY: 396,
+  contentOrigin: { x: 56, y: 172 },
+  contentGap: 56,
+  rightPadding: 72,
+};
+
 const MIN_NODE_SIZE = {
   sticky: { w: 104, h: 64 },
   sticky_note: { w: 104, h: 64 },
@@ -212,6 +303,171 @@ function normalizeBounds(bounds) {
     w: Math.round(width),
     h: Math.round(height),
   };
+}
+
+function normalizeDesignStageKey(value) {
+  if (value && typeof value === 'object') {
+    return normalizeDesignStageKey(value.stage || value.phase || value.key || value.id || value.role);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('stage.')) return normalizeDesignStageKey(lower.slice(6));
+  if (lower.startsWith('stage-')) return normalizeDesignStageKey(lower.slice(6));
+  if (DESIGN_STAGE_ALIASES.has(lower)) return DESIGN_STAGE_ALIASES.get(lower);
+  if (DESIGN_STAGE_ALIASES.has(raw)) return DESIGN_STAGE_ALIASES.get(raw);
+  const compact = safeId(lower);
+  if (DESIGN_STAGE_ALIASES.has(compact)) return DESIGN_STAGE_ALIASES.get(compact);
+  return DESIGN_STAGE_SEQUENCE.some((stage) => stage.key === compact) ? compact : null;
+}
+
+function designStageByKey(value) {
+  const key = normalizeDesignStageKey(value);
+  return DESIGN_STAGE_SEQUENCE.find((stage) => stage.key === key) || null;
+}
+
+function designStageFromCommand(command = {}) {
+  return designStageByKey(
+    command.stage
+      || command.phase
+      || command.target_stage
+      || command.targetStage
+      || command.meta?.vd_stage
+      || command.meta?.stage
+  );
+}
+
+function stageFrameNodeId(value) {
+  const stage = designStageByKey(value);
+  return stage?.id || null;
+}
+
+function createProjectStageCanvasIR(options = {}) {
+  const title = options.title || '项目画布';
+  const purpose = options.purpose || '按 Discover / Define / Develop / Deliver 四阶段组织设计导师协作。';
+  const currentStage = normalizeDesignStageKey(options.current_stage || options.currentStage) || 'discover';
+  const width = positiveNumber(options.width, PROJECT_STAGE_LAYOUT.width);
+  const stageHeight = positiveNumber(options.stage_height || options.stageHeight, PROJECT_STAGE_LAYOUT.stageHeight);
+  const stageGap = nonNegativeNumber(options.stage_gap || options.stageGap, PROJECT_STAGE_LAYOUT.stageGap);
+  const stageStartY = positiveNumber(options.stage_start_y || options.stageStartY, PROJECT_STAGE_LAYOUT.stageStartY);
+  const contentOrigin = {
+    x: nonNegativeNumber(options.content_origin?.x, PROJECT_STAGE_LAYOUT.contentOrigin.x),
+    y: nonNegativeNumber(options.content_origin?.y, PROJECT_STAGE_LAYOUT.contentOrigin.y),
+  };
+  const nodes = [
+    {
+      id: 'project-header',
+      kind: 'section',
+      title: '项目头卡',
+      role: 'project.header',
+      bounds: { x: 0, y: 0, w: width, h: PROJECT_STAGE_LAYOUT.headerHeight },
+      color: 'violet',
+      grid: { cols: 12, cellWidth: 180, rowHeight: 84, gap: 24, padding: 48 },
+      meta: {
+        vd_project_header: true,
+        vd_current_stage: currentStage,
+      },
+    },
+    {
+      id: 'project-brief-card',
+      kind: 'text',
+      title: 'Brief 摘要',
+      role: 'project.header.brief',
+      parent: 'project-header',
+      bounds: { x: 56, y: 76, w: 620, h: 124 },
+      content: '把项目诉求、目标用户、材料状态放在这里。学生可以直接改写。',
+      meta: { vd_editable_prompt: true },
+    },
+    {
+      id: 'project-experts-card',
+      kind: 'text',
+      title: '专家组',
+      role: 'project.header.experts',
+      parent: 'project-header',
+      bounds: { x: 716, y: 76, w: 620, h: 124 },
+      content: '主导专家 + 支持专家。每条判断都保留专家署名和观看方式。',
+      meta: { vd_editable_prompt: true },
+    },
+    {
+      id: 'project-stage-card',
+      kind: 'text',
+      title: '当前阶段',
+      role: 'project.header.current_stage',
+      parent: 'project-header',
+      bounds: { x: 1376, y: 76, w: 620, h: 124 },
+      content: `默认从 ${designStageByKey(currentStage)?.title || '发现 Discover'} 开始；阶段可以回跳，但不要重排四个阶段区域。`,
+      meta: { vd_current_stage: currentStage },
+    },
+  ];
+
+  DESIGN_STAGE_SEQUENCE.forEach((stage, index) => {
+    const y = stageStartY + index * (stageHeight + stageGap);
+    nodes.push({
+      id: stage.id,
+      kind: 'section',
+      title: stage.title,
+      role: stage.role,
+      bounds: { x: 0, y, w: width, h: stageHeight },
+      color: stage.color,
+      grid: { cols: 12, cellWidth: 190, rowHeight: 104, gap: 24, padding: 56 },
+      meta: {
+        vd_stage_key: stage.key,
+        vd_stage_role: stage.role,
+        vd_stage_order: index + 1,
+        vd_stage_rhythm: stage.rhythm,
+        vd_stage_content_origin: contentOrigin,
+        vd_stage_flow_gap: PROJECT_STAGE_LAYOUT.contentGap,
+        vd_stage_right_padding: PROJECT_STAGE_LAYOUT.rightPadding,
+        vd_stage_template_dropzone: true,
+        vd_current_stage: stage.key === currentStage,
+      },
+    });
+    nodes.push({
+      id: `${stage.id}-guide`,
+      kind: 'text',
+      title: `${stage.rhythm}节奏`,
+      role: `${stage.role}.guide`,
+      parent: stage.id,
+      bounds: { x: 56, y: 56, w: 820, h: 84 },
+      content: stage.guide,
+      meta: {
+        vd_stage_key: stage.key,
+        vd_stage_is_guide: true,
+        vd_stage_reserved: true,
+      },
+    });
+  });
+
+  return normalizeCanvasIR({
+    version: 1,
+    board: {
+      title,
+      purpose,
+      reading_order: 'top_to_bottom',
+    },
+    grid: { cols: 12, cellWidth: 200, rowHeight: 120, gap: 24, padding: 0 },
+    layout_policy: {
+      flow: 'top_left',
+      container_sizing: 'content_fit',
+      density: 'loose',
+      preserve_user_content: true,
+      wrap_new_generation: false,
+      wrapper_margin: 72,
+    },
+    nodes,
+    relationships: DESIGN_STAGE_SEQUENCE.slice(0, -1).map((stage, index) => ({
+      id: `stage-flow-${stage.key}-${DESIGN_STAGE_SEQUENCE[index + 1].key}`,
+      from: stage.id,
+      to: DESIGN_STAGE_SEQUENCE[index + 1].id,
+      type: 'stage_flow',
+      label: 'next stage',
+    })),
+    metadata: {
+      template_id: 'project_stage_spine',
+      template_role: 'project.initial_stage_layout',
+      current_stage: currentStage,
+    },
+  });
 }
 
 function areaToBounds(area, grid, origin = { x: 0, y: 0 }) {
@@ -1009,6 +1265,22 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
     authorship: { created_by: 'agent', last_edited_by: 'agent', created_at: now, updated_at: now },
     meta: shape.meta,
   }));
+  const zones = sections
+    .filter((section) => String(section.role || '').startsWith('stage.') || section.meta?.vd_stage_key)
+    .map((section) => ({
+      id: section.meta?.vd_stage_key ? `zone-stage-${section.meta.vd_stage_key}` : `zone-${safeId(section.ir_id)}`,
+      kind: 'design_stage',
+      stage: section.meta?.vd_stage_key || normalizeDesignStageKey(section.role),
+      role: section.role,
+      title: section.title,
+      page_id: pageId,
+      section_id: section.shape_id,
+      ir_id: section.ir_id,
+      bounds: section.bounds,
+      content_origin: section.meta?.vd_stage_content_origin || PROJECT_STAGE_LAYOUT.contentOrigin,
+      flow: 'left_to_right_then_wrap',
+      accepts: ['CanvasIR Template', 'Widget', 'sticky_note', 'shape', 'text', 'image'],
+    }));
   const nodes = tldrawNodes.map(({ node, shape, bounds }) => ({
     shape_id: shape.id,
     page_id: pageId,
@@ -1069,7 +1341,7 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
     pages: Array.isArray(pages) && pages.length > 0
       ? pages
       : [{ id: pageId, name: ir.board.title || 'Page 1', is_active: true }],
-    zones: [],
+    zones,
     sections,
     nodes,
     assets: [],
@@ -1480,6 +1752,130 @@ function placeTemplateFragment(fragment, currentIR, command = {}) {
   return moveRootNodesToAnchor(fragment, anchor);
 }
 
+function findStageParentId(ir, command = {}) {
+  const explicitParent = command.parent ? safeId(command.parent) : null;
+  if (explicitParent && ir.nodes.some((node) => node.id === explicitParent)) return explicitParent;
+  const stage = designStageFromCommand(command);
+  if (!stage) return null;
+  const byId = ir.nodes.find((node) => node.id === stage.id);
+  if (byId) return byId.id;
+  const byRole = ir.nodes.find((node) => node.role === stage.role || node.meta?.vd_stage_key === stage.key);
+  return byRole?.id || null;
+}
+
+function stageContentOriginFor(parentNode) {
+  const origin = parentNode?.meta?.vd_stage_content_origin;
+  return {
+    x: nonNegativeNumber(origin?.x, PROJECT_STAGE_LAYOUT.contentOrigin.x),
+    y: nonNegativeNumber(origin?.y, PROJECT_STAGE_LAYOUT.contentOrigin.y),
+  };
+}
+
+function nextChildOriginInContainer(ir, parentId, desiredSize = { w: 360, h: 240 }) {
+  const parent = ir.nodes.find((node) => node.id === safeId(parentId));
+  const origin = stageContentOriginFor(parent);
+  const gap = nonNegativeNumber(parent?.meta?.vd_stage_flow_gap, PROJECT_STAGE_LAYOUT.contentGap);
+  const rightPadding = nonNegativeNumber(parent?.meta?.vd_stage_right_padding, PROJECT_STAGE_LAYOUT.rightPadding);
+  const stageWidth = positiveNumber(parent?.bounds?.w, PROJECT_STAGE_LAYOUT.width);
+  const flowChildren = ir.nodes
+    .filter((node) => safeId(node.parent) === safeId(parentId) && !node.meta?.vd_stage_reserved && !node.meta?.vd_stage_is_guide)
+    .map((node) => normalizeBounds(node.bounds))
+    .filter(Boolean);
+
+  if (flowChildren.length === 0) return origin;
+
+  const maxRight = Math.max(...flowChildren.map((bounds) => bounds.x + bounds.w));
+  const maxBottom = Math.max(...flowChildren.map((bounds) => bounds.y + bounds.h));
+  const minTop = Math.min(...flowChildren.map((bounds) => bounds.y));
+  const desiredW = positiveNumber(desiredSize.w, DEFAULT_NODE_SIZE.shape.w);
+  let x = maxRight + gap;
+  let y = minTop;
+  if (x + desiredW > stageWidth - rightPadding) {
+    x = origin.x;
+    y = maxBottom + gap;
+  }
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function reparentFragmentRoots(fragment, currentIR, parentId, command = {}) {
+  const parent = currentIR.nodes.find((node) => node.id === safeId(parentId));
+  if (!parent) return fragment;
+  const layoutIR = {
+    ...fragment,
+    layout_policy: { ...normalizeLayoutPolicy(fragment.layout_policy), wrap_new_generation: false },
+  };
+  const layout = resolveLayout(
+    layoutIR,
+    new Map(fragment.nodes.map((node) => [node.id, node])),
+    buildChildrenByParent(fragment.nodes)
+  );
+  const roots = fragment.nodes.filter((node) => !node.parent);
+  const rootBounds = roots.map((node) => layout.get(node.id)?.bounds).filter(Boolean);
+  if (rootBounds.length === 0) return fragment;
+  const minX = Math.min(...rootBounds.map((bounds) => bounds.x));
+  const minY = Math.min(...rootBounds.map((bounds) => bounds.y));
+  const maxX = Math.max(...rootBounds.map((bounds) => bounds.x + bounds.w));
+  const maxY = Math.max(...rootBounds.map((bounds) => bounds.y + bounds.h));
+  const explicitAnchor = commandAnchor(command);
+  const origin = explicitAnchor || nextChildOriginInContainer(currentIR, parent.id, {
+    w: maxX - minX,
+    h: maxY - minY,
+  });
+  const rootIds = new Set(roots.map((node) => node.id));
+  const stageKey = parent.meta?.vd_stage_key || normalizeDesignStageKey(parent.role);
+  return {
+    ...fragment,
+    nodes: fragment.nodes.map((node) => {
+      const bounds = layout.get(node.id)?.bounds;
+      if (!rootIds.has(node.id) || !bounds) {
+        return {
+          ...node,
+          meta: {
+            ...(node.meta || {}),
+            vd_stage: stageKey || node.meta?.vd_stage,
+            vd_stage_parent_ir_id: parent.id,
+          },
+        };
+      }
+      return {
+        ...node,
+        parent: parent.id,
+        area: null,
+        bounds: {
+          x: Math.round(origin.x + (bounds.x - minX)),
+          y: Math.round(origin.y + (bounds.y - minY)),
+          w: bounds.w,
+          h: bounds.h,
+        },
+        meta: {
+          ...(node.meta || {}),
+          vd_stage: stageKey || node.meta?.vd_stage,
+          vd_stage_parent_ir_id: parent.id,
+          vd_stage_flow_item: true,
+        },
+      };
+    }),
+    metadata: {
+      ...fragment.metadata,
+      stage_parent: parent.id,
+      stage_key: stageKey || null,
+    },
+  };
+}
+
+function boundsForStageCommand(ir, parentId, kind, command = {}) {
+  if (command.bounds || command.area) return command.bounds || null;
+  const meta = command.meta && typeof command.meta === 'object' ? command.meta : {};
+  const size = nodeDesiredSize({ kind, meta });
+  const origin = nextChildOriginInContainer(ir, parentId, size);
+  return {
+    x: origin.x,
+    y: origin.y,
+    w: size.w,
+    h: size.h,
+  };
+}
+
 function instantiateTemplate(templateId, options = {}) {
   const template = getCanvasTemplate(templateId);
   if (!template) throw new Error(`Unknown canvas template: ${templateId}`);
@@ -1575,7 +1971,10 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         results.push({ op, status: 'applied', template_id: command.template_id || command.template || 'business_model_canvas' });
         continue;
       }
-      const placedFragment = placeTemplateFragment(fragment, ir, command);
+      const stageParentId = findStageParentId(ir, command);
+      const placedFragment = stageParentId
+        ? reparentFragmentRoots(fragment, ir, stageParentId, command)
+        : placeTemplateFragment(fragment, ir, command);
       const offset = nextRootRow(ir);
       const nodeIdPrefix = safeId(command.instance_id || command.template_id || command.template || 'template');
       const existingIds = new Set(ir.nodes.map((item) => item.id));
@@ -1600,21 +1999,38 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         from: idMap.get(rel.from) || rel.from,
         to: idMap.get(rel.to) || rel.to,
       })));
-      results.push({ op, status: 'applied', template_id: command.template_id || command.template || 'business_model_canvas' });
+      results.push({
+        op,
+        status: 'applied',
+        template_id: command.template_id || command.template || 'business_model_canvas',
+        parent: stageParentId || null,
+        stage: stageParentId ? ir.nodes.find((node) => node.id === stageParentId)?.meta?.vd_stage_key || null : null,
+      });
     } else if (op === 'add_node') {
+      const parent = command.parent ? safeId(command.parent) : findStageParentId(ir, command);
+      const kind = command.kind || 'sticky';
+      const bounds = parent ? boundsForStageCommand(ir, parent, kind, command) : command.bounds;
       const node = normalizeIRNode({
-        id: command.id || `${safeId(command.parent || 'root')}.node-${Date.now()}`,
-        kind: command.kind || 'sticky',
+        id: command.id || `${safeId(parent || 'root')}.node-${Date.now()}`,
+        kind,
         title: command.title,
         role: command.role,
-        parent: command.parent,
+        parent,
         area: command.area,
-        bounds: command.bounds,
+        bounds,
         content: command.content || command.text,
         color: command.color,
+        meta: {
+          ...(command.meta || {}),
+          ...(parent ? {
+            vd_stage: ir.nodes.find((item) => item.id === parent)?.meta?.vd_stage_key || undefined,
+            vd_stage_parent_ir_id: parent,
+            vd_stage_flow_item: true,
+          } : {}),
+        },
       }, ir.nodes.length);
       ir.nodes.push(node);
-      results.push({ op, status: 'applied', node_id: node.id });
+      results.push({ op, status: 'applied', node_id: node.id, parent: node.parent || null });
     } else if (op === 'edit_node') {
       const node = ir.nodes.find((item) => item.id === safeId(command.id));
       if (!node) {
@@ -1644,23 +2060,40 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         results.push({ op, status: 'rejected', errors: review.errors, widget_review: review });
         continue;
       }
+      const parent = command.parent ? safeId(command.parent) : findStageParentId(ir, command);
       const meta = canvasWidgets.widgetNodeMeta(spec, { actor: 'agent', review, version: 1 });
+      const bounds = parent
+        ? boundsForStageCommand(ir, parent, 'html_component', {
+          ...command,
+          meta: {
+            vd_sizing: spec.sizing,
+          },
+        })
+        : command.bounds;
       const node = normalizeIRNode({
         id: command.id || `widget-${Date.now()}`,
         kind: 'html_component',
         title: spec.title,
         role: command.role || 'widget',
-        parent: command.parent,
+        parent,
         area: command.area,
-        bounds: command.bounds,
+        bounds,
         content: spec.description,
-        meta,
+        meta: {
+          ...meta,
+          ...(parent ? {
+            vd_stage: ir.nodes.find((item) => item.id === parent)?.meta?.vd_stage_key || undefined,
+            vd_stage_parent_ir_id: parent,
+            vd_stage_flow_item: true,
+          } : {}),
+        },
       }, ir.nodes.length);
       ir.nodes.push(node);
       results.push({
         op,
         status: 'applied',
         node_id: node.id,
+        parent: node.parent || null,
         template_id: spec.template_id,
         widget_review: review,
       });
@@ -1761,19 +2194,84 @@ function collectDescendantIds(ir, rootId) {
   return ids;
 }
 
+function compactRecentEvents(events = []) {
+  return (Array.isArray(events) ? events : []).slice(-20).map((event) => ({
+    id: event.id,
+    type: event.type,
+    actor: event.actor,
+    summary: event.summary,
+    target: event.target || null,
+    commands: Array.isArray(event.commands) ? event.commands : [],
+    semantic_diff: event.semantic_diff || null,
+    meta: event.meta || {},
+    created_at: event.created_at || event.createdAt || null,
+  }));
+}
+
+function pendingWidgetOutputs(openFeedback = []) {
+  return (Array.isArray(openFeedback) ? openFeedback : [])
+    .filter((item) => item?.kind === 'widget_output')
+    .map((item) => {
+      const target = item.target || {};
+      const payload = target.payload || {};
+      return {
+        feedback_id: item.id,
+        event_type: payload.event_type || target.action || null,
+        widget_id: target.component_id || target.shape_id || null,
+        shape_id: target.shape_id || null,
+        component_id: target.component_id || null,
+        widget_title: target.component_title || null,
+        payload,
+        schema_valid: target.schema_valid !== false,
+        content: item.content || '',
+        created_at: item.created_at || item.createdAt || null,
+      };
+    });
+}
+
+function pendingWidgetRequests(widgetInstances = []) {
+  const pendingStatuses = new Set(['submitted', 'agent_processing', 'needs_revision']);
+  return (Array.isArray(widgetInstances) ? widgetInstances : [])
+    .filter((widget) => pendingStatuses.has(String(widget?.state?.status || '')))
+    .map((widget) => ({
+      widget_id: widget.id,
+      shape_id: widget.shape_id,
+      component_id: widget.component_id,
+      title: widget.title,
+      status: widget.state?.status || null,
+      request_id: widget.state?.request_id || null,
+      request: widget.state?.request || {},
+      state_version: widget.state_version || 0,
+      state_actor: widget.state_actor || null,
+      bounds: widget.bounds || null,
+    }));
+}
+
 function buildCanvasAgentContext({
   workspace,
   semanticIndex,
+  events = [],
   openFeedback = [],
   openRegionAnnotations = [],
   openCompletionRequests = [],
 }) {
   const ir = semanticIndex?.canvas_ir || null;
   const nodeIndex = Array.isArray(semanticIndex?.ir_node_index) ? semanticIndex.ir_node_index : [];
+  const widgetInstances = Array.isArray(semanticIndex?.widget_instances) ? semanticIndex.widget_instances : [];
   return {
     type: 'canvas_workspace_agent_context_v2',
     preferred_write_api: 'CanvasIR or commands API',
     direct_snapshot_write: 'debug_only',
+    stage_routing: {
+      default: '当 command 带 stage 且没有显式 parent 时，运行时把 template/widget/node 放入对应阶段 frame。',
+      stages: DESIGN_STAGE_SEQUENCE.map((stage) => ({
+        key: stage.key,
+        role: stage.role,
+        parent_id: stage.id,
+        title: stage.title,
+        rhythm: stage.rhythm,
+      })),
+    },
     workspace: {
       id: workspace.id,
       title: workspace.title,
@@ -1789,38 +2287,62 @@ function buildCanvasAgentContext({
       relationship_count: ir.relationships.length,
       nodes: nodeIndex,
     } : null,
+    edit_summary: semanticIndex?.edit_summary || null,
+    recent_events: compactRecentEvents(events),
     open_feedback: openFeedback,
     open_region_annotations: openRegionAnnotations,
     open_completion_requests: openCompletionRequests,
     available_templates: listCanvasTemplates(),
     available_widget_templates: canvasWidgets.listWidgetTemplates(),
-    widget_instances: Array.isArray(semanticIndex?.widget_instances) ? semanticIndex.widget_instances : [],
+    widget_instances: widgetInstances,
+    pending_widget_outputs: pendingWidgetOutputs(openFeedback),
+    pending_widget_requests: pendingWidgetRequests(widgetInstances),
     command_schema: {
       ops: ['insert_template', 'add_node', 'edit_node', 'delete_node', 'move_node', 'locate_node', 'add_widget', 'update_widget'],
       target_ids: '使用 CanvasIR node id / slot id / 方法模板实例 id，不要使用 tldraw shape id。',
       page_rule: '默认所有内容都写入当前工作 Page；不要主动创建、切换或要求用户切换 tldraw Page，除非用户明确要求多 Page 工作。',
+      stage_rule: '默认使用 stage: discover | define | develop | deliver 指定落位。没有 parent 时，insert_template/add_node/add_widget 会自动放入对应阶段区域，从左上开始顺序排列。',
       template_terms: 'available_templates 是方法模板（CanvasIR Template），用于静态设计方法脚手架；available_widget_templates 是交互组件模板，用于参数化创建 Widget。',
-      insert_template_options: ['template_id', 'title', 'seed', 'scale', 'anchor', 'position', 'x', 'y'],
-      widget_rule: '优先用 add_widget + template_id + params 调用 available_widget_templates 中的交互组件模板。'
-        + '只有现有交互组件模板无法承载时，才生成自由 HTML fragment（不能有 <html>/<head>/<body>，不能固定根尺寸，不能有外部 scripts）；'
-        + '挂载前会被校验。用 update_widget + state_patch 修改交互组件数据；'
-        + '从 widget_instances 读取当前交互组件 state。',
+      insert_template_options: ['template_id', 'title', 'stage', 'parent', 'seed', 'scale', 'anchor', 'position', 'x', 'y'],
+      widget_rule: 'Widget 用于轻交互、状态、异步请求、参数控制、可视化和结构化输出；复杂材料输入应来自对话、文件或画板内容。'
+        + '优先复用 available_widget_templates 中的通用原语；项目化微型工具可生成自由 HTML fragment（不能有 <html>/<head>/<body>，不能固定根尺寸，不能有外部 scripts）。'
+        + '请求型 Widget 应同时 vd.state.set({status:"submitted",request_id,request}) 和 vd.emit("*_requested",{request_id,request})。'
+        + '智能体从 pending_widget_outputs、pending_widget_requests 和 widget_instances 读取待处理请求；处理时先 update_widget 到 agent_processing，再回写 result_ready/error。'
+        + '稳定结果应物化为 CanvasIR 原生画板内容；Widget 不决定专家介入，智能体按 skill 判断是否需要专家批注或评审。',
+      recommended_widget_state: {
+        status: 'idle|drafting|submitted|agent_processing|result_ready|user_reviewing|accepted|rejected|needs_revision|materialized|error',
+        request_id: 'string|null',
+        request: {},
+        result: {},
+        selected_items: [],
+        user_notes: '',
+        error: null,
+        materialized_shape_ids: [],
+      },
+      widget_event_naming: {
+        request: '*_requested',
+        update: '*_updated',
+        selected: '*_selected',
+        accepted: '*_accepted',
+        materialize_request: '*_materialize_requested',
+      },
     },
     minimal_examples: [
       {
         op: 'insert_template',
         template_id: 'business_model_canvas',
         title: 'AI 桌面机器人商业模式画布',
+        stage: 'define',
       },
       {
         op: 'add_node',
-        parent: 'value_propositions',
+        stage: 'discover',
         kind: 'sticky',
         content: '用实体存在感降低 AI 工具的抽象感',
       },
       {
         op: 'add_widget',
-        parent: 'decision_zone',
+        stage: 'develop',
         template_id: 'vote',
         params: { question: '哪个方向继续深化？', options: ['方向 A', '方向 B', '方向 C'] },
       },
@@ -1835,6 +2357,9 @@ function buildCanvasAgentContext({
 
 module.exports = {
   DEFAULT_TLDRAW_SCHEMA,
+  DESIGN_STAGE_SEQUENCE,
+  normalizeDesignStageKey,
+  createProjectStageCanvasIR,
   normalizeCanvasIR,
   validateCanvasIR,
   compileCanvasIR,

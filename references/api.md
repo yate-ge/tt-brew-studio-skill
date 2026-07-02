@@ -203,9 +203,11 @@ the user explicitly asks for multi Page work:
     "agent_rev": 2
   },
   "current_ir_summary": {},
-  "sections": [],
-  "nodes": [],
+  "edit_summary": {},
+  "recent_events": [],
   "widget_instances": [],
+  "pending_widget_outputs": [],
+  "pending_widget_requests": [],
   "open_feedback": [],
   "open_region_annotations": [],
   "open_completion_requests": [],
@@ -234,8 +236,8 @@ Dry-runs a CanvasIR write or template insert without saving.
 {
   "template_id": "business_model_canvas",
   "title": "AI 桌面机器人商业模式画布",
+  "stage": "define",
   "scale": 1.25,
-  "anchor": { "x": 320, "y": 240 },
   "seed": {
     "value_propositions": ["实体 AI presence 降低工具抽象感"]
   }
@@ -255,7 +257,11 @@ action, are preserved.
 Applies semantic CanvasIR commands. Agents should reference CanvasIR node ids
 and slot ids, not tldraw shape ids. Commands operate on the current work Page.
 Default work keeps all content on that Page; other Pages, if present from legacy
-or explicit user action, are preserved.
+or explicit user action, are preserved. For normal design mentor work, pass
+`stage: "discover" | "define" | "develop" | "deliver"`; when `parent` is omitted,
+the runtime places `insert_template`, `add_node`, and `add_widget` into that stage
+frame from the top-left flow area. Use `parent` only when targeting a specific
+existing section or slot.
 
 ```json
 {
@@ -263,14 +269,14 @@ or explicit user action, are preserved.
     {
       "op": "add_node",
       "id": "idea-1",
-      "parent": "discussion-section",
+      "stage": "discover",
       "kind": "sticky",
       "content": "桌面机器人把 AI 从抽象工具变成可见伙伴"
     },
     {
       "op": "add_widget",
       "id": "word-cloud",
-      "parent": "discussion-section",
+      "stage": "develop",
       "template_id": "word_cloud",
       "params": {
         "title": "主题词云",
