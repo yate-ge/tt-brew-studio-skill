@@ -1027,7 +1027,9 @@ function CanvasArtifact({ reportId, section, artifact, onCanvasSnapshot, onAddFe
         </div>
       </div>
       <div style={{ ...styles.canvas, ...(isReportCanvas ? styles.canvasReportStage : {}), ...(isFullscreen ? styles.canvasFullscreenStage : {}) }}>
-        <Tldraw persistenceKey={`vd-report-${reportId}-${section.id}`} onMount={handleMount} />
+        {/* No persistenceKey: report canvas state persists through the
+            server; local IndexedDB would overwrite it with stale state. */}
+        <Tldraw onMount={handleMount} />
       </div>
     </div>
   );
