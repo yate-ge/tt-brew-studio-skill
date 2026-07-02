@@ -462,6 +462,119 @@ function selectionAnnotationTargetFromEditor(editor) {
   };
 }
 
+function targetShapeIds(target = {}) {
+  const ids = Array.isArray(target.shape_ids) ? [...target.shape_ids] : [];
+  if (target.shape_id) ids.push(target.shape_id);
+  if (target.section_id) ids.push(target.section_id);
+  if (target.component_id && String(target.component_id).startsWith('shape:')) ids.push(target.component_id);
+  return Array.from(new Set(ids.filter(Boolean).map(String)));
+}
+
+function feedbackKindLabel(kind) {
+  if (kind === 'canvas_annotation') return '标注';
+  if (kind === 'annotation_arrow') return '标注箭头';
+  if (kind === 'completion_request') return '补全请求';
+  if (kind === 'widget_output') return 'Widget 输出';
+  if (kind === 'html_component') return '组件反馈';
+  if (kind === 'canvas_feedback') return '画布反馈';
+  return '反馈';
+}
+
+function feedbackStatusLabel(item) {
+  const status = item.status || item.raw?.status;
+  if (status === 'addressed') return '已处理';
+  if (status === 'confirmed') return '已确认';
+  if (status === 'archived') return '已归档';
+  if (status === 'completed') return '已完成';
+  if (status === 'in_progress') return '进行中';
+  if (status === 'open') return '开放';
+  if (status === 'tracked' || item.raw?.handled === false || item.flagged) return '待处理';
+  return '已提交';
+}
+
+function isFeedbackItemPending(item) {
+  const status = item?.status || item?.raw?.status;
+  if (item?.flagged) return true;
+  return ['tracked', 'open', 'in_progress'].includes(status);
+}
+
+function canvasFeedbackPanelItems(workspace) {
+  const items = new Map();
+  const addItem = (item) => {
+    if (!item?.id) return;
+    const previous = items.get(item.id) || {};
+    items.set(item.id, {
+      ...previous,
+      ...item,
+      shapeIds: Array.from(new Set([...(previous.shapeIds || []), ...(item.shapeIds || [])])),
+    });
+  };
+
+  (workspace?.feedback || []).forEach((feedback) => {
+    const target = feedback.target || {};
+    addItem({
+      id: `feedback:${feedback.id}`,
+      sourceId: feedback.id,
+      kind: feedback.kind || 'canvas_feedback',
+      label: feedbackKindLabel(feedback.kind || 'canvas_feedback'),
+      content: feedback.content || '未填写内容',
+      status: feedback.status || (feedback.handled === false ? 'tracked' : 'submitted'),
+      flagged: feedback.status === 'tracked' || feedback.handled === false || feedback.meta?.flagged,
+      createdAt: feedback.created_at || feedback.createdAt,
+      target,
+      shapeIds: targetShapeIds(target),
+      raw: feedback,
+    });
+  });
+
+  (workspace?.semantic_index?.annotations || []).forEach((annotation, index) => {
+    const target = annotation.target || {};
+    const feedbackId = annotation.feedback_id || target.annotation_feedback_id;
+    const id = feedbackId ? `feedback:${feedbackId}` : `annotation:${annotation.id || annotation.shape_id || index}`;
+    addItem({
+      id,
+      sourceId: annotation.id || feedbackId,
+      kind: annotation.kind || annotation.type || 'canvas_annotation',
+      label: feedbackKindLabel(annotation.kind || annotation.type || 'canvas_annotation'),
+      content: annotation.text || annotation.content || '未填写标注内容',
+      status: annotation.status || (annotation.flagged ? 'tracked' : 'submitted'),
+      flagged: annotation.flagged === true,
+      createdAt: annotation.created_at || annotation.createdAt,
+      target,
+      shapeIds: targetShapeIds(target).concat(annotation.shape_id ? [String(annotation.shape_id)] : []),
+      raw: annotation,
+    });
+  });
+
+  (workspace?.semantic_index?.completion_requests || []).forEach((request, index) => {
+    const shapeId = request.shape_id || request.id;
+    addItem({
+      id: `completion:${shapeId || request.prompt || request.title || index}`,
+      sourceId: shapeId,
+      kind: 'completion_request',
+      label: feedbackKindLabel('completion_request'),
+      content: request.prompt || request.text || request.title || '未填写补全请求',
+      status: request.status || 'open',
+      flagged: ['open', 'in_progress'].includes(request.status || 'open'),
+      createdAt: request.created_at || request.createdAt,
+      target: {
+        kind: 'completion_request',
+        shape_id: shapeId,
+        shape_ids: shapeId ? [shapeId] : [],
+        bounds: request.bounds,
+      },
+      shapeIds: shapeId ? [String(shapeId)] : [],
+      raw: request,
+    });
+  });
+
+  return Array.from(items.values()).sort((a, b) => {
+    const at = new Date(a.createdAt || 0).getTime();
+    const bt = new Date(b.createdAt || 0).getTime();
+    return bt - at;
+  });
+}
+
 function semanticIndexFromEditor(editor, workspace) {
   const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
   const sections = shapes.filter(isCanvasSectionShape).map((shape) => describeShape(shape, editor));
@@ -1166,6 +1279,83 @@ function CanvasAnnotationPopover({
   );
 }
 
+function CanvasFeedbackPanel({
+  items,
+  open,
+  pendingCount,
+  onToggle,
+  onClose,
+  onFocus,
+}) {
+  const total = items.length;
+  return (
+    <div
+      style={STYLES.canvasFeedbackDock}
+      onPointerDown={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      {open && (
+        <section style={STYLES.canvasFeedbackPanel} aria-label="画布提交内容">
+          <div style={STYLES.canvasFeedbackPanelHeader}>
+            <div>
+              <div style={STYLES.canvasFeedbackPanelTitle}>提交内容</div>
+              <div style={STYLES.canvasFeedbackPanelMeta}>
+                {total} 条内容 · {pendingCount} 条待处理
+              </div>
+            </div>
+            <button
+              type="button"
+              style={STYLES.canvasFeedbackPanelClose}
+              onClick={onClose}
+              aria-label="关闭反馈面板"
+            >
+              ×
+            </button>
+          </div>
+          <div style={STYLES.canvasFeedbackList}>
+            {items.length === 0 ? (
+              <div style={STYLES.canvasFeedbackEmpty}>还没有提交内容。</div>
+            ) : items.map((item) => (
+              <article key={item.id} style={STYLES.canvasFeedbackItem}>
+                <div style={STYLES.canvasFeedbackItemTop}>
+                  <span style={STYLES.canvasFeedbackKind}>{item.label}</span>
+                  <span style={STYLES.canvasFeedbackStatus(isFeedbackItemPending(item))}>
+                    {feedbackStatusLabel(item)}
+                  </span>
+                </div>
+                <div style={STYLES.canvasFeedbackContent}>{item.content}</div>
+                <div style={STYLES.canvasFeedbackFooter}>
+                  <span style={STYLES.canvasFeedbackTime}>{formatDate(item.createdAt)}</span>
+                  {item.shapeIds?.length > 0 && (
+                    <button
+                      type="button"
+                      style={STYLES.canvasFeedbackLocateButton}
+                      onClick={() => onFocus(item)}
+                    >
+                      定位
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+      <button
+        type="button"
+        data-testid="canvas.feedback-panel.toggle"
+        style={STYLES.canvasFeedbackButton(open)}
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label="打开画布提交内容"
+      >
+        反馈
+        {total > 0 && <span style={STYLES.canvasFeedbackCount}>{total}</span>}
+      </button>
+    </div>
+  );
+}
+
 const STYLES = {
   page: {
     display: 'grid',
@@ -1398,6 +1588,159 @@ const STYLES = {
     pointerEvents: 'none',
     zIndex: 20,
   },
+  canvasFeedbackDock: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+    zIndex: 420,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 8,
+    pointerEvents: 'auto',
+  },
+  canvasFeedbackButton: (active) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 38,
+    padding: '0 13px',
+    border: '1px solid rgba(124, 58, 237, .38)',
+    borderRadius: 8,
+    background: active ? 'rgba(124, 58, 237, .98)' : 'rgba(255, 255, 255, .96)',
+    color: active ? '#fff' : '#5b21b6',
+    boxShadow: '0 12px 28px rgba(76, 29, 149, .18)',
+    cursor: 'pointer',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  }),
+  canvasFeedbackCount: {
+    minWidth: 20,
+    height: 20,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    background: 'rgba(124, 58, 237, .12)',
+    color: 'inherit',
+    fontSize: 11,
+    fontWeight: 'var(--vd-font-weight-bold)',
+  },
+  canvasFeedbackPanel: {
+    width: 'min(380px, calc(100vw - 40px))',
+    maxHeight: 'min(460px, calc(100vh - 176px))',
+    display: 'flex',
+    flexDirection: 'column',
+    border: '1px solid rgba(124, 58, 237, .28)',
+    borderRadius: 8,
+    background: 'rgba(255, 255, 255, .98)',
+    boxShadow: '0 20px 42px rgba(76, 29, 149, .18)',
+    overflow: 'hidden',
+  },
+  canvasFeedbackPanelHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    padding: '12px 14px',
+    borderBottom: '1px solid rgba(124, 58, 237, .14)',
+  },
+  canvasFeedbackPanelTitle: {
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  },
+  canvasFeedbackPanelMeta: {
+    marginTop: 3,
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+  },
+  canvasFeedbackPanelClose: {
+    width: 28,
+    height: 28,
+    border: '1px solid var(--vd-border-subtle)',
+    borderRadius: 7,
+    background: 'var(--vd-page-bg)',
+    color: 'var(--vd-text-secondary)',
+    cursor: 'pointer',
+    fontSize: 18,
+    lineHeight: 1,
+  },
+  canvasFeedbackList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    padding: 10,
+    overflowY: 'auto',
+  },
+  canvasFeedbackItem: {
+    border: '1px solid var(--vd-border-subtle)',
+    borderRadius: 8,
+    background: 'var(--vd-page-bg)',
+    padding: 10,
+  },
+  canvasFeedbackItemTop: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  canvasFeedbackKind: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: 22,
+    padding: '0 8px',
+    borderRadius: 999,
+    background: 'rgba(124, 58, 237, .1)',
+    color: '#5b21b6',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-semibold)',
+  },
+  canvasFeedbackStatus: (pending) => ({
+    color: pending ? '#7c3aed' : 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: pending ? 'var(--vd-font-weight-semibold)' : 'var(--vd-font-weight-regular)',
+    whiteSpace: 'nowrap',
+  }),
+  canvasFeedbackContent: {
+    marginTop: 8,
+    color: 'var(--vd-text-primary)',
+    fontSize: 'var(--vd-font-size-sm)',
+    lineHeight: 1.45,
+    overflowWrap: 'anywhere',
+  },
+  canvasFeedbackFooter: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 10,
+  },
+  canvasFeedbackTime: {
+    minWidth: 0,
+    color: 'var(--vd-text-tertiary)',
+    fontSize: 'var(--vd-font-size-xs)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  canvasFeedbackLocateButton: {
+    flexShrink: 0,
+    border: '1px solid rgba(124, 58, 237, .28)',
+    borderRadius: 7,
+    background: 'rgba(124, 58, 237, .08)',
+    color: '#5b21b6',
+    padding: '4px 8px',
+    cursor: 'pointer',
+    fontSize: 'var(--vd-font-size-xs)',
+    fontWeight: 'var(--vd-font-weight-medium)',
+  },
+  canvasFeedbackEmpty: {
+    padding: 18,
+    color: 'var(--vd-text-tertiary)',
+    textAlign: 'center',
+    fontSize: 'var(--vd-font-size-sm)',
+  },
   htmlComponentOverlay: (component) => ({
     position: 'absolute',
     left: component.x,
@@ -1599,6 +1942,7 @@ export default function CanvasWorkspace() {
   const [annotationDraft, setAnnotationDraft] = useState('');
   const [annotationFlagged, setAnnotationFlagged] = useState(true);
   const [annotationSubmitting, setAnnotationSubmitting] = useState(false);
+  const [feedbackPanelOpen, setFeedbackPanelOpen] = useState(false);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
   const mounted = useRef(false);
@@ -1608,6 +1952,11 @@ export default function CanvasWorkspace() {
   const pendingCanvasEvent = useRef(null);
   const widgetAspectGuard = useRef(false);
   const widgetDragRef = useRef(null);
+  const feedbackPanelItems = useMemo(() => canvasFeedbackPanelItems(workspace), [workspace]);
+  const feedbackPanelPendingCount = useMemo(
+    () => feedbackPanelItems.filter(isFeedbackItemPending).length,
+    [feedbackPanelItems],
+  );
 
   function refreshHtmlComponents(editor = editorRef.current) {
     setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
@@ -1757,6 +2106,20 @@ export default function CanvasWorkspace() {
 
   function markToolMessage(message) {
     setToolMessage(message);
+  }
+
+  function handleFocusFeedbackPanelItem(item) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const shapeIds = (item?.shapeIds || []).filter((shapeId) => editor.getShape?.(shapeId));
+    if (shapeIds.length === 0) {
+      markToolMessage('这条提交内容没有可定位的画布对象。');
+      return;
+    }
+    editor.setSelectedShapes?.(shapeIds);
+    editor.zoomToSelection?.();
+    refreshHtmlComponents(editor);
+    markToolMessage(`已定位：${item.label}`);
   }
 
   function currentViewportOrigin(editor, offset = { x: 96, y: 96 }) {
@@ -3016,7 +3379,10 @@ export default function CanvasWorkspace() {
               <div style={{ ...STYLES.canvasArea, ...(isFullscreen ? STYLES.canvasAreaFullscreen : {}) }}>
                 <Tldraw
                   key={workspace.id}
-                  persistenceKey={`vd-canvas-workspace-${workspace.id}`}
+                  // No persistenceKey: the server snapshot is the single
+                  // source of truth. Local IndexedDB persistence would
+                  // asynchronously overwrite agent-written server state with
+                  // stale local state and then save the loss back.
                   shapeUtils={CANVAS_SHAPE_UTILS}
                   components={tldrawComponents}
                   onMount={handleMount}
@@ -3090,6 +3456,14 @@ export default function CanvasWorkspace() {
                     />
                   ))}
                 </div>
+                <CanvasFeedbackPanel
+                  items={feedbackPanelItems}
+                  open={feedbackPanelOpen}
+                  pendingCount={feedbackPanelPendingCount}
+                  onToggle={() => setFeedbackPanelOpen((value) => !value)}
+                  onClose={() => setFeedbackPanelOpen(false)}
+                  onFocus={handleFocusFeedbackPanelItem}
+                />
               </div>
             )}
           </>

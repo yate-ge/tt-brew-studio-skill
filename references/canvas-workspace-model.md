@@ -203,6 +203,24 @@ native arrow behavior but stamps new arrows with `meta.vd_kind =
 in the semantic index as annotations so agents can treat them as feedback marks,
 not ordinary diagram connectors.
 
+## Canvas Feedback Panel
+
+Canvas workspaces expose a bottom-right in-canvas feedback button. Clicking it
+opens a floating panel over the canvas, not an external sidebar. The panel is a
+readable review queue for content the user has submitted during collaboration:
+
+- workspace feedback pool entries such as `canvas_annotation`, `widget_output`,
+  and `html_component` feedback,
+- `semantic_index.annotations`, including selected-object annotations and
+  purple annotation arrows,
+- `semantic_index.completion_requests`, including open purple completion
+  rectangles.
+
+Panel items are de-duplicated by feedback id when an annotation has already
+created a workspace feedback entry. Items should preserve `target.shape_ids`,
+`target.shape_id`, `section_id`, or `component_id` when available so the UI can
+select and zoom to the referenced canvas object.
+
 ## Scaffold Layout Review
 
 After a scaffold is created or modified, Visual Delivery should review the

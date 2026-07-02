@@ -246,6 +246,11 @@ Canvas workspace behavior:
   note, widget, arrow, or text) opens an in-canvas annotation popover; submitted
   annotations are stored on the target shape, mirrored into
   `semantic_index.annotations`, and written to the project feedback pool.
+- Canvas workspaces include a bottom-right in-canvas feedback button. It opens
+  a floating panel that aggregates submitted canvas annotations, purple
+  annotation arrows, completion requests, widget outputs, and other workspace
+  feedback; each item should retain target shape ids when available so users
+  and agents can locate it back on the canvas.
 - The canvas toolbar exposes a project-private scaffold library inside the
   canvas workspace. Saved scaffolds are scoped to the current project and may
   be inserted as templates or widgets without leaving the canvas.
