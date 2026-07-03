@@ -26,6 +26,7 @@ dist/
 output/
 
 # Local tool directories
+.claude/
 .codex/
 .learnbuddy/
 .workbuddy/
