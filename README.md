@@ -102,6 +102,18 @@ tt-brew-studio-skill/
 - **语义协议**：CanvasIR command / semantic index 描述设计脚手架、Widget、专家意见、
   用户反馈和区域补全请求，避免 agent 直接手写 tldraw snapshot。
 
+## 项目依赖
+
+主要依赖写在运行时模板里，启动脚本会同步到 `.visual-delivery/` 后安装：
+
+| 位置 | 依赖 | 版本 | 用途 |
+| --- | --- | --- | --- |
+| `templates/ui/package.json` | `tldraw` | `^5.1.1` | 画板内核；提供 frame、note、geo、arrow、image、selection、resize 等基础能力 |
+| `templates/ui/package.json` | `react` / `react-dom` | `^18.3.1` | 前端 UI、专家栏、反馈面板和画板工作区 |
+| `templates/ui/package.json` | `vite` / `@vitejs/plugin-react` | `^6.0.0` / `^4.3.4` | 前端开发与构建 |
+| `templates/server/package.json` | `express` | `^4.21.0` | 本地 HTTP API、静态资源服务 |
+| `templates/server/package.json` | `ws` | `^8.18.0` | WebSocket 状态广播 |
+
 ## 运行时
 
 首次启动时，`start.js` 会将 `templates/` 复制到项目的 `.visual-delivery/` 目录，安装依赖、
