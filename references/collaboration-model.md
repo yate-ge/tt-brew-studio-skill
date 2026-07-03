@@ -19,11 +19,12 @@
 **标注工具（紫色区域矩形 / 紫色箭头 / 对象批注）是额外的、用户专属**：只有小雷用来表达反馈，
 agent 永不用它们作图。
 
-## 2. Frame 头像与使用说明（叙事 1）
+## 2. Frame 归属连线与使用说明（叙事 1）
 
-每个专家 Frame **左上角带对应专家头像**；**鼠标悬停显示该专家对这个 Frame 的使用说明**
-（"这个 Frame 帮你看什么、怎么用"）。数据来自 `meta.vd_method_source.experts` 和
-`meta.vd_usage_note`。
+每个专家 Frame **不在画布上放头像或署名 chip**；鼠标悬停或选中左侧专家坝里的某位专家时，
+运行时从该专家头像画虚线连到其负责的 Frame，并用黄色关联描边高亮 Frame。使用说明
+（"这个 Frame 帮你看什么、怎么用"）来自 `meta.vd_usage_note`，在归属连线高亮时作为轻量浮层显示。
+数据来自 `meta.vd_method_source.experts` 和 `meta.vd_usage_note`。
 
 ## 3. 专家批注 / comment（叙事 3，产品亮点）
 
@@ -81,7 +82,7 @@ Widget 与静态模板不同，带交互。共四类（详见 [widget-examples.m
 
 | # | 能力 | 出处 | 状态 |
 | --- | --- | --- | --- |
-| A | Frame 左上角专家头像 + 悬停使用说明 | 叙事 1 | ❌ 待建（`vd_method_source`/`vd_usage_note` 数据已在，缺 UI chip + hover） |
+| A | 左侧专家坝 → Frame 归属连线 + 使用说明浮层 | 叙事 1 | ✅ 已实现（选中/悬停专家时连到对应 Frame，并显示 `vd_usage_note`） |
 | B | 专家团队 8 人 + 课题卡居中 + 各出 Frame | 叙事 1 | ⚠️ 基本可（脚手架布局已重构；扩到 8 人 + 联合 Frame 待跑） |
 | C | 材料填入 Frame + skill 理解 Frame 内容 | 叙事 2 | ⚠️ 部分（内容进 slot 可；"理解 Frame 内容"靠 agent-context） |
 | D | 词云可视化 Widget 嵌在 Frame 内 | 叙事 2 | ⚠️ 词云模板已在；嵌入 + 专家共创解释待编排 |
@@ -91,5 +92,5 @@ Widget 与静态模板不同，带交互。共四类（详见 [widget-examples.m
 | H | HMW 生成 Widget（选专家 + 数量 → 卡片） | 叙事 4 | ⚠️ 请求型 widget 模式已在；本实例待做 |
 | I | 专家添加物（便签/模板）连回专家坝 | §1 | ⚠️ Frame 走 `vd_method_source`；便签等需统一作者 meta → 连线 |
 
-亮点集中在 **E（彩色批注贴纸）+ F（✅ 可追溯档案）+ A（Frame 头像/说明）**——这三个是 case 最
+亮点集中在 **E（彩色批注贴纸）+ F（✅ 可追溯档案）+ A（Frame 归属连线/说明）**——这三个是 case 最
 出彩、也最缺的前端交互。

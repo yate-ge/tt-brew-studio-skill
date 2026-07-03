@@ -1145,6 +1145,31 @@ function feedbackConnectorRects(editor, shapeIds) {
     .filter(Boolean);
 }
 
+function scaffoldAttributionItemsFromEditor(editor) {
+  if (!editor) return [];
+  return currentPageShapes(editor)
+    .filter((shape) => isAgentScaffoldRootShape(shape))
+    .flatMap((shape) => {
+      const meta = shape.meta || {};
+      const experts = Array.isArray(meta.vd_method_source?.experts)
+        ? meta.vd_method_source.experts
+        : [];
+      return experts
+        .map((candidate) => normalizeExpertCandidate(candidate, 'method_source'))
+        .filter(Boolean)
+        .map((expert) => ({
+          id: `scaffold-attribution:${shape.id}:${expert.name}`,
+          expertName: expert.name,
+          author: { kind: 'expert', name: expert.name },
+          direction: 'expert_to_content',
+          shapeIds: [String(shape.id)],
+          targets: [{ shape_id: String(shape.id), level: 'template' }],
+          title: meta.vd_title || shape.props?.name || '专家脚手架',
+          usageNote: meta.vd_usage_note || '',
+        }));
+    });
+}
+
 function canvasFeedbackPanelItems(workspace) {
   const items = new Map();
   const existingShapeIds = workspaceShapeIds(workspace);
@@ -2145,9 +2170,11 @@ function ActiveExpertsDock({
   selectedExpertName,
   overviewSelected,
   overviewButtonRef,
+  registerExpertButtonRef,
   summonDraft,
   summonSubmitting,
   onSelectExpert,
+  onHoverExpert,
   onToggleOverview,
   onSummonDraftChange,
   onSubmitSummon,
@@ -2184,8 +2211,11 @@ function ActiveExpertsDock({
                 <button
                   type="button"
                   key={expert.name}
+                  ref={(node) => registerExpertButtonRef?.(expert.name, node)}
                   style={STYLES.expertParticipantButton(selected, pending > 0, opinions > 0)}
                   onClick={() => onSelectExpert(expert)}
+                  onPointerEnter={() => onHoverExpert?.(expert.name)}
+                  onPointerLeave={() => onHoverExpert?.(null)}
                   title={[
                     expert.domain ? `${expert.name} · ${expert.domain}` : expert.name,
                     opinions > 0 ? `${opinions} 条意见` : null,
@@ -2242,6 +2272,7 @@ function CanvasCollaborationDock({
   selectedExpertName,
   expertBarOverviewSelected,
   expertBarOverviewButtonRef,
+  registerExpertButtonRef,
   summonDraft,
   summonSubmitting,
   feedbackItems,
@@ -2250,6 +2281,7 @@ function CanvasCollaborationDock({
   pendingByExpert,
   opinionByExpert,
   onSelectExpert,
+  onHoverExpert,
   onToggleExpertBarOverview,
   onSummonDraftChange,
   onSubmitSummon,
@@ -2267,10 +2299,12 @@ function CanvasCollaborationDock({
         selectedExpertName={selectedExpertName}
         overviewSelected={expertBarOverviewSelected}
         overviewButtonRef={expertBarOverviewButtonRef}
+        registerExpertButtonRef={registerExpertButtonRef}
         summonDraft={summonDraft}
         summonSubmitting={summonSubmitting}
         pendingByExpert={pendingByExpert}
         onSelectExpert={onSelectExpert}
+        onHoverExpert={onHoverExpert}
         onToggleOverview={onToggleExpertBarOverview}
         onSummonDraftChange={onSummonDraftChange}
         onSubmitSummon={onSubmitSummon}
@@ -2625,6 +2659,11 @@ function FeedbackConnectorOverlay({ link, editor, layerEl, showExpertName = fals
               TARGET_LEVEL_LABEL[levelByShapeId.get(rect.shapeId)] || '元素',
             ].filter(Boolean).join(' · ')}
           </span>
+          {showExpertName && item.usageNote && (
+            <span style={STYLES.feedbackConnectorNote(rect, color)}>
+              {item.usageNote}
+            </span>
+          )}
         </div>
       ))}
     </>
@@ -3274,6 +3313,22 @@ const STYLES = {
     background: color,
     whiteSpace: 'nowrap',
   }),
+  feedbackConnectorNote: (rect, color) => ({
+    position: 'absolute',
+    top: rect.y > 78 ? -74 : 10,
+    left: 8,
+    maxWidth: Math.min(320, Math.max(180, rect.w - 16)),
+    padding: '7px 9px',
+    borderRadius: 8,
+    border: `1px solid ${color}55`,
+    background: 'rgba(255, 255, 255, .96)',
+    boxShadow: '0 10px 24px rgba(15, 23, 42, .16)',
+    color: '#334155',
+    fontSize: 11,
+    fontWeight: 600,
+    lineHeight: 1.45,
+    whiteSpace: 'normal',
+  }),
   htmlOverlayLayer: {
     position: 'absolute',
     inset: 0,
@@ -3664,6 +3719,7 @@ export default function CanvasWorkspace() {
   const [htmlComponents, setHtmlComponents] = useState([]);
   const [authoredOverlays, setAuthoredOverlays] = useState([]);
   const [pendingChangeOverlays, setPendingChangeOverlays] = useState([]);
+  const [scaffoldAttributionItems, setScaffoldAttributionItems] = useState([]);
   const [previewMode, setPreviewMode] = useState('normal');
   const [scaffolds, setScaffolds] = useState([]);
   const [scaffoldPickerOpen, setScaffoldPickerOpen] = useState(false);
@@ -3695,6 +3751,8 @@ export default function CanvasWorkspace() {
   const pendingContentBaselines = useRef(new Map());
   const widgetDragRef = useRef(null);
   const expertBarOverviewButtonRef = useRef(null);
+  const expertButtonRefs = useRef(new Map());
+  const [hoveredExpertName, setHoveredExpertName] = useState(null);
   // Rev of the snapshot this client loaded/saved last. Echoed as base_rev on
   // saves so the server can protect agent shapes from stale-client writes.
   const snapshotRevRef = useRef(0);
@@ -3732,6 +3790,11 @@ export default function CanvasWorkspace() {
   const [activeFeedbackLink, setActiveFeedbackLink] = useState(null);
   const overlayLayerRef = useRef(null);
   const discussionExperts = useMemo(() => collectDiscussionExperts(workspace), [workspace]);
+  const focusedScaffoldExpertName = hoveredExpertName || selectedExpertName;
+  const focusedScaffoldAttributionItems = useMemo(() => {
+    if (!focusedScaffoldExpertName) return [];
+    return scaffoldAttributionItems.filter((item) => item.expertName === focusedScaffoldExpertName);
+  }, [focusedScaffoldExpertName, scaffoldAttributionItems]);
   const highlightedAuthorOverlays = useMemo(() => {
     if (previewMode !== 'highlight') return [];
     const normalOverlays = authoredOverlays.filter((item) => item.kind !== REGION_ANNOTATION_KIND && item.kind !== LEGACY_COMPLETION_KIND);
@@ -3743,6 +3806,7 @@ export default function CanvasWorkspace() {
     setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
     setAuthoredOverlays(editor ? authoredOverlaysFromEditor(editor) : []);
     setPendingChangeOverlays(editor ? pendingChangeOverlaysFromEditor(editor) : []);
+    setScaffoldAttributionItems(editor ? scaffoldAttributionItemsFromEditor(editor) : []);
   }
 
   useEffect(() => {
@@ -4005,6 +4069,15 @@ export default function CanvasWorkspace() {
 
   function markToolMessage(message) {
     setToolMessage(message);
+  }
+
+  function registerExpertButtonRef(expertName, node) {
+    if (!expertName) return;
+    if (node) {
+      expertButtonRefs.current.set(expertName, node);
+    } else {
+      expertButtonRefs.current.delete(expertName);
+    }
   }
 
   function handleSelectDiscussionExpert(expert) {
@@ -5808,6 +5881,7 @@ export default function CanvasWorkspace() {
                   selectedExpertName={selectedExpertName}
                   expertBarOverviewSelected={expertBarOverviewSelected}
                   expertBarOverviewButtonRef={expertBarOverviewButtonRef}
+                  registerExpertButtonRef={registerExpertButtonRef}
                   summonDraft={expertSummonDraft}
                   summonSubmitting={expertSummonSubmitting}
                   feedbackItems={userFeedbackItems}
@@ -5816,6 +5890,7 @@ export default function CanvasWorkspace() {
                   pendingByExpert={pendingFeedbackByExpert}
                   opinionByExpert={expertOpinionsByExpert}
                   onSelectExpert={handleSelectDiscussionExpert}
+                  onHoverExpert={setHoveredExpertName}
                   onToggleExpertBarOverview={handleToggleExpertBarOverview}
                   onSummonDraftChange={setExpertSummonDraft}
                   onSubmitSummon={handleSubmitExpertSummon}
@@ -5894,6 +5969,15 @@ export default function CanvasWorkspace() {
                       layerEl={overlayLayerRef.current}
                     />
                   )}
+                  {focusedScaffoldAttributionItems.map((item) => (
+                    <FeedbackConnectorOverlay
+                      key={item.id}
+                      link={{ item, element: expertButtonRefs.current.get(focusedScaffoldExpertName) }}
+                      editor={editorRef.current}
+                      layerEl={overlayLayerRef.current}
+                      showExpertName
+                    />
+                  ))}
                   {highlightedAuthorOverlays.map((item) => (
                     <div key={item.shapeId} style={STYLES.highlightOverlay(item)} />
                   ))}
