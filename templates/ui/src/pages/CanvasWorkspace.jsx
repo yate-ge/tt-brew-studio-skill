@@ -3608,9 +3608,11 @@ const STYLES = {
       top: item.y,
       width: item.w,
       height: item.h,
-      border: `2px solid rgba(${color}, .72)`,
-      background: `rgba(${color}, .12)`,
-      boxShadow: isCompletion ? `0 0 0 4px rgba(${color}, .12), 0 0 22px rgba(${color}, .42)` : 'none',
+      // Highlight is edge-dominant: prominent border, barely-there fill so it
+      // never covers the target's content (expert = yellow, user = purple).
+      border: `2px solid rgba(${color}, .78)`,
+      background: `rgba(${color}, .04)`,
+      boxShadow: isCompletion ? `0 0 0 3px rgba(${color}, .10), 0 0 20px rgba(${color}, .34)` : 'none',
       borderRadius: 8,
       pointerEvents: 'none',
     };
@@ -3624,21 +3626,23 @@ const STYLES = {
       width: item.w,
       height: item.h,
       border: `2px solid rgba(${color}, .82)`,
-      background: `rgba(${color}, .10)`,
-      boxShadow: `0 0 0 4px rgba(${color}, .14), 0 0 20px rgba(${color}, .28)`,
+      background: `rgba(${color}, .04)`,
+      boxShadow: `0 0 0 3px rgba(${color}, .12), 0 0 18px rgba(${color}, .24)`,
       borderRadius: 8,
       pointerEvents: 'none',
     };
   },
+  // Region annotation (user tool): purple border is the identifier; fill is a
+  // high-transparency wash that does not cover the content underneath.
   regionAnnotationOverlay: (item) => ({
     position: 'absolute',
     left: item.x,
     top: item.y,
     width: item.w,
     height: item.h,
-    border: '2px solid rgba(124, 58, 237, .84)',
-    background: 'rgba(124, 58, 237, .12)',
-    boxShadow: '0 0 0 4px rgba(124, 58, 237, .12), 0 0 24px rgba(124, 58, 237, .42)',
+    border: '2px solid rgba(124, 58, 237, .86)',
+    background: 'rgba(124, 58, 237, .05)',
+    boxShadow: '0 0 0 3px rgba(124, 58, 237, .10), 0 0 22px rgba(124, 58, 237, .34)',
     borderRadius: 8,
     pointerEvents: 'none',
   }),

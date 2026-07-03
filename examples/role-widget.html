@@ -1,0 +1,110 @@
+<section style="display:inline-flex;flex-direction:column;gap:12px;min-width:600px;max-width:760px;border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:12px;padding:16px 18px;background:rgba(255,255,255,.94);font-family:var(--vds-typography-font-family,system-ui,sans-serif);color:var(--vds-colors-text,#172033)">
+  <style>
+    .cc-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+    .cc-head h3{margin:0;font-size:15px}
+    .cc-head small{font-size:11px;color:var(--vds-colors-text-secondary,#667085)}
+    .cc-board{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+    .cc-group{flex:1 1 100px;min-width:104px;border:1.5px dashed var(--vds-colors-border,#cbd5e1);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:8px;background:var(--vds-colors-surface,#f8fafc);transition:border-color .15s, background .15s}
+    .cc-group.cc-over{border-color:#7c3aed;background:rgba(124,58,237,.08)}
+    .cc-group h4{margin:0;font-size:12px;text-align:center;outline:none;border-radius:6px;padding:2px 4px}
+    .cc-group h4:focus{background:#fff;box-shadow:0 0 0 1.5px #7c3aed33}
+    .cc-card{border:1px solid var(--vds-colors-border,#d8e0ea);border-radius:8px;background:#fff;padding:7px 9px;cursor:grab;user-select:none;box-shadow:0 1px 3px rgba(15,23,42,.08)}
+    .cc-card.cc-drag{opacity:.35}
+    .cc-card b{display:block;font-size:12px;pointer-events:none}
+    .cc-card i{display:block;font-size:10.5px;font-style:normal;color:var(--vds-colors-text-secondary,#667085);margin-top:2px;line-height:1.45;pointer-events:none}
+    .cc-foot{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .cc-foot p{margin:0;font-size:11px;color:var(--vds-colors-text-secondary,#667085)}
+    .cc-foot button{font:inherit;font-size:12.5px;border:1px solid var(--vds-colors-border,#d0d5dd);border-radius:8px;background:var(--vds-colors-surface,#f8fafc);padding:6px 14px;cursor:pointer}
+    .cc-foot button:hover{border-color:#7c3aed;color:#7c3aed}
+    #cc-ghost{position:fixed;z-index:9;pointer-events:none;transform:translate(-50%,-50%) rotate(2deg);width:150px}
+  </style>
+  <div class="cc-head">
+    <h3>共创角色 · 老人怎么"在场"？</h3>
+    <small>魏佛兰 · 参与式设计｜拖动卡片在组间移动、合并；双击组名改写。这不是最终分类。</small>
+  </div>
+  <div class="cc-board" id="cc-board"></div>
+  <div class="cc-foot">
+    <p id="cc-hint">改动会自动保存到画布状态。</p>
+    <button type="button" id="cc-mat">把当前分组物化到画布</button>
+  </div>
+  <script>
+    (function(){
+      function render(){
+        var s = vd.state.get();
+        var board = document.getElementById('cc-board');
+        board.innerHTML = '';
+        (s.groups||[]).forEach(function(g, gi){
+          var col = document.createElement('div');
+          col.className = 'cc-group';
+          col.dataset.gi = gi;
+          var h = document.createElement('h4');
+          h.textContent = g.name;
+          h.contentEditable = 'true';
+          h.spellcheck = false;
+          h.addEventListener('blur', function(){
+            var cur = vd.state.get();
+            var groups = JSON.parse(JSON.stringify(cur.groups));
+            groups[gi].name = h.textContent.trim() || g.name;
+            vd.state.set({ groups: groups, last_actor: 'user' });
+          });
+          col.appendChild(h);
+          (g.roles||[]).forEach(function(r){
+            var card = document.createElement('div');
+            card.className = 'cc-card';
+            card.dataset.rid = r.id;
+            card.innerHTML = '<b>' + r.label + '</b><i>' + (r.desc||'') + '</i>';
+            card.addEventListener('pointerdown', startDrag);
+            col.appendChild(card);
+          });
+          board.appendChild(col);
+        });
+      }
+      function startDrag(e){
+        e.preventDefault();
+        var card = e.currentTarget;
+        var rid = card.dataset.rid;
+        card.classList.add('cc-drag');
+        var ghost = card.cloneNode(true);
+        ghost.id = 'cc-ghost';
+        document.body.appendChild(ghost);
+        function move(ev){
+          ghost.style.left = ev.clientX + 'px';
+          ghost.style.top = ev.clientY + 'px';
+          document.querySelectorAll('.cc-group').forEach(function(col){ col.classList.remove('cc-over'); });
+          var el = document.elementFromPoint(ev.clientX, ev.clientY);
+          var col = el && el.closest ? el.closest('.cc-group') : null;
+          if (col) col.classList.add('cc-over');
+        }
+        function up(ev){
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          ghost.remove();
+          card.classList.remove('cc-drag');
+          var el = document.elementFromPoint(ev.clientX, ev.clientY);
+          var col = el && el.closest ? el.closest('.cc-group') : null;
+          document.querySelectorAll('.cc-group').forEach(function(c){ c.classList.remove('cc-over'); });
+          if (!col) return;
+          var target = Number(col.dataset.gi);
+          var cur = vd.state.get();
+          var groups = JSON.parse(JSON.stringify(cur.groups));
+          var fromIdx = groups.findIndex(function(g){ return g.roles.some(function(r){ return r.id === rid; }); });
+          if (fromIdx === -1 || fromIdx === target) return;
+          var role = groups[fromIdx].roles.find(function(r){ return r.id === rid; });
+          groups[fromIdx].roles = groups[fromIdx].roles.filter(function(r){ return r.id !== rid; });
+          groups[target].roles.push(role);
+          groups = groups.filter(function(g){ return g.roles.length > 0; });
+          vd.state.set({ groups: groups, last_actor: 'user', merges: (cur.merges||0) + 1 });
+          document.getElementById('cc-hint').textContent = '已保存：「' + role.label + '」已并入其它组';
+        }
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+      }
+      document.getElementById('cc-mat').addEventListener('click', function(){
+        vd.emit('roles_materialize_requested', { groups: vd.state.get().groups });
+        document.getElementById('cc-hint').textContent = '已请求物化：智能体将把分组转成画布卡片。';
+      });
+      vd.state.subscribe(render);
+      render();
+    })();
+  </script>
+</section>
