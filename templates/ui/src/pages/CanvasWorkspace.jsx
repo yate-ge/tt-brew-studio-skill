@@ -6,6 +6,7 @@ import {
   DefaultFillStyle,
   GeoShapeGeoStyle,
   FrameShapeUtil,
+  NoteShapeUtil,
   Tldraw,
   TldrawUiButtonIcon,
   TldrawUiMenuToolItem,
@@ -1632,7 +1633,26 @@ class VisualDeliveryFrameShapeUtil extends FrameShapeUtil {
   }
 }
 
-const CANVAS_SHAPE_UTILS = [VisualDeliveryFrameShapeUtil];
+class VisualDeliveryNoteShapeUtil extends NoteShapeUtil {
+  constructor(editor) {
+    super(editor);
+    this.options = { ...this.options, resizeMode: 'scale' };
+  }
+
+  onResize(shape, info) {
+    const resized = super.onResize(shape, info);
+    if (!resized?.props || !Number.isFinite(Number(resized.props.scale))) return resized;
+    return {
+      ...resized,
+      props: {
+        ...resized.props,
+        scale: Math.max(NOTE_MIN_SCALE, Math.min(NOTE_MAX_SCALE, Number(resized.props.scale))),
+      },
+    };
+  }
+}
+
+const CANVAS_SHAPE_UTILS = [VisualDeliveryFrameShapeUtil, VisualDeliveryNoteShapeUtil];
 
 function insetBounds(bounds, padding = 0) {
   if (!bounds) return null;

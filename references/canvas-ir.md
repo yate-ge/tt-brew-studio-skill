@@ -254,7 +254,8 @@ v1 支持的 commands：
 `meta.vd_scaffold_scale` 指定初始缩放。便签编译为 tldraw note，并通过 `props.scale` 跟随
 脚手架整体缩放。运行时会在写入阶段检查 `scaffold.root` 的直接子元素；若发现重叠、越界或
 低于可读尺寸，会自动按 root frame 宽度重排为不重叠的行列，并在 `layout_report.auto_repairs`
-记录 `SCAFFOLD_CHILD_REFLOW`。用户手动拖拽 root frame 边缘时，前端按比例缩放内部元素。
+记录 `SCAFFOLD_CHILD_REFLOW`。用户手动拖拽 root frame 边缘时，前端按比例缩放内部元素；
+用户选中单张便签时，便签自身也可通过边缘拖拽调整 `props.scale`。
 
 示例：
 
