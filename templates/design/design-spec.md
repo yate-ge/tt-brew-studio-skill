@@ -1,16 +1,16 @@
-# Visual Delivery - Design Specification
+# TT Design Brew Studio - Design Specification
 
-This document describes the visual design language for your Visual Delivery
-interface. Edit this file to express your design preferences, then ask the
+This document describes the visual design language for the TT Design Brew Studio
+mentor canvas. Edit this file to express your design preferences, then ask the
 agent to update the design tokens accordingly.
 
 You can also edit `tokens.json` directly for immediate changes.
 
 ## Brand
 
-- **Name**: Visual Delivery
-- **Personality**: Clean, professional, focused
-- **Primary color**: Blue (#2563EB) — conveys trust and clarity
+- **Name**: TT Design Brew Studio
+- **Personality**: calm, critical, educational, and canvas-native
+- **Primary color**: Blue (#2563EB) — used as a stable action color; expert and student states use semantic accent colors
 
 ## Color Palette
 
@@ -57,10 +57,10 @@ You can also edit `tokens.json` directly for immediate changes.
 - Line numbers: enabled
 - Font: monospace stack
 
-### Delivery Cards
-- Subtle border, elevated on hover
-- Status badge: color-coded by mode
-- Timestamp: relative format ("2 min ago")
+### Mentor Canvas Surfaces
+- Keep the canvas itself quiet: method scaffolds show title, guiding question, and whitespace.
+- Expert attribution lives in metadata and the expert bar, not as extra on-canvas signature chips.
+- Status badges and overlays must use icons or labels as well as color.
 
 ## Accessibility
 

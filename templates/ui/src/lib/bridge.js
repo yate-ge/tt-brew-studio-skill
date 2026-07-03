@@ -1,5 +1,5 @@
 /**
- * Visual Delivery Bridge Script
+ * TT Design Brew Studio Bridge Script
  *
  * Injected into every generated-HTML iframe by the platform.
  * Provides:

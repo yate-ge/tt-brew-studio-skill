@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 function log(msg) {
-  process.stderr.write(`[visual-delivery] ${msg}\n`);
+  process.stderr.write(`[tt-design-brew-studio] ${msg}\n`);
 }
 
 function outputJSON(obj) {

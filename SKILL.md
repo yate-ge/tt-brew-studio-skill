@@ -120,7 +120,7 @@ DATA_DIR  = {CWD}/.visual-delivery
   当前项目语境生成。方法库只供 agent 参考，不作为学生可见的工具栏或模板选择器。B 类
   跨领域方法默认可用；A 类领域方法只在对应专家入场时推荐；目录外情况由真实或虚拟专家
   合成 C 类即席方法（含乙类项目本质框架）。优秀实例可归档到项目脚手架库。每个脚手架都带
-  专家署名；带 ⚠️ 的方法必须包含使用前提检查，跳过时触发专家警示。方法库见：
+  专家归属 meta；带 ⚠️ 的方法必须包含使用前提检查，跳过时触发专家警示。方法库见：
   [references/design-methods.md](references/design-methods.md)。
 - **每位专家至少一个框架**：在场专家每人至少以一个署名思考框架（frame 形式的方法模板，
   或 Widget）参与当前项目；开题全景和全项目诊断时，每位在场专家各出一个框架。
@@ -137,9 +137,9 @@ DATA_DIR  = {CWD}/.visual-delivery
 - **诊断必须四阶段可视化**：全项目诊断时，Discover 承接资料、灵感、前期想法和调研证据；
   Define 承接产品定位、用户/场景、问题定义、HMW 或评价标准；Develop 承接方案结构、信息架构、
   功能展开、版本迭代或方案比较；Deliver 承接可交付界面/产物、架构、设计原则、导则、风险和
-  搁置清单。每阶段的脚手架必须是**带专家署名的思考框架**（甲类既有方法或乙类项目本质框架），
+  搁置清单。每阶段的脚手架必须是**带专家归属 meta 的思考框架**（甲类既有方法或乙类项目本质框架），
   先选择或构建框架，再填入从项目中找到的内容；找不到证据时也要在对应 slot
-  标记"未发现 / 待补"，不能让阶段空着。禁止铺设与项目无关、不带专家署名的通用分区空桶。
+  标记"未发现 / 待补"，不能让阶段空着。禁止铺设与项目无关、不带专家归属的通用分区空桶。
 - **Widget 示例**：内置或文档中的 Widget 例子只用于启发智能体如何构造状态、输入、输出、
   可视化和异步请求流程。不要把示例当作穷尽清单；当项目需要 persona 生成器、竞品分析工具、
   海报构图控制台、主题分析图表或其他微型设计工具时，智能体应按 Widget 合约现场生成。
@@ -151,7 +151,7 @@ DATA_DIR  = {CWD}/.visual-delivery
 ### 语言模型
 
 - `conversation_lang`：每轮跟随用户当前消息语言。
-- `platform_lang`：Visual Delivery Web UI 使用的语言。
+- `platform_lang`：TT 设计精酿 Studio Web UI 使用的语言。
 - 首次初始化时，设置 `platform_lang = conversation_lang`。
 - 后续轮次不要自动切换 `platform_lang`；只有用户明确要求或在 Settings 中修改时才切换。
 - agent 回复、画板标签和用户可见画板内容默认使用 `conversation_lang`，除非用户另有要求。
@@ -378,6 +378,45 @@ section 中。`scaffold.root` frame 的可见名称必须是该脚手架的 `tit
 写入时如果脚手架内直接子元素重叠、越界或便签比例不合适，运行时会按 root frame 宽度自动重排，
 优先保证不重叠、可读、比例舒服。用户后续手动拖拽 root frame 边缘改变大小时，内部元素按比例
 同步缩放；用户选中单张便利贴时，也可以拖拽便利贴边缘直接改变其 `scale`。
+
+#### 模型合规写入合同（必须通过）
+
+不同模型都必须按以下低自由度合同写画布。任何一项失败，都先修复再向用户总结。
+
+1. **读取阶段路由**：写入前读取
+   `/api/canvas-workspaces/{PROJECT_CANVAS_ID}/agent-context`，确认
+   `stage_routing.stages` 中存在目标阶段。缺四阶段 spine 时先补 spine。
+2. **生成前规划**：在内部先列出每个待写 root 的计划：
+
+```json
+{
+  "stage": "discover",
+  "root_id": "majin-question-framing",
+  "expert": "马谨",
+  "archetype": "evidence_chain",
+  "layout_signature": "left-to-right evidence chain with four checkpoints",
+  "stage_target": "stage.discover"
+}
+```
+
+3. **阶段放置**：每个 `scaffold.root` 必须有 `stage`、`title`、`role:
+   "scaffold.root"` 和 `meta.vd_method_source`。不得把 root 散放到画布根层。
+4. **内部归属**：root 内所有子节点必须写 `parent: root_id`，并使用相对 root 左上角的
+   `bounds:{x,y,w,h}`。只有 root 靠 `stage` 落位；root 内部不得依赖自动流式排布。
+5. **母型字段**：每个 root 的 meta 必须写入
+   `vd_layout_archetype` 和 `vd_layout_signature`。允许的 `vd_layout_archetype`：
+   `card_fields`、`collection_zones`、`matrix_grid`、`timeline_swimlane`、
+   `radial_network`、`evidence_chain`。
+6. **布局差异**：同一批次多个专家 frame 不得连续使用同一母型。2-3 个 frame 至少 2 种母型；
+   4-5 个 frame 至少 3 种母型。每个 frame 的 `layout_signature` 必须能说明它和其他 frame
+   在形态上不同。
+7. **写后验证**：写入后重新读取 workspace / agent-context，确认新增 root 在目标 stage，
+   每个 root 至少有 3 个子节点，子节点都有 `parent` 与 `bounds`，且没有严重 overlap /
+   overflow。发现问题时追加修复 commands，不用把错误解释给学生。
+
+**拒收输出**：所有 frame 都是竖向列表；只有标题和便签、没有结构；缺 `stage`；子节点缺
+`parent` 或 `bounds`；专家归属写成画布可见署名；没有 `vd_method_source`；没有
+`vd_layout_archetype`；不同专家 frame 长得一样。
 
 ### 画布工具边界
 

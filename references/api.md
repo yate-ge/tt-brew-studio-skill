@@ -1,6 +1,6 @@
-# Visual Delivery API
+# TT Design Brew Studio API
 
-Visual Delivery is canvas-only. New work should use the project canvas
+TT Design Brew Studio is canvas-only. New work should use the project canvas
 document, CanvasIR, scaffold, widget, and design-token endpoints listed here.
 The backend `canvas_workspace` resource is a storage container. 默认协作模型是
 一个项目画板文档中的一个当前工作 Page；所有阶段、方法模板、专家批注、学生回应和交互组件
@@ -49,7 +49,7 @@ Updates the runtime locale object and broadcasts `locale_updated`.
 
 ```json
 {
-  "appTitle": "Visual Delivery Canvas",
+  "appTitle": "TT Design Brew Studio",
   "canvas": {
     "newPage": "New page"
   }
@@ -265,6 +265,10 @@ before writing diagnosis content:
   }
 }
 ```
+
+`open_region_annotations` is the current field for user-drawn purple region
+requests. `open_completion_requests` is retained only as a legacy compatibility
+alias for older canvases and agents.
 
 If `project_protocol_state.expert_team_ready` is false, assemble and write the
 expert team before diagnosis, templates, widgets, or review. If

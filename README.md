@@ -2,7 +2,7 @@
 
 # TT Design Brew Studio Skill
 
-`tt-brew-studio-skill` is an Agent Skill for design education. It organizes
+`tt-design-brew-studio` is an Agent Skill for design education. It organizes
 multiple TT Design Academy expert personas around the same student design
 process. Each expert contributes from a specific domain, research method, and
 design judgment style, while the agent creates design drafts, canvas scaffolds,
@@ -45,10 +45,10 @@ Clone or copy this repository into an Agent framework's skills directory:
 
 ```bash
 # Claude Code
-cp -r tt-brew-studio-skill your-project/.claude/skills/
+cp -r tt-design-brew-studio your-project/.claude/skills/
 
 # Codex
-cp -r tt-brew-studio-skill your-project/.codex/skills/
+cp -r tt-design-brew-studio your-project/.codex/skills/
 ```
 
 The Agent will discover and load the skill automatically.
@@ -86,7 +86,7 @@ The Agent will:
 ## Architecture
 
 ```text
-tt-brew-studio-skill/
+tt-design-brew-studio/
 ├── SKILL.md                  # Agent instructions
 ├── scripts/
 │   ├── start.js              # Start service and build frontend
@@ -128,11 +128,11 @@ these templates into `.visual-delivery/` and installs them there.
 
 | Location | Dependency | Version | Purpose |
 | --- | --- | --- | --- |
-| `templates/ui/package.json` | `tldraw` | `^5.1.1` | Canvas engine; provides frame, note, geo, arrow, image, selection, and resize primitives |
-| `templates/ui/package.json` | `react` / `react-dom` | `^18.3.1` | Frontend UI, expert bar, feedback panel, and canvas workspace |
-| `templates/ui/package.json` | `vite` / `@vitejs/plugin-react` | `^6.0.0` / `^4.3.4` | Frontend development and build |
-| `templates/server/package.json` | `express` | `^4.21.0` | Local HTTP API and static asset serving |
-| `templates/server/package.json` | `ws` | `^8.18.0` | WebSocket state broadcasts |
+| `templates/ui/package.json` | `tldraw` | `^5.2.2` | Canvas engine; provides frame, note, geo, arrow, image, selection, and resize primitives |
+| `templates/ui/package.json` | `react` / `react-dom` | `^19.2.7` | Frontend UI, expert bar, feedback panel, and canvas workspace |
+| `templates/ui/package.json` | `vite` / `@vitejs/plugin-react` | `^8.1.3` / `^6.0.3` | Frontend development and build |
+| `templates/server/package.json` | `express` | `^5.2.1` | Local HTTP API and static asset serving |
+| `templates/server/package.json` | `ws` | `^8.21.0` | WebSocket state broadcasts |
 
 ## Runtime
 

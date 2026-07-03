@@ -1,11 +1,11 @@
 # AGENTS.md
 
 面向在本仓库工作的 AI coding agents。根目录的这份说明适用于整个
-`visual-delivery-skill` 项目。
+`tt-design-brew-studio` 项目。
 
 ## 项目定位
 
-`visual-delivery-skill` 是一个面向设计教育的 Agent Skill：把 TT 设计学院
+`tt-design-brew-studio` 是一个面向设计教育的 Agent Skill：把 TT 设计学院
 知识库中的多位设计专家分身组织到同一份学生设计过程中，通过本地交互画板进行
 专家署名的引导、批注、评审、方法脚手架和 widget 共创。默认所有内容在同一个
 项目工作 Page 中完成；tldraw Pages 只作为底层兼容能力保留，不作为默认多画板机制。
@@ -15,11 +15,11 @@
 
 ## 路径与运行时
 
-默认项目路径：
+默认项目路径以当前仓库为准：
 
 ```text
-SKILL_DIR=/Users/yatege/WorkingProject/visual-delivery-skill
-RUNTIME_DIR=/Users/yatege/WorkingProject/visual-delivery-skill/.visual-delivery
+SKILL_DIR=<本仓库根目录>
+RUNTIME_DIR=<本仓库根目录>/.visual-delivery
 ```
 
 `.visual-delivery/` 是本地运行时目录，已在 `.gitignore` 中排除。不要把运行时
@@ -27,12 +27,10 @@ RUNTIME_DIR=/Users/yatege/WorkingProject/visual-delivery-skill/.visual-delivery
 
 ## 常用命令
 
-启动本仓库自己的 Visual Delivery 服务：
+启动本仓库自己的 TT 设计精酿 Studio 服务：
 
 ```bash
-node /Users/yatege/WorkingProject/visual-delivery-skill/scripts/start.js \
-  --data-dir /Users/yatege/WorkingProject/visual-delivery-skill/.visual-delivery \
-  --lang zh
+node scripts/start.js --data-dir .visual-delivery --lang zh
 ```
 
 健康检查：
@@ -44,14 +42,14 @@ curl -s http://localhost:3847/health
 安装到各 Agent 平台：
 
 ```bash
-bash /Users/yatege/WorkingProject/visual-delivery-skill/scripts/install-to-platforms.sh
+bash scripts/install-to-platforms.sh
 ```
 
 安装脚本会同步到：
 
-- `~/.claude/skills/visual-delivery-skill`
-- `~/.codex/skills/visual-delivery-skill`
-- `~/.learnbuddy/skills/visual-delivery-skill`
+- `~/.claude/skills/tt-design-brew-studio`
+- `~/.codex/skills/tt-design-brew-studio`
+- `~/.learnbuddy/skills/tt-design-brew-studio`
 
 ## 开发流程
 
@@ -59,7 +57,7 @@ bash /Users/yatege/WorkingProject/visual-delivery-skill/scripts/install-to-platf
 
 1. 先阅读相关入口文件和参考文档，不凭记忆改协议或模板。
 2. 保持变更范围小，优先沿用现有结构。
-3. 测试前重启 Visual Delivery 服务，确保验证的是最新代码和模板。
+3. 测试前重启 TT 设计精酿 Studio 服务，确保验证的是最新代码和模板。
 4. 修改 `templates/` 后，重启服务并确认运行时模板同步正常。
 5. 修改 `SKILL.md` 后，检查触发条件、边界和参考文档是否一致。
 6. 修改 `scripts/` 后，重启服务并检查启动与健康检查。

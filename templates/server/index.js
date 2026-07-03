@@ -89,7 +89,7 @@ function accessKeyMiddleware(req, res, next) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Visual Delivery Access</title>
+  <title>TT Design Brew Studio Access</title>
   <style>
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f8fafc; color: #0f172a; }
     main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
@@ -104,7 +104,7 @@ function accessKeyMiddleware(req, res, next) {
   <main>
     <form method="GET" action="${req.path}">
       <h1>需要访问密钥</h1>
-      <p>请输入当前项目的 Visual Delivery 访问密钥。</p>
+      <p>请输入当前项目的 TT Design Brew Studio 访问密钥。</p>
       <input name="vd_key" type="password" autocomplete="current-password" autofocus />
       <button type="submit">进入</button>
     </form>
@@ -115,7 +115,7 @@ function accessKeyMiddleware(req, res, next) {
   }
 
   res.status(401).json({
-    error: { code: 'ACCESS_KEY_REQUIRED', message: 'Valid Visual Delivery access key required' },
+    error: { code: 'ACCESS_KEY_REQUIRED', message: 'Valid TT Design Brew Studio access key required' },
   });
 }
 
@@ -155,7 +155,7 @@ if (fs.existsSync(uiDir)) {
   }
 
   const indexHtmlPath = path.join(uiDir, 'index.html');
-  app.get('*', (req, res) => {
+  app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api/') && !req.path.startsWith('/health')) {
       try {
         const html = fs.readFileSync(indexHtmlPath, 'utf8');

@@ -1,5 +1,5 @@
 {
-  "appTitle": "Visual Delivery 画布",
+  "appTitle": "TT 设计精酿 Studio",
   "canvasWorkspace": "画布工作区",
   "canvas": "画布",
   "newCanvas": "新建 Page",
@@ -14,5 +14,5 @@
   "completionRequest": "区域批注",
   "feedbackPanel": "提交内容",
   "noFeedback": "暂无提交内容。",
-  "platformSlogan": "在画布上一起思考。"
+  "platformSlogan": "在画布上一起推敲设计判断。"
 }

@@ -30,9 +30,9 @@ const DEFAULT_SETTINGS = {
   access_key_enabled: false,
   access_key: '',
   platform: {
-    name: 'Visual Delivery',
+    name: 'TT Design Brew Studio',
     logo_url: '',
-    slogan: 'Think together on a canvas.',
+    slogan: 'Think together on a design canvas.',
     visual_style: 'canvas-workspace',
   },
 };
@@ -867,11 +867,61 @@ function setupRoutes(app, dataDir) {
     return changed;
   }
 
+  const DEFAULT_REGION_FEEDBACK_CONTENT = '用户圈出了一个空白区域，默认意图是请智能体或专家在该区域补全内容。';
+
+  function regionAnnotationContent(item = {}) {
+    return String(item.note || item.prompt || item.text || item.title || '').trim();
+  }
+
   function regionFeedbackContentFromEvent(event = {}) {
     const command = Array.isArray(event.commands) ? event.commands.find((item) => item?.op === 'add_region_annotation') : null;
     const explicit = String(command?.note || event.target?.note || event.target?.prompt || '').trim();
     if (explicit) return explicit;
-    return '用户圈出了一个空白区域，默认意图是请智能体或专家在该区域补全内容。';
+    return DEFAULT_REGION_FEEDBACK_CONTENT;
+  }
+
+  async function syncRegionFeedbackFromSemanticIndex(workspaceId, index = {}) {
+    const regions = new Map();
+    [
+      ...(Array.isArray(index.region_annotations) ? index.region_annotations : []),
+      ...(Array.isArray(index.completion_requests) ? index.completion_requests : []),
+    ].forEach((item) => {
+      const shapeId = String(item?.shape_id || item?.id || '').trim();
+      const content = regionAnnotationContent(item);
+      if (shapeId && content) regions.set(shapeId, content);
+    });
+    if (regions.size === 0) return;
+    await updateJSON(canvasFeedbackFile(workspaceId), (items) => {
+      let changed = false;
+      const next = (Array.isArray(items) ? items : []).map((item) => {
+        const isRegionFeedback = item?.kind === 'region_annotation'
+          || item?.kind === 'completion_request'
+          || item?.target?.kind === 'region_annotation'
+          || item?.target?.kind === 'completion_request';
+        if (!isRegionFeedback) return item;
+        const shapeId = String(item?.target?.shape_id || item?.meta?.region_shape_id || '').trim();
+        const content = regions.get(shapeId);
+        if (!content) return item;
+        const current = String(item.content || '').trim();
+        if (current && current !== DEFAULT_REGION_FEEDBACK_CONTENT) return item;
+        changed = true;
+        const thread = Array.isArray(item.thread)
+          ? item.thread.map((message, index) => (
+            index === 0 && message?.role === 'user' && (!message.text || message.text === DEFAULT_REGION_FEEDBACK_CONTENT)
+              ? { ...message, text: content }
+              : message
+          ))
+          : item.thread;
+        return {
+          ...item,
+          content,
+          thread,
+          updated_at: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      return changed ? next : items;
+    }, []);
   }
 
   async function ensureRegionFeedbackForEvent(workspaceId, event) {
@@ -957,6 +1007,7 @@ function setupRoutes(app, dataDir) {
       restored_page_ids: [],
       restored_shape_ids: [],
       preserved_widget_ids: [],
+      cleared_widget_pending_ids: [],
       stale_base: false,
     };
     const incomingStore = incomingSnapshot?.document?.store;
@@ -989,6 +1040,8 @@ function setupRoutes(app, dataDir) {
       const inMeta = incoming.meta || {};
       if (curMeta.vd_kind !== 'html_component') continue;
       const preservedMeta = {};
+      const curStateVersion = Number(curMeta.vd_state_version || 0);
+      const inStateVersion = Number(inMeta.vd_state_version || 0);
       if (Number(curMeta.vd_state_version || 0) > Number(inMeta.vd_state_version || 0)) {
         preservedMeta.vd_widget_state = curMeta.vd_widget_state;
         preservedMeta.vd_state_version = curMeta.vd_state_version;
@@ -1007,6 +1060,19 @@ function setupRoutes(app, dataDir) {
         preservedMeta.vd_widget_pending_at = curMeta.vd_widget_pending_at;
         preservedMeta.vd_widget_feedback_event_type = curMeta.vd_widget_feedback_event_type;
       }
+      if (staleBase && !curMeta.vd_widget_pending_feedback && inMeta.vd_widget_pending_feedback && inStateVersion <= curStateVersion) {
+        const nextMeta = { ...inMeta, ...preservedMeta };
+        delete nextMeta.vd_widget_pending_feedback;
+        delete nextMeta.vd_widget_pending_at;
+        delete nextMeta.vd_widget_feedback_event_type;
+        const mergedRecord = { ...(mergedStore[id] || incoming), meta: nextMeta };
+        if (mergedRecord.props?.color === USER_PENDING_CHANGE_COLOR) {
+          mergedRecord.props = { ...(mergedRecord.props || {}), color: AGENT_SCAFFOLD_COLOR };
+        }
+        mergedStore[id] = mergedRecord;
+        result.cleared_widget_pending_ids.push(String(record.id || id));
+        continue;
+      }
       if (Object.keys(preservedMeta).length > 0) {
         const mergedRecord = { ...(mergedStore[id] || incoming), meta: { ...inMeta, ...preservedMeta } };
         if (preservedMeta.vd_widget_pending_feedback) {
@@ -1018,7 +1084,8 @@ function setupRoutes(app, dataDir) {
     }
     if (result.restored_page_ids.length > 0
       || result.restored_shape_ids.length > 0
-      || result.preserved_widget_ids.length > 0) {
+      || result.preserved_widget_ids.length > 0
+      || result.cleared_widget_pending_ids.length > 0) {
       result.snapshot = {
         ...incomingSnapshot,
         document: { ...incomingSnapshot.document, store: mergedStore },
@@ -1058,6 +1125,42 @@ function setupRoutes(app, dataDir) {
       widget_instances: mergeList(semanticIndex.widget_instances, previousIndex?.widget_instances),
       region_annotations: mergeList(semanticIndex.region_annotations, previousIndex?.region_annotations),
       completion_requests: mergeList(semanticIndex.completion_requests, previousIndex?.completion_requests),
+    };
+  }
+
+  function clearWidgetPendingInSemanticIndex(index, shapeIds = []) {
+    if (!index || typeof index !== 'object' || !Array.isArray(shapeIds) || shapeIds.length === 0) return index;
+    const ids = new Set(shapeIds.map(String));
+    const clearMeta = (meta) => {
+      if (!meta || typeof meta !== 'object') return meta || {};
+      const next = { ...meta };
+      delete next.vd_widget_pending_feedback;
+      delete next.vd_widget_pending_at;
+      delete next.vd_widget_feedback_event_type;
+      return next;
+    };
+    const clearList = (list) => (Array.isArray(list)
+      ? list.map((item) => (ids.has(String(item?.shape_id || item?.id))
+        ? { ...item, meta: clearMeta(item?.meta), pending_feedback: false, pending_at: null }
+        : item))
+      : list);
+    return {
+      ...index,
+      nodes: clearList(index.nodes),
+      widget_instances: clearList(index.widget_instances),
+      canvas_ir: index.canvas_ir && typeof index.canvas_ir === 'object'
+        ? {
+          ...index.canvas_ir,
+          nodes: Array.isArray(index.canvas_ir.nodes)
+            ? index.canvas_ir.nodes.map((node) => {
+              const shapeId = node.shape_id || node.meta?.shape_id || `shape:vd-ir-${node.id}`;
+              return ids.has(String(shapeId))
+                ? { ...node, meta: clearMeta(node?.meta) }
+                : node;
+            })
+            : index.canvas_ir.nodes,
+        }
+        : index.canvas_ir,
     };
   }
 
@@ -1827,7 +1930,10 @@ function setupRoutes(app, dataDir) {
         agentRev: workspace.agent_rev || 0,
       });
       const guardedIncomingIndex = semanticIndex && typeof semanticIndex === 'object'
-        ? appendRestoredSemanticEntries(semanticIndex, previousIndex, guard.restored_shape_ids, guard.restored_page_ids)
+        ? clearWidgetPendingInSemanticIndex(
+          appendRestoredSemanticEntries(semanticIndex, previousIndex, guard.restored_shape_ids, guard.restored_page_ids),
+          guard.cleared_widget_pending_ids,
+        )
         : semanticIndex;
       const normalizedNextIndexBase = guardedIncomingIndex && typeof guardedIncomingIndex === 'object'
         ? carryCanvasAgentFields(
@@ -1862,6 +1968,7 @@ function setupRoutes(app, dataDir) {
       if (shouldClearPendingUserState) {
         await resolvePendingUserFeedback(workspace.id, now, 'agent_snapshot_write');
       }
+      await syncRegionFeedbackFromSemanticIndex(workspace.id, semanticIndexToSave);
       await writeJSON(canvasSnapshotFile(workspace.id), snapshotToWrite);
       const saved = await writeCanvasWorkspace({
         ...workspace,
@@ -1884,12 +1991,13 @@ function setupRoutes(app, dataDir) {
         restored_page_ids: guard.restored_page_ids,
         restored_shape_ids: guard.restored_shape_ids,
         preserved_widget_ids: guard.preserved_widget_ids,
+        cleared_widget_pending_ids: guard.cleared_widget_pending_ids,
       };
-      if (guard.restored_page_ids.length > 0 || guard.restored_shape_ids.length > 0 || guard.preserved_widget_ids.length > 0) {
+      if (guard.restored_page_ids.length > 0 || guard.restored_shape_ids.length > 0 || guard.preserved_widget_ids.length > 0 || guard.cleared_widget_pending_ids.length > 0) {
         await appendCanvasEvent(workspace.id, {
           type: 'snapshot_write_protected',
           actor: 'system',
-          summary: `快照写入保护：恢复 ${guard.restored_page_ids.length} 个 page、${guard.restored_shape_ids.length} 个 agent shape，保留 ${guard.preserved_widget_ids.length} 个 widget 状态（客户端 base_rev=${writeProtection.base_rev ?? '无'}）。`,
+          summary: `快照写入保护：恢复 ${guard.restored_page_ids.length} 个 page、${guard.restored_shape_ids.length} 个 agent shape，保留 ${guard.preserved_widget_ids.length} 个 widget 状态，清理 ${guard.cleared_widget_pending_ids.length} 个过期 widget 待处理状态（客户端 base_rev=${writeProtection.base_rev ?? '无'}）。`,
           target: { kind: 'canvas_workspace', workspace_id: workspace.id },
           meta: { write_protection: writeProtection },
         });
@@ -1931,13 +2039,16 @@ function setupRoutes(app, dataDir) {
       const authorName = typeof req.body?.author === 'object'
         ? String(req.body.author?.name || 'user')
         : String(req.body?.author || 'user');
+      const requestedDirection = ['expert_to_content', 'user_to_expert', 'other'].includes(req.body?.direction)
+        ? req.body.direction
+        : null;
       const authorKind = String(
         (typeof req.body?.author === 'object' ? req.body.author?.kind : req.body?.author_kind)
-        || (authorName === 'user' ? 'user' : 'user'),
+        || (requestedDirection === 'expert_to_content' ? 'expert' : 'user'),
       ) === 'expert' ? 'expert' : 'user';
       const targets = normalizeCanvasFeedbackTargets(req.body?.targets, req.body?.target);
-      const direction = ['expert_to_content', 'user_to_expert', 'other'].includes(req.body?.direction)
-        ? req.body.direction
+      const direction = requestedDirection
+        ? requestedDirection
         : (authorKind === 'expert' ? 'expert_to_content' : 'user_to_expert');
       const isExpertOpinion = authorKind === 'expert' || direction === 'expert_to_content';
       const feedback = {

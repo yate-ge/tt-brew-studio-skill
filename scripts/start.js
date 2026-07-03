@@ -2,17 +2,19 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync, spawn } = require('child_process');
 
 const PORT = 3847;           // Avoids conflict with 3000/5173/8080 common dev ports
 const HEALTH_TIMEOUT = 15;   // Seconds to wait for server startup
 
 const SKILL_DIR = path.resolve(__dirname, '..');
+const RUNTIME_LABEL = 'tt-design-brew-studio';
 // English and Chinese have built-in locale presets; other languages are agent-generated at runtime.
 const PRESET_LANGS = ['en', 'zh'];
 
 function log(msg) {
-  process.stderr.write(`[visual-delivery] ${msg}\n`);
+  process.stderr.write(`[${RUNTIME_LABEL}] ${msg}\n`);
 }
 
 function outputJSON(obj) {
@@ -59,6 +61,77 @@ function isProcessAlive(pid) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function syncTemplateDir(sourceDir, destDir, options = {}) {
+  const preserveRootEntries = new Set(options.preserveRootEntries || []);
+  fs.mkdirSync(destDir, { recursive: true });
+
+  const sourceEntries = new Map(
+    fs.readdirSync(sourceDir, { withFileTypes: true }).map((entry) => [entry.name, entry])
+  );
+  const destEntries = fs.readdirSync(destDir, { withFileTypes: true });
+
+  for (const entry of destEntries) {
+    if (preserveRootEntries.has(entry.name)) continue;
+    const sourceEntry = sourceEntries.get(entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (!sourceEntry) {
+      fs.rmSync(destPath, { recursive: true, force: true });
+      continue;
+    }
+    if (entry.isDirectory() && sourceEntry.isDirectory()) {
+      syncTemplateDir(path.join(sourceDir, entry.name), destPath);
+    }
+  }
+
+  fs.cpSync(sourceDir, destDir, { recursive: true, force: true });
+}
+
+function manifestHash(dir) {
+  const hash = crypto.createHash('sha256');
+  for (const name of ['package.json', 'package-lock.json']) {
+    const file = path.join(dir, name);
+    if (fs.existsSync(file)) {
+      hash.update(name);
+      hash.update(fs.readFileSync(file));
+    }
+  }
+  return hash.digest('hex');
+}
+
+function commandFailureDetails(err) {
+  const chunks = [err?.stdout, err?.stderr]
+    .map((chunk) => Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || ''))
+    .map((text) => text.trim())
+    .filter(Boolean);
+  if (!chunks.length) return '';
+  const joined = chunks.join('\n');
+  return joined.length > 4000 ? `${joined.slice(-4000)}` : joined;
+}
+
+function ensureDependencies(dir, installCommand, label) {
+  const nodeModules = path.join(dir, 'node_modules');
+  const stampPath = path.join(nodeModules, '.vd-install-hash');
+  const hash = manifestHash(dir);
+  let installedHash = null;
+  try { installedHash = fs.readFileSync(stampPath, 'utf8').trim(); } catch {}
+  if (fs.existsSync(nodeModules) && installedHash === hash) return;
+
+  log(`Installing ${label} dependencies...`);
+  try {
+    execSync(installCommand, { cwd: dir, stdio: 'pipe' });
+    fs.mkdirSync(nodeModules, { recursive: true });
+    fs.writeFileSync(stampPath, hash, 'utf8');
+  } catch (err) {
+    const details = commandFailureDetails(err);
+    outputJSON({
+      status: 'error',
+      message: `Failed to install ${label} dependencies. Check network and retry.`,
+      details,
+    });
+    process.exit(1);
   }
 }
 
@@ -145,11 +218,11 @@ async function main() {
 
     // Copy server template
     log('  Copying server template...');
-    fs.cpSync(path.join(SKILL_DIR, 'templates', 'server'), path.join(dataDir, 'server'), { recursive: true });
+    syncTemplateDir(path.join(SKILL_DIR, 'templates', 'server'), path.join(dataDir, 'server'));
 
     // Copy frontend template
     log('  Copying frontend template...');
-    fs.cpSync(path.join(SKILL_DIR, 'templates', 'ui'), path.join(dataDir, 'ui'), { recursive: true });
+    syncTemplateDir(path.join(SKILL_DIR, 'templates', 'ui'), path.join(dataDir, 'ui'));
 
     // Copy design template (only if not exists)
     if (!fs.existsSync(path.join(dataDir, 'design'))) {
@@ -170,13 +243,11 @@ async function main() {
 
     if (shouldSyncTemplates) {
       log('Syncing runtime templates...');
-      fs.cpSync(path.join(SKILL_DIR, 'templates', 'server'), path.join(dataDir, 'server'), {
-        recursive: true,
-        force: true,
+      syncTemplateDir(path.join(SKILL_DIR, 'templates', 'server'), path.join(dataDir, 'server'), {
+        preserveRootEntries: ['node_modules'],
       });
-      fs.cpSync(path.join(SKILL_DIR, 'templates', 'ui'), path.join(dataDir, 'ui'), {
-        recursive: true,
-        force: true,
+      syncTemplateDir(path.join(SKILL_DIR, 'templates', 'ui'), path.join(dataDir, 'ui'), {
+        preserveRootEntries: ['node_modules', 'dist'],
       });
       templatesSynced = true;
     }
@@ -219,8 +290,16 @@ async function main() {
     }
   }
 
-  // Platform defaults — English uses a named default; non-English falls back to locale values in frontend
-  const PLATFORM_DEFAULTS_EN = { name: 'Visual Delivery Canvas', slogan: 'Think together on a canvas.', favicon: '' };
+  const PLATFORM_DEFAULTS = {
+    en: { name: 'TT Design Brew Studio', slogan: 'Think together on a design canvas.', favicon: '' },
+    zh: { name: 'TT 设计精酿 Studio', slogan: '在画布上一起推敲设计判断。', favicon: '' },
+  };
+  const STALE_PLATFORM_NAMES = new Set([
+    'Visual Delivery',
+    'Visual Delivery Canvas',
+    'Visual Delivery 画布',
+    ...Object.values(PLATFORM_DEFAULTS).map((item) => item.name),
+  ]);
 
   // Read existing settings to check if platform needs update
   const existingSettings = (() => {
@@ -229,22 +308,22 @@ async function main() {
     catch { return {}; }
   })();
 
-  // Detect stale English platform defaults on non-English language
-  const isStaleEnPlatform = !isPresetLang
-    && existingSettings.platform?.name === PLATFORM_DEFAULTS_EN.name;
+  const platformName = existingSettings.platform?.name || '';
+  const isDefaultOrStalePlatform = !platformName || STALE_PLATFORM_NAMES.has(platformName);
 
   // Update settings.json when needed
-  if (!fs.existsSync(settingsPath) || langChanged || isStaleEnPlatform) {
-    // For non-English: use empty platform so frontend falls back to locale (appTitle / platformSlogan)
+  if (!fs.existsSync(settingsPath) || langChanged || isDefaultOrStalePlatform) {
+    // For non-preset languages: use empty platform so frontend falls back to generated locale values.
     // Treat empty platform (both name/slogan falsy) as unset — re-apply defaults
     const hasCustomPlatform = existingSettings.platform
-      && (existingSettings.platform.name || existingSettings.platform.slogan);
+      && (existingSettings.platform.name || existingSettings.platform.slogan)
+      && !isDefaultOrStalePlatform;
     const platformValue = (() => {
       const ep = existingSettings.platform || {};
-      if (hasCustomPlatform && !isStaleEnPlatform) {
+      if (hasCustomPlatform) {
         return { name: ep.name, slogan: ep.slogan, favicon: ep.favicon || '' };
       }
-      return isPresetLang ? PLATFORM_DEFAULTS_EN : { name: '', slogan: '', favicon: '' };
+      return isPresetLang ? PLATFORM_DEFAULTS[initLang] : { name: '', slogan: '', favicon: '' };
     })();
 
     fs.writeFileSync(
@@ -261,35 +340,11 @@ async function main() {
     );
   }
 
-  // Install server dependencies (if node_modules missing)
   const serverDir = path.join(dataDir, 'server');
-  if (!fs.existsSync(path.join(serverDir, 'node_modules'))) {
-    log('Installing server dependencies...');
-    try {
-      execSync('npm install --production --silent', { cwd: serverDir, stdio: 'pipe' });
-    } catch (err) {
-      outputJSON({
-        status: 'error',
-        message: 'Failed to install server dependencies. Check network and retry.'
-      });
-      process.exit(1);
-    }
-  }
+  ensureDependencies(serverDir, 'npm install --omit=dev --silent', 'server');
 
-  // Install frontend dependencies (if node_modules missing)
   const uiDir = path.join(dataDir, 'ui');
-  if (!fs.existsSync(path.join(uiDir, 'node_modules'))) {
-    log('Installing frontend dependencies...');
-    try {
-      execSync('npm install --silent', { cwd: uiDir, stdio: 'pipe' });
-    } catch (err) {
-      outputJSON({
-        status: 'error',
-        message: 'Failed to install frontend dependencies. Check network and retry.'
-      });
-      process.exit(1);
-    }
-  }
+  ensureDependencies(uiDir, 'npm install --silent', 'frontend');
 
   // Build frontend (if dist/ missing)
   const distDir = path.join(uiDir, 'dist');
@@ -298,9 +353,11 @@ async function main() {
     try {
       execSync('npm run build', { cwd: uiDir, stdio: 'pipe' });
     } catch (err) {
+      const details = commandFailureDetails(err);
       outputJSON({
         status: 'error',
-        message: `Frontend build failed. Check ${path.join(dataDir, 'logs', 'server.log')} for details.`
+        message: 'Frontend build failed.',
+        details,
       });
       process.exit(1);
     }

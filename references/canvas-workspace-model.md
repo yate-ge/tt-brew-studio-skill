@@ -1,6 +1,6 @@
 # Project Canvas Document Model
 
-Visual Delivery has one product surface:
+TT Design Brew Studio has one product surface:
 
 - `canvas_workspace`: a persistent project canvas document container.
 
@@ -255,7 +255,7 @@ select and zoom to the referenced canvas object.
 
 ## Scaffold Layout Review
 
-After a scaffold is created or modified, Visual Delivery should review the
+After a scaffold is created or modified, TT Design Brew Studio should review the
 rendered layout before treating the scaffold as complete. The MVP records a
 programmatic review in both the canvas event and `semantic_index.layout_reviews`:
 
@@ -345,7 +345,7 @@ and write assets.
 
 ## FigJam-Inspired Agent Protocol
 
-The Visual Delivery canvas should borrow FigJam's operational discipline without
+The TT Design Brew Studio canvas should borrow FigJam's operational discipline without
 depending on FigJam as the runtime. The transferable patterns are:
 
 - inspect first, then write

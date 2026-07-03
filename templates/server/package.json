@@ -1,9 +1,9 @@
 {
-  "name": "visual-delivery-server",
+  "name": "tt-design-brew-studio-server",
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "express": "^4.21.0",
-    "ws": "^8.18.0"
+    "express": "^5.2.1",
+    "ws": "^8.21.0"
   }
 }

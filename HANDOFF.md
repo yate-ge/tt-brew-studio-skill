@@ -1,17 +1,17 @@
 # HANDOFF — TT 设计精酿 Studio（2026-07-03）
 
-交接给下一位继续开发。**先读这份，再读下面「权威规格」三份文档。**
+历史交接备注。**当前开发状态以 `git status`、`README`、`SKILL.md` 和 `references/` 的
+最新内容为准；本文件只保留当时的设计决策脉络。**
 
 ## 一句话现状
 
-视觉脚手架的**生成 + 观感**已做完并推送（脚手架=专家思考框架、内层给坐标、外层横向、
-画布只放"说明+提问+留白"、样式字段、框架级画布图库）。**A 的专家坝 → 脚手架归属连线和使用说明浮层已补上**；
-剩余主要是 case 的协同亮点 **E/F/G**（前端为主），对应 `examples/test-usecase-playable-city.md`
-里标 🔨 的验收点。
+视觉脚手架的核心方向已确定：脚手架=专家思考框架、内层给坐标、外层横向、
+画布只放"说明+提问+留白"、样式字段、框架级画布图库。专家坝到脚手架归属连线和使用说明浮层
+已经进入实现；后续开发仍应以当前代码和验收用例为准。
 
 ## Git / 运行
 
-- 分支 `codex/expert-feedback-panel`，最新提交已推送（工作树干净）。
+- 当前分支与工作区状态请以 `git branch --show-current` 和 `git status --short` 为准。
 - 起服务：`node scripts/start.js --data-dir .visual-delivery --lang zh` → `localhost:3847/canvas`。
 - 改前端后 `start.js` 会重建；**浏览器常缓存旧 bundle → 硬刷新 `ctrl+shift+r`**。改后端
   （`templates/server/lib/canvas-ir.js`）要重启服务。

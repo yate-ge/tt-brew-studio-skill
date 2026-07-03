@@ -1,5 +1,5 @@
 {
-  "appTitle": "Visual Delivery Canvas",
+  "appTitle": "TT Design Brew Studio",
   "canvasWorkspace": "Canvas workspace",
   "canvas": "Canvas",
   "newCanvas": "New Page",
@@ -14,5 +14,5 @@
   "completionRequest": "Region annotation",
   "feedbackPanel": "Submitted items",
   "noFeedback": "No submitted items yet.",
-  "platformSlogan": "Think together on a canvas."
+  "platformSlogan": "Think together on a design canvas."
 }

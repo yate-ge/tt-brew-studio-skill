@@ -1,6 +1,6 @@
 # CanvasIR 与方法模板
 
-CanvasIR 是 Visual Delivery 面向 agent 的中间表达。agent 用它描述设计方法脚手架的语义层级
+CanvasIR 是 TT 设计精酿 Studio 面向 agent 的中间表达。agent 用它描述设计方法脚手架的语义层级
 和布局，不直接手写 tldraw snapshot records。
 
 在本 skill 中，**CanvasIR Template 就是方法模板的运行时表达**。设计方法库中的静态脚手架

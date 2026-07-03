@@ -28,6 +28,7 @@ import {
 } from '../lib/api';
 import { useDesignTokens } from '../hooks/useDesignTokens';
 import GeneratedContentFrame from '../components/GeneratedContentFrame';
+import { eventBus } from '../lib/eventBus';
 import ttBrewStudioLogo from '../assets/brand/tt-brew-studio-logo.png';
 import expertLiuYang from '../assets/experts/liuyang.jpg';
 import expertLouYongqi from '../assets/experts/louyongqi.jpg';
@@ -441,6 +442,7 @@ function collectDiscussionExperts(workspace) {
 }
 
 function targetKindForShape(shape) {
+  if (isAnnotationArrowShape(shape)) return 'annotation_arrow';
   if (isCanvasSectionShape(shape)) return 'canvas_section';
   if (isHtmlComponentShape(shape)) return 'html_component';
   if (isImageLikeShape(shape)) return 'canvas_asset';
@@ -859,12 +861,14 @@ function annotationsFromShapes(editor, shapes) {
       });
     });
     if (isAnnotationArrowShape(shape)) {
+      const feedbackId = shape.meta?.vd_annotation_feedback_id || null;
       annotations.push({
         id: shape.meta?.vd_annotation_id || shapeId,
+        feedback_id: feedbackId,
         type: 'annotation_arrow',
         kind: 'annotation_arrow',
         shape_id: shapeId,
-        target,
+        target: feedbackId ? { ...target, annotation_feedback_id: feedbackId } : target,
         text: shapeText(shape),
         status: shape.meta?.vd_annotation_status || 'open',
         flagged: true,
@@ -875,6 +879,73 @@ function annotationsFromShapes(editor, shapes) {
     }
   }
   return annotations;
+}
+
+function annotationDisplayText(value) {
+  return String(value || '')
+    .replace(/^画布标注[:：]\s*/u, '')
+    .replace(/^标注箭头[:：]\s*/u, '')
+    .trim();
+}
+
+function feedbackItemOriginalUserText(item) {
+  const userMessage = Array.isArray(item?.thread)
+    ? item.thread.find((message) => message?.role === 'user' && String(message.text || '').trim())
+    : null;
+  return annotationDisplayText(userMessage?.text || item?.content || '');
+}
+
+function annotationArrowTipPoint(shape) {
+  if (!shape || shape.type !== 'arrow') return null;
+  const props = shape.props || {};
+  const localPoint = props.arrowheadEnd && props.arrowheadEnd !== 'none'
+    ? props.end
+    : props.start;
+  if (!localPoint || !Number.isFinite(localPoint.x) || !Number.isFinite(localPoint.y)) return null;
+  return {
+    x: (Number(shape.x) || 0) + localPoint.x,
+    y: (Number(shape.y) || 0) + localPoint.y,
+  };
+}
+
+function annotationArrowCommentOverlaysFromEditor(editor, feedbackItems = []) {
+  if (!editor) return [];
+  const feedbackByShapeId = new Map();
+  feedbackItems.forEach((item) => {
+    if (item?.author?.kind !== 'user') return;
+    (item.shapeIds || []).forEach((shapeId) => {
+      const current = feedbackByShapeId.get(String(shapeId));
+      const currentTime = current ? new Date(current.createdAt || 0).getTime() : 0;
+      const itemTime = new Date(item.createdAt || 0).getTime();
+      if (!current || itemTime >= currentTime) feedbackByShapeId.set(String(shapeId), item);
+    });
+  });
+  return currentPageShapes(editor)
+    .filter(isAnnotationArrowShape)
+    .map((shape) => {
+      const shapeId = String(shape.id);
+      const stored = Array.isArray(shape.meta?.vd_annotations) ? shape.meta.vd_annotations : [];
+      const latestStored = [...stored].reverse().find((item) => annotationDisplayText(item?.text || item?.content));
+      const feedbackItem = feedbackByShapeId.get(shapeId);
+      const text = annotationDisplayText(
+        latestStored?.text
+        || latestStored?.content
+        || shape.meta?.vd_annotation_note
+        || feedbackItemOriginalUserText(feedbackItem)
+        || shapeText(shape),
+      );
+      const tip = annotationArrowTipPoint(shape);
+      if (!text || !tip) return null;
+      const viewport = pagePointToViewport(editor, tip);
+      return {
+        shapeId,
+        x: viewport.x,
+        y: viewport.y,
+        text,
+        status: feedbackItem?.status || latestStored?.status || shape.meta?.vd_annotation_status || 'open',
+      };
+    })
+    .filter(Boolean);
 }
 
 function annotationTargetFromShapes(editor, shapes, pointerPagePoint = null) {
@@ -1110,6 +1181,7 @@ function feedbackAuthorInfo(raw) {
   const name = typeof rawAuthor === 'object' ? String(rawAuthor?.name || 'user') : String(rawAuthor || 'user');
   const known = DESIGN_EXPERTS.find((expert) => expert.name === name || name.startsWith(expert.name));
   const declaredExpert = raw?.author_kind === 'expert'
+    || raw?.direction === 'expert_to_content'
     || (typeof rawAuthor === 'object' && rawAuthor?.kind === 'expert');
   const kind = declaredExpert || known ? 'expert' : 'user';
   return { kind, name, expert: known || null, color: known?.color || (kind === 'expert' ? expertFallbackColor(name) : null) };
@@ -1182,6 +1254,20 @@ function scaffoldAttributionItemsFromEditor(editor) {
 function canvasFeedbackPanelItems(workspace) {
   const items = new Map();
   const existingShapeIds = workspaceShapeIds(workspace);
+  const regionFeedbackDefaultText = '用户圈出了一个空白区域，默认意图是请智能体或专家在该区域补全内容。';
+  const semanticRegionText = (item) => String(
+    item?.note || item?.prompt || item?.text || item?.title || ''
+  ).trim();
+  const semanticRegionByShapeId = new Map();
+  [
+    ...(workspace?.semantic_index?.region_annotations || []),
+    ...(workspace?.semantic_index?.completion_requests || []),
+  ].forEach((item) => {
+    const shapeId = String(item?.shape_id || item?.id || '').trim();
+    if (shapeId) semanticRegionByShapeId.set(shapeId, item);
+  });
+  const feedbackBackedRegionShapeIds = new Set();
+  const feedbackBackedAnnotationIds = new Set();
   const shouldShowTargetedItem = (kind, shapeIds) => {
     if (!['canvas_annotation', 'annotation_arrow', REGION_ANNOTATION_KIND, LEGACY_COMPLETION_KIND].includes(kind)) {
       return true;
@@ -1192,26 +1278,51 @@ function canvasFeedbackPanelItems(workspace) {
     if (!item?.id) return;
     if (!shouldShowTargetedItem(item.kind, item.shapeIds || [])) return;
     const previous = items.get(item.id) || {};
+    const annotationMirrorForFeedback = Boolean(previous.raw?.id && item.raw?.feedback_id);
+    const preservedFeedbackFields = annotationMirrorForFeedback ? {
+      content: previous.content,
+      status: previous.status,
+      flagged: previous.flagged,
+      createdAt: previous.createdAt,
+      raw: previous.raw,
+      target: targetShapeIds(previous.target || {}).length ? previous.target : item.target,
+    } : {};
     items.set(item.id, {
       ...previous,
       ...item,
+      ...preservedFeedbackFields,
       shapeIds: Array.from(new Set([...(previous.shapeIds || []), ...(item.shapeIds || [])])),
     });
   };
 
   (workspace?.feedback || []).forEach((feedback) => {
     const target = feedback.target || {};
+    const shapeIds = targetShapeIds(target);
+    const isRegionFeedback = feedback.kind === REGION_ANNOTATION_KIND
+      || target.kind === REGION_ANNOTATION_KIND
+      || feedback.kind === LEGACY_COMPLETION_KIND
+      || target.kind === LEGACY_COMPLETION_KIND;
+    if (isRegionFeedback) {
+      shapeIds.forEach((shapeId) => feedbackBackedRegionShapeIds.add(String(shapeId)));
+    }
+    const annotationId = feedback.meta?.annotation_id || target.annotation_feedback_id;
+    if (annotationId) feedbackBackedAnnotationIds.add(String(annotationId));
+    const regionShapeId = shapeIds.find((shapeId) => semanticRegionByShapeId.has(String(shapeId)));
+    const semanticRegionContent = regionShapeId ? semanticRegionText(semanticRegionByShapeId.get(String(regionShapeId))) : '';
+    const content = semanticRegionContent && (!feedback.content || feedback.content === regionFeedbackDefaultText)
+      ? semanticRegionContent
+      : feedback.content;
     addItem({
       id: `feedback:${feedback.id}`,
       sourceId: feedback.id,
       kind: feedback.kind || 'canvas_feedback',
       label: feedbackKindLabel(feedback.kind || 'canvas_feedback'),
-      content: feedback.content || '未填写内容',
+      content: content || '未填写内容',
       status: feedback.status || (feedback.handled === false ? 'tracked' : 'submitted'),
       flagged: feedback.status === 'tracked' || feedback.handled === false || feedback.meta?.flagged,
       createdAt: feedback.created_at || feedback.createdAt,
       target,
-      shapeIds: targetShapeIds(target),
+      shapeIds,
       raw: feedback,
     });
   });
@@ -1219,6 +1330,7 @@ function canvasFeedbackPanelItems(workspace) {
   (workspace?.semantic_index?.annotations || []).forEach((annotation, index) => {
     const target = annotation.target || {};
     const feedbackId = annotation.feedback_id || target.annotation_feedback_id;
+    if (!feedbackId && annotation.id && feedbackBackedAnnotationIds.has(String(annotation.id))) return;
     const id = feedbackId ? `feedback:${feedbackId}` : `annotation:${annotation.id || annotation.shape_id || index}`;
     addItem({
       id,
@@ -1237,6 +1349,7 @@ function canvasFeedbackPanelItems(workspace) {
 
   (workspace?.semantic_index?.region_annotations || []).forEach((request, index) => {
     const shapeId = request.shape_id || request.id;
+    if (shapeId && feedbackBackedRegionShapeIds.has(String(shapeId))) return;
     addItem({
       id: `region:${shapeId || request.note || request.prompt || request.title || index}`,
       sourceId: shapeId,
@@ -1259,6 +1372,7 @@ function canvasFeedbackPanelItems(workspace) {
 
   (workspace?.semantic_index?.completion_requests || []).forEach((request, index) => {
     const shapeId = request.shape_id || request.id;
+    if (shapeId && feedbackBackedRegionShapeIds.has(String(shapeId))) return;
     addItem({
       id: `legacy-completion:${shapeId || request.prompt || request.title || index}`,
       sourceId: shapeId,
@@ -3369,6 +3483,29 @@ const STYLES = {
     lineHeight: 1.45,
     whiteSpace: 'normal',
   }),
+  annotationArrowComment: (item) => {
+    const resolved = ['resolved', 'addressed', 'confirmed', 'archived', 'completed'].includes(item.status);
+    return {
+      position: 'absolute',
+      left: item.x + 10,
+      top: item.y - 10,
+      maxWidth: 260,
+      minWidth: 80,
+      padding: '7px 9px',
+      borderRadius: 8,
+      border: `1px solid ${resolved ? 'rgba(124, 58, 237, .28)' : 'rgba(124, 58, 237, .5)'}`,
+      background: resolved ? 'rgba(255, 255, 255, .88)' : 'rgba(250, 245, 255, .96)',
+      boxShadow: resolved ? '0 8px 18px rgba(88, 28, 135, .12)' : '0 10px 24px rgba(88, 28, 135, .2)',
+      color: '#4c1d95',
+      fontSize: 12,
+      fontWeight: 650,
+      lineHeight: 1.42,
+      overflowWrap: 'anywhere',
+      pointerEvents: 'none',
+      transform: 'translateY(-100%)',
+      opacity: resolved ? 0.82 : 1,
+    };
+  },
   htmlOverlayLayer: {
     position: 'absolute',
     inset: 0,
@@ -3759,6 +3896,7 @@ export default function CanvasWorkspace() {
   const [htmlComponents, setHtmlComponents] = useState([]);
   const [authoredOverlays, setAuthoredOverlays] = useState([]);
   const [pendingChangeOverlays, setPendingChangeOverlays] = useState([]);
+  const [annotationArrowCommentOverlays, setAnnotationArrowCommentOverlays] = useState([]);
   const [scaffoldAttributionItems, setScaffoldAttributionItems] = useState([]);
   const [previewMode, setPreviewMode] = useState('normal');
   const [scaffolds, setScaffolds] = useState([]);
@@ -3777,6 +3915,9 @@ export default function CanvasWorkspace() {
   const [expertSummonSubmitting, setExpertSummonSubmitting] = useState(false);
   const editorRef = useRef(null);
   const saveTimer = useRef(null);
+  const remoteRefreshTimer = useRef(null);
+  const workspaceRef = useRef(null);
+  const savingStateRef = useRef(savingState);
   const mounted = useRef(false);
   const completionToolActive = useRef(false);
   const annotationTargetToolActive = useRef(false);
@@ -3842,12 +3983,27 @@ export default function CanvasWorkspace() {
     return normalOverlays.filter((item) => item.author === selectedExpertName);
   }, [authoredOverlays, previewMode, selectedExpertName]);
 
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  useEffect(() => {
+    savingStateRef.current = savingState;
+  }, [savingState]);
+
   function refreshHtmlComponents(editor = editorRef.current) {
     setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
     setAuthoredOverlays(editor ? authoredOverlaysFromEditor(editor) : []);
     setPendingChangeOverlays(editor ? pendingChangeOverlaysFromEditor(editor) : []);
+    setAnnotationArrowCommentOverlays(editor ? annotationArrowCommentOverlaysFromEditor(editor, feedbackPanelItems) : []);
     setScaffoldAttributionItems(editor ? scaffoldAttributionItemsFromEditor(editor) : []);
   }
+
+  useEffect(() => {
+    setAnnotationArrowCommentOverlays(
+      editorRef.current ? annotationArrowCommentOverlaysFromEditor(editorRef.current, feedbackPanelItems) : [],
+    );
+  }, [feedbackPanelItems]);
 
   useEffect(() => {
     setAnnotationDraft('');
@@ -4033,6 +4189,47 @@ export default function CanvasWorkspace() {
     return current;
   }
 
+  async function refreshWorkspaceFromServer() {
+    const current = await fetchProjectCanvasWorkspace();
+    snapshotRevRef.current = current.snapshot_rev || 0;
+    setWorkspace(current);
+    const editor = editorRef.current;
+    if (editor && current.snapshot) {
+      programmaticCanvasWriteGuard.current = true;
+      try {
+        loadSnapshot(editor.store, current.snapshot);
+        normalizeVisualDeliveryShapeStates(editor);
+        resetShapeFingerprints(editor);
+        refreshHtmlComponents(editor);
+      } finally {
+        programmaticCanvasWriteGuard.current = false;
+      }
+    }
+    return current;
+  }
+
+  function scheduleRemoteWorkspaceRefresh(payload = {}) {
+    const current = workspaceRef.current;
+    const workspaceId = payload?.id || payload?.workspace_id;
+    if (current?.id && workspaceId && workspaceId !== current.id) return;
+    const nextRev = Number(payload?.snapshot_rev || 0);
+    if (nextRev > 0 && nextRev <= snapshotRevRef.current) return;
+
+    window.clearTimeout(remoteRefreshTimer.current);
+    remoteRefreshTimer.current = window.setTimeout(async () => {
+      remoteRefreshTimer.current = null;
+      if (saveTimer.current || savingStateRef.current === '保存中...') {
+        scheduleRemoteWorkspaceRefresh(payload);
+        return;
+      }
+      try {
+        await refreshWorkspaceFromServer();
+      } catch {
+        markToolMessage('画布同步失败，稍后会继续尝试。');
+      }
+    }, 300);
+  }
+
   useEffect(() => {
     let canceled = false;
     setLoading(true);
@@ -4051,8 +4248,19 @@ export default function CanvasWorkspace() {
     return () => { canceled = true; };
   }, []);
 
+  useEffect(() => {
+    const handleWorkspaceUpdate = (payload) => scheduleRemoteWorkspaceRefresh(payload);
+    eventBus.on('canvas_workspace_updated', handleWorkspaceUpdate);
+    eventBus.on('canvas_workspace_created', handleWorkspaceUpdate);
+    return () => {
+      eventBus.off('canvas_workspace_updated', handleWorkspaceUpdate);
+      eventBus.off('canvas_workspace_created', handleWorkspaceUpdate);
+    };
+  }, []);
+
   useEffect(() => () => {
     window.clearTimeout(saveTimer.current);
+    window.clearTimeout(remoteRefreshTimer.current);
   }, []);
 
   async function handleInitializeWorkspace() {
@@ -4093,13 +4301,18 @@ export default function CanvasWorkspace() {
       // The server merged back agent shapes this client never loaded —
       // converge the editor with the protected snapshot.
       if ((saved.write_protection?.restored_page_ids?.length > 0
-        || saved.write_protection?.restored_shape_ids?.length > 0) && saved.snapshot) {
+        || saved.write_protection?.restored_shape_ids?.length > 0
+        || saved.write_protection?.cleared_widget_pending_ids?.length > 0) && saved.snapshot) {
         try {
           loadSnapshot(editor.store, saved.snapshot);
           normalizeVisualDeliveryShapeStates(editor);
           resetShapeFingerprints(editor);
           refreshHtmlComponents(editor);
-          markToolMessage(`已同步 ${saved.write_protection.restored_shape_ids.length} 个来自 Agent 的画布对象。`);
+          const restoredCount = saved.write_protection.restored_shape_ids?.length || 0;
+          const clearedPendingCount = saved.write_protection.cleared_widget_pending_ids?.length || 0;
+          markToolMessage(restoredCount > 0
+            ? `已同步 ${restoredCount} 个来自 Agent 的画布对象。`
+            : `已清理 ${clearedPendingCount} 个过期 Widget 待处理状态。`);
         } catch { /* keep local state; next reload converges */ }
       }
     } catch {
@@ -4944,6 +5157,11 @@ export default function CanvasWorkspace() {
               ...(Array.isArray(shape.meta?.vd_annotations) ? shape.meta.vd_annotations : []),
               annotation,
             ].slice(-50),
+            ...(isAnnotationArrowShape(shape) ? {
+              vd_annotation_note: note,
+              vd_annotation_feedback_id: feedback.id,
+              vd_annotation_status: annotation.status,
+            } : {}),
             vd_last_annotated_at: now,
             vd_last_edited_by: 'user',
           },
@@ -5042,6 +5260,7 @@ export default function CanvasWorkspace() {
     if (eventFactory !== undefined) pendingCanvasEvent.current = eventFactory;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null;
       const queuedEvent = pendingCanvasEvent.current;
       pendingCanvasEvent.current = null;
       const event = typeof queuedEvent === 'function'
@@ -5768,6 +5987,7 @@ export default function CanvasWorkspace() {
       annotationArrowDrag.current = null;
       setHtmlComponents([]);
       setPendingChangeOverlays([]);
+      setAnnotationArrowCommentOverlays([]);
       setSelectedAnnotationTarget(null);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('wheel', preventBrowserZoom, { capture: true });
@@ -6023,6 +6243,16 @@ export default function CanvasWorkspace() {
                   ))}
                   {pendingChangeOverlays.map((item) => (
                     <div key={`pending-${item.shapeId}`} style={STYLES.pendingChangeOverlay(item)} />
+                  ))}
+                  {annotationArrowCommentOverlays.map((item) => (
+                    <div
+                      key={`annotation-arrow-comment-${item.shapeId}`}
+                      data-testid="vd-annotation-arrow-comment"
+                      data-status={item.status}
+                      style={STYLES.annotationArrowComment(item)}
+                    >
+                      {item.text}
+                    </div>
                   ))}
                   {selectedAnnotationTarget && (
                     <CanvasAnnotationPopover

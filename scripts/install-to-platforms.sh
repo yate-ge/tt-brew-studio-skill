@@ -1,12 +1,12 @@
 #!/bin/bash
 # install-to-platforms.sh
-# 将 visual-delivery-skill 安装到各智能体平台
+# 将 tt-design-brew-studio 安装到各智能体平台
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(dirname "$SCRIPT_DIR")"
-SKILL_NAME="visual-delivery-skill"
+SKILL_NAME="tt-design-brew-studio"
 
 # 目标平台
 PLATFORMS=(

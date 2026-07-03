@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "visual-delivery",
+      "name": "tt-design-brew-studio",
       "runtimeExecutable": "node",
       "runtimeArgs": [
         ".visual-delivery/server/index.js",

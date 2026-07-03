@@ -1,4 +1,4 @@
-[中文 README](./README.md)
+[English README](./README.md)
 
 # TT 设计精酿 Studio Skill
 
@@ -7,7 +7,7 @@
 每位专家从自己的领域、研究方法和审美取向出发，在本地持久画布上进行引导、批注、评审
 与共创；智能体本体则根据用户目标生成设计草案、画板补全、方法模板和项目化 Widget。
 
-本仓库的项目名是 `tt-brew-studio-skill`。它不是通用视觉交付工具，而是围绕
+本仓库的项目名是 `tt-design-brew-studio`。它不是通用视觉交付工具，而是围绕
 TT 设计学院教学场景定制的设计导师画板 skill。
 
 画布不是通用汇报工具，而是设计学习的工作台。它把显性方法论和难以言传的隐性审美，
@@ -35,10 +35,10 @@ TT 设计学院教学场景定制的设计导师画板 skill。
 
 ```bash
 # Claude Code
-cp -r tt-brew-studio-skill your-project/.claude/skills/
+cp -r tt-design-brew-studio your-project/.claude/skills/
 
 # Codex
-cp -r tt-brew-studio-skill your-project/.codex/skills/
+cp -r tt-design-brew-studio your-project/.codex/skills/
 ```
 
 Agent 会自动发现并加载该技能。
@@ -71,7 +71,7 @@ Agent 会依次：
 ## 架构
 
 ```text
-tt-brew-studio-skill/
+tt-design-brew-studio/
 ├── SKILL.md                  # canvas-only Agent 指令
 ├── scripts/
 │   ├── start.js              # 启动服务 + 构建前端
@@ -107,11 +107,11 @@ tt-brew-studio-skill/
 
 | 位置 | 依赖 | 版本 | 用途 |
 | --- | --- | --- | --- |
-| `templates/ui/package.json` | `tldraw` | `^5.1.1` | 画板内核；提供 frame、note、geo、arrow、image、selection、resize 等基础能力 |
-| `templates/ui/package.json` | `react` / `react-dom` | `^18.3.1` | 前端 UI、专家栏、反馈面板和画板工作区 |
-| `templates/ui/package.json` | `vite` / `@vitejs/plugin-react` | `^6.0.0` / `^4.3.4` | 前端开发与构建 |
-| `templates/server/package.json` | `express` | `^4.21.0` | 本地 HTTP API、静态资源服务 |
-| `templates/server/package.json` | `ws` | `^8.18.0` | WebSocket 状态广播 |
+| `templates/ui/package.json` | `tldraw` | `^5.2.2` | 画板内核；提供 frame、note、geo、arrow、image、selection、resize 等基础能力 |
+| `templates/ui/package.json` | `react` / `react-dom` | `^19.2.7` | 前端 UI、专家栏、反馈面板和画板工作区 |
+| `templates/ui/package.json` | `vite` / `@vitejs/plugin-react` | `^8.1.3` / `^6.0.3` | 前端开发与构建 |
+| `templates/server/package.json` | `express` | `^5.2.1` | 本地 HTTP API、静态资源服务 |
+| `templates/server/package.json` | `ws` | `^8.21.0` | WebSocket 状态广播 |
 
 ## 运行时
 

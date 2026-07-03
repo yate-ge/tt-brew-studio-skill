@@ -7,7 +7,7 @@ const { spawnSync } = require('child_process');
 const SKILL_DIR = path.resolve(__dirname, '..');
 
 function log(message) {
-  process.stderr.write(`[visual-delivery] ${message}\n`);
+  process.stderr.write(`[tt-design-brew-studio] ${message}\n`);
 }
 
 function outputJSON(obj) {
@@ -114,7 +114,7 @@ function assertSafeRuntimeDir(dataDir) {
     throw new Error(`Refusing to reset unsafe data dir: ${resolved}`);
   }
   if (!path.basename(resolved).startsWith('.visual-delivery')) {
-    throw new Error(`Refusing to reset non Visual Delivery runtime dir: ${resolved}`);
+    throw new Error(`Refusing to reset non TT Design Brew Studio runtime dir: ${resolved}`);
   }
 }
 

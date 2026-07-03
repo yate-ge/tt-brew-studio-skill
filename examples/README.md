@@ -21,8 +21,8 @@ node examples/gallery-demo.mjs
 ## case-walk.mjs — 小雷 case 分幕生成（Discover→Deliver）
 
 按幕生成小雷《老年人可玩城市》的脚手架 + 专家 feedback + 共创角色 Widget + 证据链。
-**注意**：此脚本是**较早的 5 位专家版本**，用于验证布局个性化（横向时间轴/放射/网格各异，
-零重叠）；权威 case 是 8 位专家 4 叙事（见 `references/case-playable-city.md`），后续会据此扩展。
+**注意**：此脚本是当前 5 位在场专家规则下的可运行版本，用于验证布局个性化（横向时间轴/放射/网格各异，
+零重叠）；权威 case 也遵循最多 5 位在场专家（见 `references/case-playable-city.md`）。
 
 ```bash
 node examples/case-walk.mjs setup
