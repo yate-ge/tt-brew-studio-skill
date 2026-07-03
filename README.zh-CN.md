@@ -7,6 +7,9 @@
 每位专家从自己的领域、研究方法和审美取向出发，在本地持久画布上进行引导、批注、评审
 与共创；智能体本体则根据用户目标生成设计草案、画板补全、方法模板和项目化 Widget。
 
+本仓库的项目名是 `tt-brew-studio-skill`。它不是通用视觉交付工具，而是围绕
+TT 设计学院教学场景定制的设计导师画板 skill。
+
 画布不是通用汇报工具，而是设计学习的工作台。它把显性方法论和难以言传的隐性审美，
 沉淀为可追踪的专家判断、可操作的方法模板（CanvasIR Template），以及可交互的交互组件
 （Widget），让学生在持续调整自己的设计配方时逐步内化设计判断力。
@@ -32,10 +35,10 @@
 
 ```bash
 # Claude Code
-cp -r visual-delivery-skill your-project/.claude/skills/
+cp -r tt-brew-studio-skill your-project/.claude/skills/
 
 # Codex
-cp -r visual-delivery-skill your-project/.codex/skills/
+cp -r tt-brew-studio-skill your-project/.codex/skills/
 ```
 
 Agent 会自动发现并加载该技能。
@@ -50,7 +53,7 @@ Agent 会自动发现并加载该技能。
 
 Agent 会依次：
 
-1. 启动本地 Visual Delivery 服务。
+1. 启动本地 TT 设计精酿 Studio 服务。
 2. 打开或初始化项目设计画板。
 3. 返回 `http://localhost:3847/canvas`。
 4. 通过读取和写入画布上下文继续设计指导与共创。
@@ -68,7 +71,7 @@ Agent 会依次：
 ## 架构
 
 ```text
-visual-delivery-skill/
+tt-brew-studio-skill/
 ├── SKILL.md                  # canvas-only Agent 指令
 ├── scripts/
 │   ├── start.js              # 启动服务 + 构建前端
@@ -86,6 +89,17 @@ visual-delivery-skill/
     ├── locales/              # 内置语言包
     └── design/               # 默认设计令牌
 ```
+
+## 技术底座
+
+- **画板内核**：基于 `tldraw` 改造，使用其 frame、note、geo、arrow、image 等原生画板能力，
+  并扩展视觉脚手架、专家栏、区域批注、Widget 锚点和状态同步。
+- **前端运行时**：`React` + `Vite`，负责画板 UI、专家栏、反馈面板、HTML Widget 容器和
+  tldraw shape 行为扩展。
+- **后端运行时**：`Express` + `ws`，提供本地 API、WebSocket 更新广播、CanvasIR 编译、
+  快照保存、反馈线程和运行时模板同步。
+- **语义协议**：CanvasIR command / semantic index 描述设计脚手架、Widget、专家意见、
+  用户反馈和区域补全请求，避免 agent 直接手写 tldraw snapshot。
 
 ## 运行时
 
