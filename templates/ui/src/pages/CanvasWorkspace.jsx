@@ -47,7 +47,8 @@ const DEFAULT_STAGE_FLOW_GAP = 56;
 const DEFAULT_STAGE_RIGHT_PADDING = 72;
 const ANNOTATION_PURPLE = '#7c3aed';
 const AGENT_SCAFFOLD_COLOR = 'yellow';
-const USER_PENDING_CHANGE_COLOR = 'yellow';
+const USER_PENDING_CHANGE_COLOR = 'violet';
+const USER_PENDING_CHANGE_RGB = '124, 58, 237';
 const EXPERT_OPINION_YELLOW = '#f59e0b';
 const REGION_ANNOTATION_KIND = 'region_annotation';
 const LEGACY_COMPLETION_KIND = 'completion_request';
@@ -206,23 +207,78 @@ function shouldTrackUserPendingShape(shape) {
   return true;
 }
 
-function shapeVisualFingerprint(shape) {
+function shapeContentFingerprint(shape) {
   if (!shape) return '';
   return JSON.stringify({
-    type: shape.type,
-    parentId: shape.parentId || null,
-    index: shape.index || null,
-    x: Math.round(Number(shape.x || 0) * 100) / 100,
-    y: Math.round(Number(shape.y || 0) * 100) / 100,
-    rotation: Math.round(Number(shape.rotation || 0) * 1000) / 1000,
-    isLocked: Boolean(shape.isLocked),
-    opacity: Number.isFinite(shape.opacity) ? shape.opacity : 1,
-    props: shape.props || {},
+    text: shapeText(shape),
   });
 }
 
+function shapeHasTrackableContent(shape) {
+  return shapeText(shape).trim().length > 0;
+}
+
 function widgetFeedbackFrameColor(shape) {
-  return AGENT_SCAFFOLD_COLOR;
+  return shape?.meta?.vd_widget_pending_feedback ? USER_PENDING_CHANGE_COLOR : AGENT_SCAFFOLD_COLOR;
+}
+
+function userPendingChangeProps(shape) {
+  const props = shape?.props || {};
+  let nextProps = null;
+  if (Object.hasOwn(props, 'color') && props.color !== USER_PENDING_CHANGE_COLOR) {
+    nextProps = { ...(nextProps || props), color: USER_PENDING_CHANGE_COLOR };
+  }
+  if (Object.hasOwn(props, 'labelColor') && props.labelColor !== USER_PENDING_CHANGE_COLOR) {
+    nextProps = { ...(nextProps || props), labelColor: USER_PENDING_CHANGE_COLOR };
+  }
+  return nextProps;
+}
+
+function userPendingChangeMeta(shape, meta, now, baseContentFingerprint) {
+  const props = shape?.props || {};
+  const nextMeta = {
+    ...meta,
+    vd_user_pending_change: true,
+    vd_user_pending_at: now,
+    vd_user_pending_base_content_fingerprint: baseContentFingerprint,
+    vd_last_edited_by: 'user',
+    vd_updated_at: now,
+  };
+  if (!Object.hasOwn(nextMeta, 'vd_user_pending_prev_color') && Object.hasOwn(props, 'color')) {
+    nextMeta.vd_user_pending_prev_color = props.color;
+  }
+  if (!Object.hasOwn(nextMeta, 'vd_user_pending_prev_label_color') && Object.hasOwn(props, 'labelColor')) {
+    nextMeta.vd_user_pending_prev_label_color = props.labelColor;
+  }
+  return nextMeta;
+}
+
+function restoredUserPendingChangeProps(shape) {
+  const meta = shape?.meta || {};
+  const props = shape?.props || {};
+  let nextProps = props;
+  if (Object.hasOwn(meta, 'vd_user_pending_prev_color') && props.color !== meta.vd_user_pending_prev_color) {
+    nextProps = { ...(nextProps || {}), color: meta.vd_user_pending_prev_color };
+  }
+  if (Object.hasOwn(meta, 'vd_user_pending_prev_label_color') && props.labelColor !== meta.vd_user_pending_prev_label_color) {
+    nextProps = { ...(nextProps || {}), labelColor: meta.vd_user_pending_prev_label_color };
+  }
+  return nextProps;
+}
+
+function clearedUserPendingChangeMeta(meta) {
+  if (!meta || typeof meta !== 'object') return meta || {};
+  const next = { ...meta };
+  [
+    'vd_user_pending_change',
+    'vd_user_pending_at',
+    'vd_user_pending_base_content_fingerprint',
+    'vd_user_pending_prev_color',
+    'vd_user_pending_prev_label_color',
+  ].forEach((key) => {
+    if (Object.hasOwn(next, key)) delete next[key];
+  });
+  return next;
 }
 
 function pendingChangeOverlaysFromEditor(editor) {
@@ -3487,10 +3543,9 @@ const STYLES = {
     boxShadow: disabled ? 'none' : '0 8px 18px rgba(124, 58, 237, .26)',
   }),
   highlightOverlay: (item) => {
-    const isAgent = item.author === 'agent';
-    const isMixed = item.author === 'mixed';
+    const isUser = item.author === 'user';
     const isCompletion = item.kind === REGION_ANNOTATION_KIND || item.kind === LEGACY_COMPLETION_KIND;
-    const color = isCompletion || isAgent ? '124, 58, 237' : isMixed ? '14, 165, 233' : '245, 158, 11';
+    const color = isCompletion || isUser ? USER_PENDING_CHANGE_RGB : '245, 158, 11';
     return {
       position: 'absolute',
       left: item.x,
@@ -3505,7 +3560,7 @@ const STYLES = {
     };
   },
   pendingChangeOverlay: (item) => {
-    const color = '245, 158, 11';
+    const color = USER_PENDING_CHANGE_RGB;
     return {
       position: 'absolute',
       left: item.x,
@@ -3576,6 +3631,7 @@ export default function CanvasWorkspace() {
   const userPendingMarkGuard = useRef(false);
   const programmaticCanvasWriteGuard = useRef(false);
   const shapeFingerprints = useRef(new Map());
+  const pendingContentBaselines = useRef(new Map());
   const widgetDragRef = useRef(null);
   // Rev of the snapshot this client loaded/saved last. Echoed as base_rev on
   // saves so the server can protect agent shapes from stale-client writes.
@@ -3665,7 +3721,11 @@ export default function CanvasWorkspace() {
   function resetShapeFingerprints(editor = editorRef.current) {
     const next = new Map();
     for (const shape of currentPageShapes(editor)) {
-      next.set(String(shape.id), shapeVisualFingerprint(shape));
+      const id = String(shape.id);
+      next.set(id, shapeContentFingerprint(shape));
+      if (shape.meta?.vd_user_pending_change && shape.meta?.vd_user_pending_base_content_fingerprint) {
+        pendingContentBaselines.current.set(id, shape.meta.vd_user_pending_base_content_fingerprint);
+      }
     }
     shapeFingerprints.current = next;
   }
@@ -3681,6 +3741,22 @@ export default function CanvasWorkspace() {
         const nextColor = widgetFeedbackFrameColor(shape);
         if (shape.props?.color !== nextColor) {
           props = { ...(shape.props || {}), color: nextColor };
+        }
+      } else if (meta.vd_user_pending_change) {
+        const id = String(shape.id);
+        const base = meta.vd_user_pending_base_content_fingerprint || pendingContentBaselines.current.get(id);
+        const current = shapeContentFingerprint(shape);
+        if (!base || current === base) {
+          props = restoredUserPendingChangeProps(shape);
+          nextMeta = clearedUserPendingChangeMeta(meta);
+          pendingContentBaselines.current.delete(id);
+        } else {
+          props = userPendingChangeProps(shape);
+          if (!Object.hasOwn(meta, 'vd_user_pending_base_content_fingerprint')
+            || !Object.hasOwn(meta, 'vd_user_pending_prev_color')
+            || (!Object.hasOwn(meta, 'vd_user_pending_prev_label_color') && Object.hasOwn(shape.props || {}, 'labelColor'))) {
+            nextMeta = userPendingChangeMeta(shape, meta, meta.vd_user_pending_at || new Date().toISOString(), base);
+          }
         }
       } else if (isAgentScaffoldRootShape(shape)) {
         if (shape.props?.color !== AGENT_SCAFFOLD_COLOR) {
@@ -3726,26 +3802,44 @@ export default function CanvasWorkspace() {
     const now = new Date().toISOString();
     for (const shape of shapes) {
       const id = String(shape.id);
-      const fingerprint = shapeVisualFingerprint(shape);
+      const fingerprint = shapeContentFingerprint(shape);
       next.set(id, fingerprint);
       const before = previous.get(id);
-      if (before === fingerprint) continue;
       if (!shouldTrackUserPendingShape(shape)) continue;
       const meta = shape.meta || {};
       const isNewShape = before === undefined;
       const createdBy = meta.vd_created_by || meta.vd_author || '';
       if (isNewShape && createdBy && createdBy !== 'user') continue;
-      if (meta.vd_user_pending_change) continue;
+      const base = meta.vd_user_pending_base_content_fingerprint || pendingContentBaselines.current.get(id);
+      if (meta.vd_user_pending_change) {
+        if (!base || fingerprint === base) {
+          const props = restoredUserPendingChangeProps(shape);
+          updates.push({
+            id: shape.id,
+            type: shape.type,
+            ...(props !== shape.props ? { props } : {}),
+            meta: clearedUserPendingChangeMeta(meta),
+          });
+          pendingContentBaselines.current.delete(id);
+        } else if (before !== fingerprint) {
+          pendingContentBaselines.current.set(id, base);
+        }
+        continue;
+      }
+      if (before === fingerprint) continue;
+      if (isNewShape && !shapeHasTrackableContent(shape)) continue;
+      const baseFingerprint = pendingContentBaselines.current.get(id) || (isNewShape ? shapeContentFingerprint(null) : before);
+      if (fingerprint === baseFingerprint) {
+        pendingContentBaselines.current.delete(id);
+        continue;
+      }
+      const props = userPendingChangeProps(shape);
+      pendingContentBaselines.current.set(id, baseFingerprint);
       updates.push({
         id: shape.id,
         type: shape.type,
-        meta: {
-          ...meta,
-          vd_user_pending_change: true,
-          vd_user_pending_at: now,
-          vd_last_edited_by: 'user',
-          vd_updated_at: now,
-        },
+        ...(props ? { props } : {}),
+        meta: userPendingChangeMeta(shape, meta, now, baseFingerprint),
       });
     }
     shapeFingerprints.current = next;
@@ -4325,7 +4419,7 @@ export default function CanvasWorkspace() {
       type: shape.type,
       props: {
         ...(shape.props || {}),
-        color: AGENT_SCAFFOLD_COLOR,
+        color: USER_PENDING_CHANGE_COLOR,
       },
       meta: {
         ...(shape.meta || {}),
@@ -4352,7 +4446,7 @@ export default function CanvasWorkspace() {
       type: shape.type,
       props: {
         ...(shape.props || {}),
-        color: AGENT_SCAFFOLD_COLOR,
+        color: USER_PENDING_CHANGE_COLOR,
       },
       meta: {
         ...meta,
@@ -5474,6 +5568,7 @@ export default function CanvasWorkspace() {
       setAnnotationArrowToolMode(false);
       knownShapeIds.current = new Set();
       shapeFingerprints.current = new Map();
+      pendingContentBaselines.current = new Map();
       pendingCanvasEvent.current = null;
       annotationArrowDrag.current = null;
       setHtmlComponents([]);

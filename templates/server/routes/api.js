@@ -18,6 +18,9 @@ const {
   prepareWidget,
 } = require('../lib/canvas-ir');
 
+const AGENT_SCAFFOLD_COLOR = 'yellow';
+const USER_PENDING_CHANGE_COLOR = 'violet';
+
 const DEFAULT_SETTINGS = {
   language: 'en',
   language_explicit: false,
@@ -337,6 +340,9 @@ function setupRoutes(app, dataDir) {
   const PENDING_USER_META_KEYS = [
     'vd_user_pending_change',
     'vd_user_pending_at',
+    'vd_user_pending_base_content_fingerprint',
+    'vd_user_pending_prev_color',
+    'vd_user_pending_prev_label_color',
     'vd_widget_pending_feedback',
     'vd_widget_pending_at',
     'vd_widget_feedback_event_type',
@@ -355,6 +361,28 @@ function setupRoutes(app, dataDir) {
     return changed ? next : meta;
   }
 
+  function restorePendingUserProps(record) {
+    const meta = record?.meta || {};
+    const props = record?.props || {};
+    let nextProps = props;
+    if (meta.vd_user_pending_change) {
+      if (Object.prototype.hasOwnProperty.call(meta, 'vd_user_pending_prev_color')
+        && props.color !== meta.vd_user_pending_prev_color) {
+        nextProps = { ...(nextProps || {}), color: meta.vd_user_pending_prev_color };
+      }
+      if (Object.prototype.hasOwnProperty.call(meta, 'vd_user_pending_prev_label_color')
+        && props.labelColor !== meta.vd_user_pending_prev_label_color) {
+        nextProps = { ...(nextProps || {}), labelColor: meta.vd_user_pending_prev_label_color };
+      }
+    }
+    if (meta.vd_kind === 'html_component'
+      && meta.vd_widget_pending_feedback
+      && nextProps?.color === USER_PENDING_CHANGE_COLOR) {
+      nextProps = { ...(nextProps || {}), color: AGENT_SCAFFOLD_COLOR };
+    }
+    return nextProps;
+  }
+
   function clearPendingUserCanvasState(snapshot) {
     const store = snapshot?.document?.store;
     if (!store || typeof store !== 'object') return snapshot;
@@ -366,12 +394,7 @@ function setupRoutes(app, dataDir) {
         return;
       }
       const nextMeta = clearPendingUserMeta(record.meta);
-      let nextProps = record.props;
-      if (record.meta?.vd_kind === 'html_component'
-        && record.meta?.vd_widget_pending_feedback
-        && nextProps?.color === 'violet') {
-        nextProps = { ...nextProps, color: 'yellow' };
-      }
+      const nextProps = restorePendingUserProps(record);
       if (nextMeta !== record.meta || nextProps !== record.props) {
         nextStore[id] = { ...record, meta: nextMeta, props: nextProps };
         changed = true;
@@ -859,7 +882,11 @@ function setupRoutes(app, dataDir) {
         preservedMeta.vd_widget_feedback_event_type = curMeta.vd_widget_feedback_event_type;
       }
       if (Object.keys(preservedMeta).length > 0) {
-        mergedStore[id] = { ...(mergedStore[id] || incoming), meta: { ...inMeta, ...preservedMeta } };
+        const mergedRecord = { ...(mergedStore[id] || incoming), meta: { ...inMeta, ...preservedMeta } };
+        if (preservedMeta.vd_widget_pending_feedback) {
+          mergedRecord.props = { ...(mergedRecord.props || {}), color: USER_PENDING_CHANGE_COLOR };
+        }
+        mergedStore[id] = mergedRecord;
         result.preserved_widget_ids.push(id);
       }
     }

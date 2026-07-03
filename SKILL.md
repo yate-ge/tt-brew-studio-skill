@@ -251,9 +251,9 @@ curl -s http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/agent-co
 - 是否已有 `stage.discover`、`stage.define`、`stage.develop`、`stage.deliver` 四阶段
   frame；若没有，先创建或修复四阶段导师工作区模板
 - 未处理的画板反馈和区域批注
-- 普通画布对象上的 `vd_user_pending_change` 黄色待处理标记，以及 Widget 上的
-  `vd_widget_pending_feedback` 待处理状态；Widget 自身边框保持黄色，用户提交内容在“我的反馈”
-  入口中按紫色反馈主题呈现
+- 普通画布对象上的 `vd_user_pending_change` 紫色待处理标记，以及 Widget 上的
+  `vd_widget_pending_feedback` 紫色待处理状态；普通对象只有文本内容变化才算用户修改，移动、
+  缩放、改形状或改样式不算待处理；用户提交和批注都按紫色反馈主题呈现
 - 可用 CanvasIR / Widget 执行能力（方法库只作 agent 参考）
 - 最近的 canvas events 和 layout reviews
 
@@ -282,7 +282,7 @@ agent 生成画板结构时，默认使用 CanvasIR 或 canvas commands。普通
 -> 再把项目证据、AI 草稿、用户反馈、Widget 输出或阶段材料填入对应 slot
 -> 必要时把 Widget 稳定结果物化为原生画板内容
 -> 专家对具体脚手架 / slot / Widget / artifact / connector 发出署名反馈、警示或讨论便签
--> agent 写回处理结果后，清除本轮普通画布黄色待处理和 Widget pending_feedback 状态
+-> agent 写回处理结果后，清除本轮普通画布紫色待处理和 Widget pending_feedback 状态
 ```
 
 正常继续推进时，默认只推进当前阶段或用户指定阶段，但要引用上游阶段证据并给下游阶段留下
@@ -410,12 +410,16 @@ section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `an
   annotations、annotation arrows、region annotations、widget outputs 和其他项目画板反馈；
   这些内容才进入“待处理”。专家主动给用户的内容是“意见”，归到上方专家栏对应专家头像下，
   不计入反馈待办。
-- 用户直接编辑普通画布对象（改文字、移动、改样式或新增普通 shape）后，该对象在本轮显示
-  黄色待处理高亮，并写入 `vd_user_pending_change`。这表示“学生改了画布内容，下一轮 agent
-  需要读取并决定如何吸收”；agent 处理并写回画布后，运行时清除该黄色待处理状态。
+- 用户直接编辑普通画布对象时，只有文本内容变化才进入待处理：例如矩形、便签、文字或箭头标签
+  里的文字改变，或新增了带文本内容的普通对象。仅移动位置、调整大小、旋转、改形状类型、改颜色
+  或改样式，不写入 `vd_user_pending_change`，也不显示待处理高亮。进入待处理后，该对象在本轮
+  临时切换可用的 `color` / `labelColor` 为紫色，并显示紫色待处理高亮，同时写入内容基线和
+  原色备份；如果用户撤销或改回原文本，运行时应识别内容回到基线，立即清除紫色待处理状态并
+  恢复原色。agent 处理并写回画布后，也清除紫色待处理状态并恢复原色。
 - 由 agent 创建的视觉脚手架有清晰边界：方法模板只给最外层 root frame 黄色边框，内部 slot
-  和内容保持各自语义颜色；Widget 边框始终为黄色。专家意见 UI 与连接线使用黄色主题；用户
-  反馈、批注、区域批注和标注箭头使用紫色主题。
+  和内容保持各自语义颜色；Widget 由 agent 创建时为黄色正常框，用户输入或提交后转为紫色
+  待处理框，agent 处理后恢复黄色。专家意见 UI 与连接线使用黄色主题；用户修改、反馈、批注、
+  区域批注和标注箭头使用紫色主题。
 
 ### 专家意见线程
 
@@ -486,10 +490,10 @@ curl -s -X POST http://localhost:3847/api/canvas-widgets/validate \
 ```
 
 Widget state 存在 shape meta 和 `semantic_index.widget_instances[].state` 中。用
-`update_widget` patch state。用户在 Widget 内输入或改变状态时，Widget 边框仍保持黄色，并写入
+`update_widget` patch state。用户在 Widget 内输入或改变状态时，Widget 边框转为紫色，并写入
 `vd_widget_pending_feedback`，表示“这里有用户提交/变更等待 agent 处理”；显式 `vd.emit` 输出会
 进入左侧“我的反馈”的 `widget_output` 待处理项，并以紫色反馈主题呈现。agent 处理后用
-`update_widget` 回写状态或结果，运行时清除 pending_feedback，Widget 仍为黄色正常框。完整合约见：
+`update_widget` 回写状态或结果，运行时清除 pending_feedback，Widget 恢复黄色正常框。完整合约见：
 [references/canvas-widgets.md](references/canvas-widgets.md)。
 Widget 示例模式见：[references/widget-examples.md](references/widget-examples.md)。这些示例只
 用于引导智能体生成项目化 Widget，不是固定菜单。

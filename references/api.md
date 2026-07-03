@@ -342,7 +342,7 @@ Supported ops:
   `{ "op": "add_connector", "from": "node-a", "to": "node-b", "label": "证据", "type": "supports" }`
 - `add_widget`
 - `update_widget` — agent 回写 Widget 状态 / 结果 / HTML；成功更新后会清除该 Widget 的
-  `pending_feedback`，Widget 边框保持黄色正常框。
+  `pending_feedback`，Widget 从紫色待处理框恢复黄色正常框。
 
 ### `PUT /api/canvas-workspaces/:id/snapshot`
 
@@ -386,8 +386,8 @@ Widget `vd.emit` submissions create `kind: "widget_output"` feedback items.
 They are user feedback, appear in the left “我的反馈” entry, and count as pending
 until an agent/expert flow handles them. Ordinary Widget state changes do not
 create a feedback item for every interaction, but they mark the Widget as
-`pending_feedback` until `update_widget` writes back; the Widget frame itself
-remains yellow.
+`pending_feedback` until `update_widget` writes back; while pending, the Widget
+frame is purple and returns to yellow after the agent handles it.
 
 ```json
 {

@@ -62,6 +62,7 @@ const DEFAULT_NODE_SIZE = {
 };
 
 const AGENT_SCAFFOLD_COLOR = 'yellow';
+const USER_PENDING_CHANGE_COLOR = 'violet';
 
 const DESIGN_STAGE_SEQUENCE = [
   {
@@ -150,9 +151,36 @@ const PROJECT_STAGE_LAYOUT = {
   stageGap: 96,
   stageStartY: 396,
   contentOrigin: { x: 56, y: 172 },
-  contentGap: 56,
+  contentGap: 80,
   rightPadding: 72,
 };
+
+// Outer layout is backend-owned and simple: each stage is a single horizontal
+// row of scaffolds. Scaffolds fill the stage height (leaving whitespace as the
+// student work area), size their WIDTH to their agent-designed interior, and the
+// stage widens to the right as more scaffolds arrive. Inner layout is fully
+// agent-owned (explicit relative coordinates), so scaffolds no longer collapse
+// into identical vertical strips.
+const SCAFFOLD_SLOT = {
+  stageContentHeight: 1500, // usable height inside a stage band (below the guide)
+  fillFloorHeight: 1180,    // scaffolds fill at least this tall; extra = student area
+  minWidth: 720,            // never a sliver
+  maxWidth: 2600,           // never absurdly wide
+  gap: 80,                  // horizontal gap between scaffolds
+  widgetTargetHeight: 900,  // widgets read as tools: shorter than method scaffolds
+  widgetMinHeight: 420,
+  widgetMaxWidth: 1600,
+};
+
+function isStageFrameNode(node) {
+  if (!node) return false;
+  const role = String(node.role || node.meta?.vd_stage_role || '');
+  return role.startsWith('stage.') || node.meta?.vd_stage_template_dropzone === true;
+}
+
+function isStageRowItem(node) {
+  return !node?.meta?.vd_stage_reserved && !node?.meta?.vd_stage_is_guide;
+}
 
 const MIN_NODE_SIZE = {
   sticky: { w: 104, h: 64 },
@@ -879,10 +907,11 @@ function resolveLayout(ir, nodesById, childrenByParent) {
     const parentGrid = node.parent && parent ? (parent.grid || parentLayout?.grid || rootGrid) : rootGrid;
     const origin = parentLayout ? { x: parentLayout.bounds.x, y: parentLayout.bounds.y } : { x: 0, y: 0 };
     const siblings = parent ? (childrenByParent.get(parent.id) || []) : rootNodes;
-    // Command-created nodes carry bounds computed against their container's
-    // size at command time (vd_stage_flow_item); those are flow hints, not
-    // immovable geometry, so they stay eligible for post-growth reflow.
-    const autoFlowed = (!node.bounds && !node.area) || node.meta?.vd_stage_flow_item === true;
+    // A node is auto-flowed ONLY when it carries no geometry of its own. Agent
+    // -provided bounds/area are the framework's designed layout and must survive
+    // every post-pass untouched. Scaffold roots (placed by the stage-row pass)
+    // and stage frames are handled separately and are never generically reflowed.
+    const autoFlowed = !node.bounds && !node.area;
     const bounds = node.bounds
       ? boundsToAbsolute(node.bounds, origin)
       : node.area
@@ -909,7 +938,7 @@ function resolveLayout(ir, nodesById, childrenByParent) {
     growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy);
     if (!moved) break;
   }
-  reflowStageBands(ir, layout, childrenByParent, layoutPolicy);
+  layoutStageScaffolds(ir, layout, childrenByParent, layoutPolicy);
   return layout;
 }
 
@@ -974,18 +1003,20 @@ function reflowAutoFlowedChildren(ir, layout, childrenByParent, layoutPolicy = D
   return movedAny;
 }
 
-// Stage-band children are positioned when each command runs, before later
-// content makes their containers grow. After growth, re-run a wrap flow over
-// each stage frame's direct flow children with their FINAL sizes so grown
-// scaffolds never overlap their right-hand neighbours, then re-fit the stage
-// frame height. Whole subtrees are shifted so inner geometry is preserved.
-function reflowStageBands(ir, layout, childrenByParent, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
+// Outer layout pass. Each stage is a SINGLE horizontal row of scaffolds:
+//   - a scaffold's WIDTH comes from its agent-designed interior (content-fit,
+//     clamped so nothing is a sliver or absurdly wide);
+//   - a scaffold's HEIGHT fills the stage band (fill floor, but never clips its
+//     content), so extra space reads as the student work area;
+//   - widgets keep their intrinsic aspect ratio, scaled to a tool-sized height;
+//   - scaffolds flow left→right with no wrap; the stage widens to fit them;
+//   - stage bands then restack vertically so they never overlap.
+// Interiors are agent-owned coordinates and are only translated wholesale, never
+// re-flowed, so each framework keeps its distinct shape.
+function layoutStageScaffolds(ir, layout, childrenByParent, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
   const policy = normalizeLayoutPolicy(layoutPolicy);
   if (policy.flow !== 'top_left') return;
-  const stageFrames = ir.nodes.filter((node) => {
-    const role = String(node.role || node.meta?.vd_stage_role || '');
-    return CONTAINER_KINDS.has(node.kind) && role.startsWith('stage.');
-  });
+  const stageFrames = ir.nodes.filter((node) => CONTAINER_KINDS.has(node.kind) && isStageFrameNode(node));
   if (stageFrames.length === 0) return;
 
   const shiftSubtree = (nodeId, dx, dy) => {
@@ -995,72 +1026,87 @@ function reflowStageBands(ir, layout, childrenByParent, layoutPolicy = DEFAULT_L
       entry.bounds = { ...entry.bounds, x: entry.bounds.x + dx, y: entry.bounds.y + dy };
       layout.set(nodeId, entry);
     }
-    for (const child of childrenByParent.get(nodeId) || []) {
-      shiftSubtree(child.id, dx, dy);
-    }
+    for (const child of childrenByParent.get(nodeId) || []) shiftSubtree(child.id, dx, dy);
   };
+
+  const isWidget = (node) => node.kind === 'html_component';
 
   for (const stage of stageFrames) {
     const stageLayout = layout.get(stage.id);
     if (!stageLayout) continue;
-    const children = (childrenByParent.get(stage.id) || [])
-      .filter((child) => layout.get(child.id));
-    if (children.length === 0) continue;
+    const rowItems = (childrenByParent.get(stage.id) || [])
+      .filter((child) => layout.get(child.id) && isStageRowItem(child));
+    if (rowItems.length === 0) continue;
 
-    const originX = stageLayout.bounds.x + (stage.meta?.vd_stage_content_origin?.x ?? PROJECT_STAGE_LAYOUT.contentOrigin.x);
-    const originY = stageLayout.bounds.y + (stage.meta?.vd_stage_content_origin?.y ?? PROJECT_STAGE_LAYOUT.contentOrigin.y);
-    const gap = Number.isFinite(stage.meta?.vd_stage_flow_gap) ? stage.meta.vd_stage_flow_gap : PROJECT_STAGE_LAYOUT.contentGap;
+    const contentOriginX = stage.meta?.vd_stage_content_origin?.x ?? PROJECT_STAGE_LAYOUT.contentOrigin.x;
+    const contentOriginY = stage.meta?.vd_stage_content_origin?.y ?? PROJECT_STAGE_LAYOUT.contentOrigin.y;
+    const originX = stageLayout.bounds.x + contentOriginX;
+    const originY = stageLayout.bounds.y + contentOriginY;
+    const gap = Number.isFinite(stage.meta?.vd_stage_flow_gap) ? stage.meta.vd_stage_flow_gap : SCAFFOLD_SLOT.gap;
     const rightPadding = Number.isFinite(stage.meta?.vd_stage_right_padding) ? stage.meta.vd_stage_right_padding : PROJECT_STAGE_LAYOUT.rightPadding;
-    const innerW = Math.max(320, stageLayout.bounds.w - (originX - stageLayout.bounds.x) - rightPadding);
+    const fillHeight = SCAFFOLD_SLOT.stageContentHeight;
 
-    const cursor = { x: 0, y: 0, rowH: 0 };
-    let moved = false;
-    for (const child of children) {
-      const entry = layout.get(child.id);
-      const b = entry.bounds;
-      if (cursor.x > 0 && cursor.x + b.w > innerW) {
-        cursor.x = 0;
-        cursor.y += cursor.rowH + gap;
-        cursor.rowH = 0;
+    let cursorX = 0;
+    let maxItemBottom = originY;
+    for (const item of rowItems) {
+      const entry = layout.get(item.id);
+      const fitted = entry.bounds;
+      let targetW;
+      let targetH;
+      if (isWidget(item)) {
+        // Preserve intrinsic aspect; scale to a tool-sized height.
+        const aspect = fitted.h > 0 ? fitted.w / fitted.h : 1.4;
+        targetH = Math.min(SCAFFOLD_SLOT.widgetTargetHeight, fillHeight);
+        targetH = Math.max(SCAFFOLD_SLOT.widgetMinHeight, targetH);
+        targetW = Math.min(SCAFFOLD_SLOT.widgetMaxWidth, Math.round(targetH * aspect));
+      } else {
+        // Width = designed interior width, clamped. Height fills the band but
+        // never clips a taller interior.
+        targetW = Math.min(SCAFFOLD_SLOT.maxWidth, Math.max(SCAFFOLD_SLOT.minWidth, fitted.w));
+        targetH = Math.max(SCAFFOLD_SLOT.fillFloorHeight, fitted.h);
       }
-      const targetX = Math.round(originX + cursor.x);
-      const targetY = Math.round(originY + cursor.y);
-      const dx = targetX - b.x;
-      const dy = targetY - b.y;
-      if (dx !== 0 || dy !== 0) {
-        shiftSubtree(child.id, dx, dy);
-        moved = true;
-      }
-      cursor.x += b.w + gap;
-      cursor.rowH = Math.max(cursor.rowH, b.h);
+
+      const targetX = Math.round(originX + cursorX);
+      const dx = targetX - fitted.x;
+      const dy = originY - fitted.y;
+      if (dx !== 0 || dy !== 0) shiftSubtree(item.id, dx, dy);
+      // Resize the frame itself (children already translated; extra space below
+      // / right of the interior is deliberate student work area).
+      const moved = layout.get(item.id);
+      moved.bounds = { ...moved.bounds, w: targetW, h: targetH };
+      layout.set(item.id, moved);
+
+      cursorX += targetW + gap;
+      maxItemBottom = Math.max(maxItemBottom, originY + targetH);
     }
 
-    const contentBottom = Math.max(...children.map((child) => {
-      const b = layout.get(child.id).bounds;
-      return b.y + b.h;
-    }));
-    const requiredH = Math.ceil(contentBottom - stageLayout.bounds.y + gap);
-    if (requiredH > stageLayout.bounds.h) {
-      stageLayout.bounds = { ...stageLayout.bounds, h: requiredH };
+    // Widen the stage to hold the row; grow taller only if an interior overflowed.
+    const requiredW = Math.ceil(contentOriginX + Math.max(0, cursorX - gap) + rightPadding);
+    const requiredH = Math.ceil(Math.max(fillHeight + contentOriginY, maxItemBottom - stageLayout.bounds.y + rightPadding));
+    if (requiredW > stageLayout.bounds.w || requiredH > stageLayout.bounds.h) {
+      stageLayout.bounds = {
+        ...stageLayout.bounds,
+        w: Math.max(stageLayout.bounds.w, requiredW),
+        h: Math.max(stageLayout.bounds.h, requiredH),
+      };
       layout.set(stage.id, stageLayout);
-      moved = true;
     }
-    if (moved) {
-      layout.autoRepairs.push({ code: 'REFLOW_STAGE_BAND', node_id: stage.id });
-    }
+    layout.autoRepairs.push({ code: 'LAYOUT_STAGE_ROW', node_id: stage.id, items: rowItems.length });
   }
 
-  // Stage frames may have grown taller: restack the stage bands themselves so
-  // they never overlap vertically, keeping their original stage order.
-  const ordered = [...stageFrames].sort((a, b) => {
-    const ao = a.meta?.vd_stage_order ?? 0;
-    const bo = b.meta?.vd_stage_order ?? 0;
-    return ao - bo;
-  });
+  // Restack stage bands vertically so a widened/grown stage never overlaps the
+  // next, keeping stage order. Also normalize every stage to the same width so
+  // the spine stays a clean column.
+  const ordered = [...stageFrames].sort((a, b) => (a.meta?.vd_stage_order ?? 0) - (b.meta?.vd_stage_order ?? 0));
+  const spineWidth = Math.max(...ordered.map((stage) => layout.get(stage.id)?.bounds.w || 0), PROJECT_STAGE_LAYOUT.width);
   let nextY = null;
   for (const stage of ordered) {
     const entry = layout.get(stage.id);
     if (!entry) continue;
+    if (entry.bounds.w !== spineWidth) {
+      entry.bounds = { ...entry.bounds, w: spineWidth };
+      layout.set(stage.id, entry);
+    }
     if (nextY === null) {
       nextY = entry.bounds.y + entry.bounds.h + PROJECT_STAGE_LAYOUT.stageGap;
       continue;
@@ -1070,8 +1116,7 @@ function reflowStageBands(ir, layout, childrenByParent, layoutPolicy = DEFAULT_L
       shiftSubtree(stage.id, 0, dy);
       layout.autoRepairs.push({ code: 'RESTACK_STAGE_BAND', node_id: stage.id });
     }
-    const updated = layout.get(stage.id);
-    nextY = updated.bounds.y + updated.bounds.h + PROJECT_STAGE_LAYOUT.stageGap;
+    nextY = layout.get(stage.id).bounds.y + layout.get(stage.id).bounds.h + PROJECT_STAGE_LAYOUT.stageGap;
   }
 }
 
@@ -1610,7 +1655,9 @@ function createGeoAnchorRecord(node, parentId, index, bounds, now) {
       growY: 0,
       url: '',
       scale: 1,
-      color: isWidget ? AGENT_SCAFFOLD_COLOR : color,
+      color: isWidget
+        ? (node.meta?.vd_widget_pending_feedback ? USER_PENDING_CHANGE_COLOR : AGENT_SCAFFOLD_COLOR)
+        : color,
       labelColor: 'black',
       fill: isWidget ? 'none' : 'solid',
       size: bounds.w < 150 || bounds.h < 88 ? 's' : 'm',
@@ -2443,16 +2490,31 @@ function reparentFragmentRoots(fragment, currentIR, parentId, command = {}) {
 }
 
 function boundsForStageCommand(ir, parentId, kind, command = {}) {
-  if (command.bounds || command.area) return command.bounds || null;
+  // 1. Agent-provided geometry always wins (this is the framework's designed
+  //    interior layout). `area` defers to resolveLayout's grid mapping.
+  if (command.bounds) return command.bounds;
+  if (command.area) return null;
+
+  const parent = ir.nodes.find((node) => node.id === safeId(parentId));
   const meta = command.meta && typeof command.meta === 'object' ? command.meta : {};
-  const size = nodeDesiredSize({ kind, meta });
-  const origin = nextChildOriginInContainer(ir, parentId, size);
-  return {
-    x: origin.x,
-    y: origin.y,
-    w: size.w,
-    h: size.h,
-  };
+
+  // 2. Scaffold roots / widgets dropped directly into a stage band get a
+  //    placeholder box; layoutStageScaffolds() owns their final size and single
+  //    -row horizontal placement after content-fit.
+  if (isStageFrameNode(parent)) {
+    const origin = stageContentOriginFor(parent);
+    const size = nodeDesiredSize({ kind, meta });
+    return {
+      x: origin.x,
+      y: origin.y,
+      w: Math.max(size.w, SCAFFOLD_SLOT.minWidth),
+      h: size.h,
+    };
+  }
+
+  // 3. Internal nodes with no agent coordinates fall back to auto-flow inside
+  //    their scaffold (graceful degradation when the agent skipped layout).
+  return null;
 }
 
 function instantiateTemplate(templateId, options = {}) {
@@ -2958,8 +3020,8 @@ function buildCanvasAgentContext({
       widget_rule: 'Widget 用于轻交互、状态、异步请求、参数控制、可视化和结构化输出；复杂材料输入应来自对话、文件或画板内容。'
         + '优先复用 available_widget_templates 中的通用原语；项目化微型工具可生成自由 HTML fragment（不能有 <html>/<head>/<body>，不能固定根尺寸，不能有外部 scripts）。'
         + '请求型 Widget 应同时 vd.state.set({status:"submitted",request_id,request}) 和 vd.emit("*_requested",{request_id,request})。'
-        + '用户在 Widget 内输入或提交后，widget_instances[].pending_feedback=true；Widget 自身边框仍保持黄色，显式 vd.emit 会进入左侧“我的反馈”的 widget_output 待处理项，并用紫色反馈主题呈现。'
-        + '智能体从 pending_widget_outputs、pending_widget_requests 和 widget_instances 读取待处理请求；处理时先 update_widget 到 agent_processing，再回写 result_ready/error；成功回写后清除 pending_feedback，Widget 仍为黄色正常框。'
+        + '用户在 Widget 内输入或提交后，widget_instances[].pending_feedback=true；Widget 边框从黄色正常态转为紫色待处理态，显式 vd.emit 会进入左侧“我的反馈”的 widget_output 待处理项，并用紫色反馈主题呈现。'
+        + '智能体从 pending_widget_outputs、pending_widget_requests 和 widget_instances 读取待处理请求；处理时先 update_widget 到 agent_processing，再回写 result_ready/error；成功回写后清除 pending_feedback，Widget 恢复黄色正常框。'
         + '稳定结果应物化为 CanvasIR 原生画板内容；Widget 不决定专家介入，智能体按 skill 判断是否需要专家批注或评审。',
       recommended_widget_state: {
         status: 'idle|drafting|submitted|agent_processing|result_ready|user_reviewing|accepted|rejected|needs_revision|materialized|error',

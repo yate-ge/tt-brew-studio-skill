@@ -159,8 +159,9 @@ section containment，并给学生协作留出空间。
 
 视觉状态语义由编译器和前端共同维护：方法模板 / 生成脚手架只把最外层
 `scaffold.root` frame 设为黄色边框，内部 slot 和内容保持各自语义颜色；`html_component`
-Widget 边框始终为黄色。用户在 Widget 内输入或提交后写入 `pending_feedback`，显式
-`vd.emit` 进入“我的反馈”并按紫色反馈主题呈现；专家意见 UI 和关联连线按黄色主题呈现。
+Widget 由 agent 创建时为黄色正常框。用户在 Widget 内输入或提交后写入 `pending_feedback`，
+Widget 转为紫色待处理框；显式 `vd.emit` 进入“我的反馈”并按紫色反馈主题呈现；专家意见
+UI 和关联连线按黄色主题呈现。
 
 ## 方法模板（CanvasIR Templates）
 
