@@ -334,6 +334,98 @@ function setupRoutes(app, dataDir) {
     return { ...index, annotations };
   }
 
+  const PENDING_USER_META_KEYS = [
+    'vd_user_pending_change',
+    'vd_user_pending_at',
+    'vd_widget_pending_feedback',
+    'vd_widget_pending_at',
+    'vd_widget_feedback_event_type',
+  ];
+
+  function clearPendingUserMeta(meta) {
+    if (!meta || typeof meta !== 'object') return meta || {};
+    let changed = false;
+    const next = { ...meta };
+    PENDING_USER_META_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(next, key)) {
+        delete next[key];
+        changed = true;
+      }
+    });
+    return changed ? next : meta;
+  }
+
+  function clearPendingUserCanvasState(snapshot) {
+    const store = snapshot?.document?.store;
+    if (!store || typeof store !== 'object') return snapshot;
+    let changed = false;
+    const nextStore = {};
+    Object.entries(store).forEach(([id, record]) => {
+      if (record?.typeName !== 'shape' || !record.meta) {
+        nextStore[id] = record;
+        return;
+      }
+      const nextMeta = clearPendingUserMeta(record.meta);
+      let nextProps = record.props;
+      if (record.meta?.vd_kind === 'html_component'
+        && record.meta?.vd_widget_pending_feedback
+        && nextProps?.color === 'violet') {
+        nextProps = { ...nextProps, color: 'yellow' };
+      }
+      if (nextMeta !== record.meta || nextProps !== record.props) {
+        nextStore[id] = { ...record, meta: nextMeta, props: nextProps };
+        changed = true;
+      } else {
+        nextStore[id] = record;
+      }
+    });
+    if (!changed) return snapshot;
+    return {
+      ...snapshot,
+      document: {
+        ...snapshot.document,
+        store: nextStore,
+      },
+    };
+  }
+
+  function clearPendingUserSemanticState(index) {
+    if (!index || typeof index !== 'object') return index;
+    const clearMetaList = (list) => (Array.isArray(list)
+      ? list.map((item) => {
+        const nextMeta = clearPendingUserMeta(item?.meta);
+        return nextMeta !== item?.meta ? { ...item, meta: nextMeta } : item;
+      })
+      : list);
+    const widgetInstances = Array.isArray(index.widget_instances)
+      ? index.widget_instances.map((item) => ({
+        ...item,
+        meta: clearPendingUserMeta(item?.meta),
+        pending_feedback: false,
+        pending_at: null,
+      }))
+      : index.widget_instances;
+    const canvasIr = index.canvas_ir && typeof index.canvas_ir === 'object'
+      ? {
+        ...index.canvas_ir,
+        nodes: Array.isArray(index.canvas_ir.nodes)
+          ? index.canvas_ir.nodes.map((node) => ({
+            ...node,
+            meta: clearPendingUserMeta(node?.meta),
+          }))
+          : index.canvas_ir.nodes,
+      }
+      : index.canvas_ir;
+    return {
+      ...index,
+      sections: clearMetaList(index.sections),
+      nodes: clearMetaList(index.nodes),
+      assets: clearMetaList(index.assets),
+      widget_instances: widgetInstances,
+      canvas_ir: canvasIr,
+    };
+  }
+
   function carryCanvasAgentFields(previousIndex = {}, nextIndex = {}) {
     const next = { ...nextIndex };
     if (!Object.prototype.hasOwnProperty.call(next, 'canvas_ir') && previousIndex?.canvas_ir) {
@@ -667,8 +759,22 @@ function setupRoutes(app, dataDir) {
     return refreshed;
   }
 
+  function isExpertOpinionFeedback(item = {}) {
+    return item.author_kind === 'expert' || item.direction === 'expert_to_content';
+  }
+
+  function lastFeedbackThreadRole(item = {}) {
+    const thread = Array.isArray(item.thread) ? item.thread : [];
+    return thread.length ? thread[thread.length - 1]?.role : null;
+  }
+
+  function isOpenCanvasFeedback(item = {}) {
+    if (isExpertOpinionFeedback(item) && lastFeedbackThreadRole(item) !== 'user') return false;
+    return item.handled === false || item.status === 'tracked';
+  }
+
   function openCanvasFeedback(workspaceId) {
-    return readCanvasFeedback(workspaceId).filter((item) => item.handled === false || item.status === 'tracked');
+    return readCanvasFeedback(workspaceId).filter(isOpenCanvasFeedback);
   }
 
   function openCompletionRequests(workspace) {
@@ -747,8 +853,13 @@ function setupRoutes(app, dataDir) {
         preservedMeta.vd_output_schema = curMeta.vd_output_schema;
         preservedMeta.vd_sizing = curMeta.vd_sizing;
       }
+      if (curMeta.vd_widget_pending_feedback && !inMeta.vd_widget_pending_feedback) {
+        preservedMeta.vd_widget_pending_feedback = curMeta.vd_widget_pending_feedback;
+        preservedMeta.vd_widget_pending_at = curMeta.vd_widget_pending_at;
+        preservedMeta.vd_widget_feedback_event_type = curMeta.vd_widget_feedback_event_type;
+      }
       if (Object.keys(preservedMeta).length > 0) {
-        mergedStore[id] = { ...incoming, meta: { ...inMeta, ...preservedMeta } };
+        mergedStore[id] = { ...(mergedStore[id] || incoming), meta: { ...inMeta, ...preservedMeta } };
         result.preserved_widget_ids.push(id);
       }
     }
@@ -800,8 +911,15 @@ function setupRoutes(app, dataDir) {
   async function saveCompiledCanvasIR(workspace, compiled, event = {}) {
     const now = new Date().toISOString();
     const previousIndex = workspace.semantic_index;
+    const shouldClearPendingUserState = event?.meta?.preserve_pending_user_changes !== true;
+    const snapshotToWrite = shouldClearPendingUserState
+      ? clearPendingUserCanvasState(compiled.snapshot)
+      : compiled.snapshot;
+    const semanticIndexToNormalize = shouldClearPendingUserState
+      ? clearPendingUserSemanticState(compiled.semantic_index)
+      : compiled.semantic_index;
     const normalizedNextIndexBase = normalizeCanvasSemanticIndex({
-      ...compiled.semantic_index,
+      ...semanticIndexToNormalize,
       updated_at: now,
     });
     const eventReview = compiled.layout_report ? {
@@ -836,7 +954,7 @@ function setupRoutes(app, dataDir) {
       ...normalizedNextIndex,
       edit_summary: hasSemanticDiff(semanticDiff) ? semanticDiff : normalizedNextIndex.edit_summary || null,
     };
-    await writeJSON(canvasSnapshotFile(workspace.id), compiled.snapshot);
+    await writeJSON(canvasSnapshotFile(workspace.id), snapshotToWrite);
     const nextRev = (workspace.snapshot_rev || 0) + 1;
     const saved = await writeCanvasWorkspace({
       ...workspace,
@@ -885,7 +1003,7 @@ function setupRoutes(app, dataDir) {
       ...normalized,
       ...detail,
       pending_feedback_count: includeDetail
-        ? detail.feedback.filter((item) => item.handled === false || item.status === 'tracked').length
+        ? detail.feedback.filter(isOpenCanvasFeedback).length
         : undefined,
     };
   }
@@ -1577,10 +1695,17 @@ function setupRoutes(app, dataDir) {
         ...normalizedNextIndex,
         edit_summary: hasSemanticDiff(semanticDiff) ? semanticDiff : normalizedNextIndex.edit_summary || null,
       };
-      await writeJSON(canvasSnapshotFile(workspace.id), guard.snapshot);
+      const shouldClearPendingUserState = event?.actor === 'agent' && event?.meta?.preserve_pending_user_changes !== true;
+      const snapshotToWrite = shouldClearPendingUserState
+        ? clearPendingUserCanvasState(guard.snapshot)
+        : guard.snapshot;
+      const semanticIndexToSave = shouldClearPendingUserState
+        ? clearPendingUserSemanticState(nextSemanticIndex)
+        : nextSemanticIndex;
+      await writeJSON(canvasSnapshotFile(workspace.id), snapshotToWrite);
       const saved = await writeCanvasWorkspace({
         ...workspace,
-        semantic_index: nextSemanticIndex,
+        semantic_index: semanticIndexToSave,
         updated_at: now,
         updatedAt: now,
         last_used_at: now,
@@ -1654,6 +1779,7 @@ function setupRoutes(app, dataDir) {
       const direction = ['expert_to_content', 'user_to_expert', 'other'].includes(req.body?.direction)
         ? req.body.direction
         : (authorKind === 'expert' ? 'expert_to_content' : 'user_to_expert');
+      const isExpertOpinion = authorKind === 'expert' || direction === 'expert_to_content';
       const feedback = {
         id: generateId('fb'),
         kind: req.body?.kind || 'canvas_feedback',
@@ -1661,8 +1787,8 @@ function setupRoutes(app, dataDir) {
         direction,
         target: req.body?.target || {},
         targets,
-        status: 'tracked',
-        handled: false,
+        status: isExpertOpinion ? 'shared' : 'tracked',
+        handled: isExpertOpinion,
         content,
         author: authorName,
         author_kind: authorKind,

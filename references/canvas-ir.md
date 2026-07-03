@@ -157,6 +157,11 @@ section containment，并给学生协作留出空间。
 `role = "scaffold.root"` 的 `section`。如果一个成熟方法模板已经有自己的 root frame，则不再
 二次包裹。
 
+视觉状态语义由编译器和前端共同维护：方法模板 / 生成脚手架只把最外层
+`scaffold.root` frame 设为黄色边框，内部 slot 和内容保持各自语义颜色；`html_component`
+Widget 边框始终为黄色。用户在 Widget 内输入或提交后写入 `pending_feedback`，显式
+`vd.emit` 进入“我的反馈”并按紫色反馈主题呈现；专家意见 UI 和关联连线按黄色主题呈现。
+
 ## 方法模板（CanvasIR Templates）
 
 方法模板是 PatternSpec / CanvasIR fragments，不是固定工作流程。一个方法模板定义 slots、
@@ -212,8 +217,12 @@ v1 支持的 commands：
 - `delete_node`
 - `move_node`
 - `locate_node`
+- `add_connector`：在两个已有节点之间创建关系箭头：
+  `{ "op": "add_connector", "from": "node-a", "to": "node-b", "label": "证据流向", "type": "supports" }`。
+  编译为绑定两端 shape 的 tldraw arrow，并记入 `semantic_index.relationships`。
 - `add_widget`：添加交互组件，可来自交互组件模板（`template_id` + `params`）或自由 `html`
-- `update_widget`：更新交互组件（`state_patch` / `state` / `html` / `title` / `description`）
+- `update_widget`：更新交互组件（`state_patch` / `state` / `html` / `title` / `description`），并在
+  成功写回时清除 Widget 的 `pending_feedback` 状态。
 
 `insert_template` 接受可选 `stage`、`parent`、`scale` 和 `anchor` / `position` / `x` + `y`。
 缩放会保持方法模板 root frame 和 child frames 的比例，同时保留非 frame seed 内容相对容器

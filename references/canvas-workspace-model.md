@@ -237,9 +237,9 @@ ordinary diagram connectors.
 
 ## Canvas Feedback Panel
 
-Project canvas documents expose a bottom-right in-canvas feedback button. Clicking it
-opens a floating panel over the canvas. The panel is a readable review queue for
-content the user has submitted during collaboration:
+Project canvas documents expose an in-canvas “我的反馈” button. Clicking it opens a
+floating panel over the canvas. The panel is a readable review queue for content
+the user has submitted during collaboration:
 
 - project canvas feedback pool entries such as `canvas_annotation`, `widget_output`,
   and `html_component` feedback,

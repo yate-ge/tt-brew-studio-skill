@@ -233,7 +233,16 @@ before writing diagnosis content:
   "current_ir_summary": {},
   "edit_summary": {},
   "recent_events": [],
-  "widget_instances": [],
+  "widget_instances": [
+    {
+      "id": "rubric-widget",
+      "shape_id": "shape:...",
+      "title": "专家评估 Rubric",
+      "state": {},
+      "pending_feedback": true,
+      "pending_at": "2026-07-03T00:00:00.000Z"
+    }
+  ],
   "pending_widget_outputs": [],
   "pending_widget_requests": [],
   "open_feedback": [],
@@ -249,6 +258,7 @@ before writing diagnosis content:
       "delete_node",
       "move_node",
       "locate_node",
+      "add_connector",
       "add_widget",
       "update_widget"
     ]
@@ -328,8 +338,11 @@ Supported ops:
 - `delete_node`
 - `move_node`
 - `locate_node`
+- `add_connector` — creates a relationship arrow between two existing nodes:
+  `{ "op": "add_connector", "from": "node-a", "to": "node-b", "label": "证据", "type": "supports" }`
 - `add_widget`
-- `update_widget`
+- `update_widget` — agent 回写 Widget 状态 / 结果 / HTML；成功更新后会清除该 Widget 的
+  `pending_feedback`，Widget 边框保持黄色正常框。
 
 ### `PUT /api/canvas-workspaces/:id/snapshot`
 
@@ -369,6 +382,13 @@ feedback. Annotation feedback is created from the in-canvas annotation tool or
 from an annotation arrow's post-draw popover, and may include `meta.mentions`
 when the user types `@专家名` in the canvas annotation popover.
 
+Widget `vd.emit` submissions create `kind: "widget_output"` feedback items.
+They are user feedback, appear in the left “我的反馈” entry, and count as pending
+until an agent/expert flow handles them. Ordinary Widget state changes do not
+create a feedback item for every interaction, but they mark the Widget as
+`pending_feedback` until `update_widget` writes back; the Widget frame itself
+remains yellow.
+
 ```json
 {
   "kind": "canvas_annotation",
@@ -388,29 +408,43 @@ when the user types `@专家名` in the canvas annotation popover.
 }
 ```
 
-Expert feedback and expert dialog use the extended thread fields. `author` may
+Expert opinions and expert dialog use the extended thread fields. `author` may
 be an object with `kind`; `targets` links the item to one or more canvas
 elements (granularity is derived from the referenced shape's meta — template
 root frame = template, widget anchor = widget, stage frame = stage, primitive
-shape = element). Every item seeds a `thread` with its first message.
+shape = element). Every item seeds a `thread` with its first message. For
+`direction: "expert_to_content"`, `content` should contain only the opinion
+itself; do not include display labels such as `专家：`, `指向：`, `观察：`, or
+`建议：`. Put identity in `author`, target in `targets`, and optional reasoning in
+`meta`. Expert-authored `expert_to_content` items are opinions for the student,
+not user feedback awaiting agent work; they default to `status: "shared"` and
+`handled: true`, and the UI surfaces them under the expert bar rather than in
+the feedback queue.
 
 ```json
 {
   "kind": "expert_review",
-  "content": "这张便签停在感受层，建议补一个真实场景的观察证据。",
+  "content": "这张便签现在还停在感受层。先补一个真实场景里的观察证据，再决定它是不是问题。",
   "author": { "kind": "expert", "name": "孙效华" },
   "direction": "expert_to_content",
+  "status": "shared",
+  "handled": true,
   "targets": [
     { "shape_id": "shape:vd-ir-d-s1" },
     { "shape_id": "shape:vd-ir-stage-discover" }
-  ]
+  ],
+  "meta": {
+    "rationale": "该判断需要真实使用场景支撑。",
+    "next_action": "补一条带场景、人物和行为的观察记录。"
+  }
 }
 ```
 
-`direction` is one of `expert_to_content`（专家对内容的反馈）、`user_to_expert`
-（用户找专家）、`other`。Items whose last thread message is from the user and
-whose status is unresolved count toward that expert's avatar badge in the
-global feedback panel.
+`direction` is one of `expert_to_content`（专家对内容的意见）、`user_to_expert`
+（用户找专家）、`other`。Only user-submitted items, or threads whose last message
+is from the user and whose status is unresolved, count as pending feedback.
+Expert opinions can still show an opinion count on the expert avatar, but that
+count is not a pending badge.
 
 ### `POST /api/canvas-workspaces/:id/feedback/:fid/reply`
 

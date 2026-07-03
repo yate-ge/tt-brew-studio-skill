@@ -52,11 +52,16 @@ const DEFAULT_LAYOUT_POLICY = {
 };
 
 const DEFAULT_NODE_SIZE = {
-  sticky: { w: 220, h: 112 },
+  // tldraw notes render as squares: 200px base × scale (createNoteRecord uses
+  // scale = w / 200), so the reserved height must equal the width or flowed
+  // siblings overlap the note's lower half.
+  sticky: { w: 220, h: 220 },
   text: { w: 360, h: 96 },
   shape: { w: 260, h: 132 },
   html_component: { w: 360, h: 240 },
 };
+
+const AGENT_SCAFFOLD_COLOR = 'yellow';
 
 const DESIGN_STAGE_SEQUENCE = [
   {
@@ -551,6 +556,48 @@ function normalizeCanvasIR(input = {}) {
   return maybeWrapGeneratedScaffold(ir);
 }
 
+function normalizeMethodSourceExpert(entry) {
+  if (!entry) return null;
+  if (typeof entry === 'string') {
+    const name = entry.trim();
+    return name ? { name } : null;
+  }
+  if (typeof entry === 'object' && entry.name) {
+    return {
+      name: String(entry.name).trim(),
+      domain: typeof entry.domain === 'string' ? entry.domain : null,
+      virtual: entry.virtual === true,
+    };
+  }
+  return null;
+}
+
+// vd_method_source is the machine-readable expert signature on scaffold roots.
+// The UI reads `.experts` to attach expert avatars/attribution, so plain-string
+// signatures ("即席项目化诊断模板") would silently break the provenance chain.
+function normalizeMethodSource(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const label = value.trim();
+    return label ? { label, experts: [] } : null;
+  }
+  if (typeof value !== 'object') return null;
+  const experts = (Array.isArray(value.experts) ? value.experts : [])
+    .map(normalizeMethodSourceExpert)
+    .filter((entry) => entry && entry.name);
+  return { ...value, experts };
+}
+
+function normalizeNodeMeta(meta) {
+  if (!meta || typeof meta !== 'object') return {};
+  if (!('vd_method_source' in meta)) return meta;
+  const next = { ...meta };
+  const methodSource = normalizeMethodSource(next.vd_method_source);
+  if (methodSource) next.vd_method_source = methodSource;
+  else delete next.vd_method_source;
+  return next;
+}
+
 function normalizeIRNode(node = {}, index = 0) {
   const rawKind = String(node.kind || 'sticky').trim();
   const kind = rawKind === 'widget' ? 'html_component' : rawKind;
@@ -573,7 +620,7 @@ function normalizeIRNode(node = {}, index = 0) {
     src: typeof node.src === 'string' ? node.src : (typeof node.image_src === 'string' ? node.image_src : null),
     alt_text: typeof node.alt_text === 'string' ? node.alt_text : (typeof node.alt === 'string' ? node.alt : ''),
     items: Array.isArray(node.items) ? node.items : [],
-    meta: node.meta && typeof node.meta === 'object' ? node.meta : {},
+    meta: normalizeNodeMeta(node.meta),
   };
 }
 
@@ -832,13 +879,17 @@ function resolveLayout(ir, nodesById, childrenByParent) {
     const parentGrid = node.parent && parent ? (parent.grid || parentLayout?.grid || rootGrid) : rootGrid;
     const origin = parentLayout ? { x: parentLayout.bounds.x, y: parentLayout.bounds.y } : { x: 0, y: 0 };
     const siblings = parent ? (childrenByParent.get(parent.id) || []) : rootNodes;
+    // Command-created nodes carry bounds computed against their container's
+    // size at command time (vd_stage_flow_item); those are flow hints, not
+    // immovable geometry, so they stay eligible for post-growth reflow.
+    const autoFlowed = (!node.bounds && !node.area) || node.meta?.vd_stage_flow_item === true;
     const bounds = node.bounds
       ? boundsToAbsolute(node.bounds, origin)
       : node.area
       ? areaToBounds(node.area, parentGrid, origin)
       : nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, siblings.length, layoutPolicy);
     const grid = node.grid || deriveChildGrid(node, bounds);
-    layout.set(node.id, { bounds, grid, parent_id: parent?.id || null });
+    layout.set(node.id, { bounds, grid, parent_id: parent?.id || null, auto_flowed: autoFlowed });
     const children = childrenByParent.get(node.id) || [];
     for (const child of children) resolveNode(child, node);
   }
@@ -849,7 +900,179 @@ function resolveLayout(ir, nodesById, childrenByParent) {
   }
   layout.autoRepairs = [];
   growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy);
+  // Container growth invalidates the positions of later siblings that were
+  // flowed against pre-growth sizes. Alternate re-flow and re-grow passes until
+  // the tree stabilizes (bounded by nesting depth), then normalize the stage
+  // bands.
+  for (let pass = 0; pass < 3; pass += 1) {
+    const moved = reflowAutoFlowedChildren(ir, layout, childrenByParent, layoutPolicy);
+    growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy);
+    if (!moved) break;
+  }
+  reflowStageBands(ir, layout, childrenByParent, layoutPolicy);
   return layout;
+}
+
+// Re-run the cursor wrap flow for every container whose auto-flowed children
+// may have been displaced by container growth. Subtrees are shifted whole so
+// inner geometry stays intact. Returns true when anything moved.
+function reflowAutoFlowedChildren(ir, layout, childrenByParent, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
+  const policy = normalizeLayoutPolicy(layoutPolicy);
+  if (policy.flow !== 'top_left') return false;
+  const rootGrid = normalizeGrid(ir.grid);
+  let movedAny = false;
+
+  const shiftSubtree = (nodeId, dx, dy) => {
+    if (dx === 0 && dy === 0) return;
+    const entry = layout.get(nodeId);
+    if (entry) {
+      entry.bounds = { ...entry.bounds, x: entry.bounds.x + dx, y: entry.bounds.y + dy };
+      layout.set(nodeId, entry);
+    }
+    for (const child of childrenByParent.get(nodeId) || []) {
+      shiftSubtree(child.id, dx, dy);
+    }
+  };
+
+  const containers = ir.nodes
+    .filter((node) => CONTAINER_KINDS.has(node.kind) && node.visible !== false)
+    .filter((node) => !String(node.role || node.meta?.vd_stage_role || '').startsWith('stage.'))
+    .sort((a, b) => nodeDepth(ir, b.id) - nodeDepth(ir, a.id));
+
+  for (const container of containers) {
+    const containerLayout = layout.get(container.id);
+    if (!containerLayout) continue;
+    const children = (childrenByParent.get(container.id) || [])
+      .filter((child) => layout.get(child.id)?.auto_flowed);
+    if (children.length === 0) continue;
+    const grid = container.grid || containerLayout.grid || rootGrid;
+    const padding = grid.padding ?? 48;
+    const gap = grid.gap ?? 24;
+    const innerW = Math.max(120, containerLayout.bounds.w - padding * 2);
+
+    const cursor = { x: 0, y: 0, rowH: 0 };
+    for (const child of children) {
+      const entry = layout.get(child.id);
+      const b = entry.bounds;
+      if (cursor.x > 0 && cursor.x + b.w > innerW) {
+        cursor.x = 0;
+        cursor.y += cursor.rowH + gap;
+        cursor.rowH = 0;
+      }
+      const targetX = Math.round(containerLayout.bounds.x + padding + cursor.x);
+      const targetY = Math.round(containerLayout.bounds.y + padding + cursor.y);
+      const dx = targetX - b.x;
+      const dy = targetY - b.y;
+      if (dx !== 0 || dy !== 0) {
+        shiftSubtree(child.id, dx, dy);
+        movedAny = true;
+      }
+      cursor.x += b.w + gap;
+      cursor.rowH = Math.max(cursor.rowH, b.h);
+    }
+  }
+  return movedAny;
+}
+
+// Stage-band children are positioned when each command runs, before later
+// content makes their containers grow. After growth, re-run a wrap flow over
+// each stage frame's direct flow children with their FINAL sizes so grown
+// scaffolds never overlap their right-hand neighbours, then re-fit the stage
+// frame height. Whole subtrees are shifted so inner geometry is preserved.
+function reflowStageBands(ir, layout, childrenByParent, layoutPolicy = DEFAULT_LAYOUT_POLICY) {
+  const policy = normalizeLayoutPolicy(layoutPolicy);
+  if (policy.flow !== 'top_left') return;
+  const stageFrames = ir.nodes.filter((node) => {
+    const role = String(node.role || node.meta?.vd_stage_role || '');
+    return CONTAINER_KINDS.has(node.kind) && role.startsWith('stage.');
+  });
+  if (stageFrames.length === 0) return;
+
+  const shiftSubtree = (nodeId, dx, dy) => {
+    if (dx === 0 && dy === 0) return;
+    const entry = layout.get(nodeId);
+    if (entry) {
+      entry.bounds = { ...entry.bounds, x: entry.bounds.x + dx, y: entry.bounds.y + dy };
+      layout.set(nodeId, entry);
+    }
+    for (const child of childrenByParent.get(nodeId) || []) {
+      shiftSubtree(child.id, dx, dy);
+    }
+  };
+
+  for (const stage of stageFrames) {
+    const stageLayout = layout.get(stage.id);
+    if (!stageLayout) continue;
+    const children = (childrenByParent.get(stage.id) || [])
+      .filter((child) => layout.get(child.id));
+    if (children.length === 0) continue;
+
+    const originX = stageLayout.bounds.x + (stage.meta?.vd_stage_content_origin?.x ?? PROJECT_STAGE_LAYOUT.contentOrigin.x);
+    const originY = stageLayout.bounds.y + (stage.meta?.vd_stage_content_origin?.y ?? PROJECT_STAGE_LAYOUT.contentOrigin.y);
+    const gap = Number.isFinite(stage.meta?.vd_stage_flow_gap) ? stage.meta.vd_stage_flow_gap : PROJECT_STAGE_LAYOUT.contentGap;
+    const rightPadding = Number.isFinite(stage.meta?.vd_stage_right_padding) ? stage.meta.vd_stage_right_padding : PROJECT_STAGE_LAYOUT.rightPadding;
+    const innerW = Math.max(320, stageLayout.bounds.w - (originX - stageLayout.bounds.x) - rightPadding);
+
+    const cursor = { x: 0, y: 0, rowH: 0 };
+    let moved = false;
+    for (const child of children) {
+      const entry = layout.get(child.id);
+      const b = entry.bounds;
+      if (cursor.x > 0 && cursor.x + b.w > innerW) {
+        cursor.x = 0;
+        cursor.y += cursor.rowH + gap;
+        cursor.rowH = 0;
+      }
+      const targetX = Math.round(originX + cursor.x);
+      const targetY = Math.round(originY + cursor.y);
+      const dx = targetX - b.x;
+      const dy = targetY - b.y;
+      if (dx !== 0 || dy !== 0) {
+        shiftSubtree(child.id, dx, dy);
+        moved = true;
+      }
+      cursor.x += b.w + gap;
+      cursor.rowH = Math.max(cursor.rowH, b.h);
+    }
+
+    const contentBottom = Math.max(...children.map((child) => {
+      const b = layout.get(child.id).bounds;
+      return b.y + b.h;
+    }));
+    const requiredH = Math.ceil(contentBottom - stageLayout.bounds.y + gap);
+    if (requiredH > stageLayout.bounds.h) {
+      stageLayout.bounds = { ...stageLayout.bounds, h: requiredH };
+      layout.set(stage.id, stageLayout);
+      moved = true;
+    }
+    if (moved) {
+      layout.autoRepairs.push({ code: 'REFLOW_STAGE_BAND', node_id: stage.id });
+    }
+  }
+
+  // Stage frames may have grown taller: restack the stage bands themselves so
+  // they never overlap vertically, keeping their original stage order.
+  const ordered = [...stageFrames].sort((a, b) => {
+    const ao = a.meta?.vd_stage_order ?? 0;
+    const bo = b.meta?.vd_stage_order ?? 0;
+    return ao - bo;
+  });
+  let nextY = null;
+  for (const stage of ordered) {
+    const entry = layout.get(stage.id);
+    if (!entry) continue;
+    if (nextY === null) {
+      nextY = entry.bounds.y + entry.bounds.h + PROJECT_STAGE_LAYOUT.stageGap;
+      continue;
+    }
+    const dy = nextY - entry.bounds.y;
+    if (dy !== 0) {
+      shiftSubtree(stage.id, 0, dy);
+      layout.autoRepairs.push({ code: 'RESTACK_STAGE_BAND', node_id: stage.id });
+    }
+    const updated = layout.get(stage.id);
+    nextY = updated.bounds.y + updated.bounds.h + PROJECT_STAGE_LAYOUT.stageGap;
+  }
 }
 
 function boundsToAbsolute(bounds, origin = { x: 0, y: 0 }) {
@@ -880,6 +1103,36 @@ function nextAutoBounds(node, parent, parentLayout, parentGrid, autoState, sibli
   const state = autoState.get(key) || { index: 0 };
   autoState.set(key, state);
   const size = nodeDesiredSize(node);
+  const policy = normalizeLayoutPolicy(layoutPolicy);
+
+  // top_left policy uses a cursor-based wrap flow so siblings of mixed sizes
+  // (text, sticky, slot, widget) never share one fixed cell grid: each row is
+  // as tall as its tallest item, which prevents in-container overlaps.
+  if (policy.flow === 'top_left' && parent && parentLayout) {
+    const minSize = MIN_NODE_SIZE[node.kind] || MIN_NODE_SIZE.shape;
+    const itemW = Math.round(Math.max(minSize.w, size.w));
+    const itemH = Math.round(Math.max(minSize.h, size.h));
+    const origin = { x: parentLayout.bounds.x, y: parentLayout.bounds.y };
+    const innerW = Math.max(itemW, parentLayout.bounds.w - parentGrid.padding * 2);
+    if (!state.cursor) state.cursor = { x: 0, y: 0, rowH: 0 };
+    const cursor = state.cursor;
+    if (cursor.x > 0 && cursor.x + itemW > innerW) {
+      cursor.x = 0;
+      cursor.y += cursor.rowH + parentGrid.gap;
+      cursor.rowH = 0;
+    }
+    const bounds = {
+      x: Math.round(origin.x + parentGrid.padding + cursor.x),
+      y: Math.round(origin.y + parentGrid.padding + cursor.y),
+      w: itemW,
+      h: itemH,
+    };
+    cursor.x += itemW + parentGrid.gap;
+    cursor.rowH = Math.max(cursor.rowH, itemH);
+    state.index += 1;
+    return bounds;
+  }
+
   const flow = parent
     ? (state.flow || computeAutoFlow(parentLayout.bounds, parentGrid, size, node.kind, siblingCount, layoutPolicy))
     : { cols: 3, cellW: size.w, cellH: size.h, itemW: size.w, itemH: size.h };
@@ -1357,7 +1610,7 @@ function createGeoAnchorRecord(node, parentId, index, bounds, now) {
       growY: 0,
       url: '',
       scale: 1,
-      color: isWidget ? 'violet' : color,
+      color: isWidget ? AGENT_SCAFFOLD_COLOR : color,
       labelColor: 'black',
       fill: isWidget ? 'none' : 'solid',
       size: bounds.w < 150 || bounds.h < 88 ? 's' : 'm',
@@ -1510,11 +1763,17 @@ function arrowBindingRecord(id, arrowShapeId, targetShapeId, terminal) {
 }
 
 function frameColor(node) {
+  if (isScaffoldRootNode(node)) return AGENT_SCAFFOLD_COLOR;
   if (node.color) return node.color;
   if (String(node.role || '').includes('business_model_canvas')) return 'violet';
   if (node.kind === 'slot') return 'blue';
   if (node.kind === 'cluster') return 'green';
   return 'violet';
+}
+
+function isScaffoldRootNode(node) {
+  const role = String(node?.role || node?.meta?.vd_role || '');
+  return Boolean(node?.meta?.vd_scaffold_root || role === 'scaffold.root' || role.includes('scaffold.root'));
 }
 
 function colorForNode(node) {
@@ -1689,6 +1948,8 @@ function buildSemanticIndex({ ir, layout, tldrawSections, tldrawNodes, shapeIdsB
       state: node.meta?.vd_widget_state || {},
       state_version: node.meta?.vd_state_version || 0,
       state_actor: node.meta?.vd_state_actor || 'agent',
+      pending_feedback: Boolean(node.meta?.vd_widget_pending_feedback),
+      pending_at: node.meta?.vd_widget_pending_at || null,
       input_schema: node.meta?.vd_input_schema || {},
       output_schema: node.meta?.vd_output_schema || {},
       sizing: node.meta?.vd_sizing || null,
@@ -2264,6 +2525,11 @@ function hydrateWidgetRuntimeState(ir, previousSnapshot) {
       meta.vd_state_version = snapVersion;
       meta.vd_state_actor = recMeta.vd_state_actor || meta.vd_state_actor || 'user';
     }
+    if (recMeta.vd_widget_pending_feedback) {
+      meta.vd_widget_pending_feedback = true;
+      meta.vd_widget_pending_at = recMeta.vd_widget_pending_at || meta.vd_widget_pending_at || null;
+      meta.vd_widget_feedback_event_type = recMeta.vd_widget_feedback_event_type || meta.vd_widget_feedback_event_type || null;
+    }
     if (recMeta.vd_intrinsic_size) meta.vd_intrinsic_size = recMeta.vd_intrinsic_size;
     if (recMeta.vd_widget_review) meta.vd_widget_review = recMeta.vd_widget_review;
     changed = true;
@@ -2466,6 +2732,13 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         meta.vd_description = command.description;
         changes.push('description');
       }
+      if (changes.length > 0) {
+        delete meta.vd_widget_pending_feedback;
+        delete meta.vd_widget_pending_at;
+        delete meta.vd_widget_feedback_event_type;
+        delete meta.vd_user_pending_change;
+        delete meta.vd_user_pending_at;
+      }
       if (changes.length === 0) {
         results.push({ op, status: 'no_change', node_id: node.id });
         continue;
@@ -2478,6 +2751,34 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         changes,
         ...(review ? { widget_review: review } : {}),
       });
+    } else if (op === 'add_connector' || op === 'add_relationship') {
+      // Connectors express dependency/flow/evidence relationships between two
+      // existing nodes. They compile to tldraw arrows bound to both shapes.
+      const from = safeId(command.from || command.from_id || command.from_node_id || '');
+      const to = safeId(command.to || command.to_id || command.to_node_id || '');
+      const fromNode = ir.nodes.find((item) => item.id === from);
+      const toNode = ir.nodes.find((item) => item.id === to);
+      if (!fromNode || !toNode) {
+        results.push({
+          op,
+          status: 'not_found',
+          from: command.from || null,
+          to: command.to || null,
+          missing: [!fromNode ? from : null, !toNode ? to : null].filter(Boolean),
+        });
+        continue;
+      }
+      const rel = normalizeRelationship({
+        id: command.id,
+        from,
+        to,
+        type: command.type || command.relationship_type,
+        label: command.label,
+        meta: command.meta,
+      });
+      ir.relationships = ir.relationships.filter((item) => item.id !== rel.id);
+      ir.relationships.push(rel);
+      results.push({ op, status: 'applied', relationship_id: rel.id, from, to });
     } else if (op === 'locate_node') {
       const query = String(command.query || command.id || '').toLowerCase();
       const matches = ir.nodes.filter((node) => node.id === safeId(command.id)
@@ -2647,7 +2948,8 @@ function buildCanvasAgentContext({
     pending_widget_outputs: pendingWidgetOutputs(openFeedback),
     pending_widget_requests: pendingWidgetRequests(widgetInstances),
     command_schema: {
-      ops: ['insert_template', 'add_node', 'edit_node', 'delete_node', 'move_node', 'locate_node', 'add_widget', 'update_widget'],
+      ops: ['insert_template', 'add_node', 'edit_node', 'delete_node', 'move_node', 'locate_node', 'add_connector', 'add_widget', 'update_widget'],
+      connector_rule: 'add_connector 在两个已有节点之间创建关系箭头：{ op: "add_connector", from: "{node_id}", to: "{node_id}", label?, type? }。用于依赖、流程、证据流向。',
       target_ids: '使用 CanvasIR node id / slot id / 方法模板实例 id，不要使用 tldraw shape id。',
       page_rule: '默认所有内容都写入当前工作 Page；不要主动创建、切换或要求用户切换 tldraw Page，除非用户明确要求多 Page 工作。',
       stage_rule: '默认使用 stage: discover | define | develop | deliver 指定落位。没有 parent 时，insert_template/add_node/add_widget 会自动放入对应阶段区域，从左上开始顺序排列。',
@@ -2656,7 +2958,8 @@ function buildCanvasAgentContext({
       widget_rule: 'Widget 用于轻交互、状态、异步请求、参数控制、可视化和结构化输出；复杂材料输入应来自对话、文件或画板内容。'
         + '优先复用 available_widget_templates 中的通用原语；项目化微型工具可生成自由 HTML fragment（不能有 <html>/<head>/<body>，不能固定根尺寸，不能有外部 scripts）。'
         + '请求型 Widget 应同时 vd.state.set({status:"submitted",request_id,request}) 和 vd.emit("*_requested",{request_id,request})。'
-        + '智能体从 pending_widget_outputs、pending_widget_requests 和 widget_instances 读取待处理请求；处理时先 update_widget 到 agent_processing，再回写 result_ready/error。'
+        + '用户在 Widget 内输入或提交后，widget_instances[].pending_feedback=true；Widget 自身边框仍保持黄色，显式 vd.emit 会进入左侧“我的反馈”的 widget_output 待处理项，并用紫色反馈主题呈现。'
+        + '智能体从 pending_widget_outputs、pending_widget_requests 和 widget_instances 读取待处理请求；处理时先 update_widget 到 agent_processing，再回写 result_ready/error；成功回写后清除 pending_feedback，Widget 仍为黄色正常框。'
         + '稳定结果应物化为 CanvasIR 原生画板内容；Widget 不决定专家介入，智能体按 skill 判断是否需要专家批注或评审。',
       recommended_widget_state: {
         status: 'idle|drafting|submitted|agent_processing|result_ready|user_reviewing|accepted|rejected|needs_revision|materialized|error',

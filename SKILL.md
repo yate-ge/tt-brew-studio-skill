@@ -82,8 +82,8 @@ DATA_DIR  = {CWD}/.visual-delivery
   当前项目、阶段、画板证据和用户目标自行决定、生成或组合。
 
 - **项目导入**：每个项目或新功能只导入一次。用一轮紧凑问题确认 brief → 组建专家组
-  （默认 1 位主导 + 2 位支持，其中一个席位必须是方法论锚点；超出专家名册的领域使用
-  虚拟专家）→ 向学生说明专家组。路由和专家卡见：
+  （默认 1 位主导 + 2 位支持，可按项目复杂度扩展，全队**最多 5 位**；其中一个席位必须是
+  方法论锚点；超出专家名册的领域使用虚拟专家）→ 向学生说明专家组。路由和专家卡见：
   [references/design-experts.md](references/design-experts.md)。
 - **专家先行**：任何项目诊断、方法脚手架、Widget、评审或优化建议之前，必须先确认本项目
   已有专家团队和判断契约；如果没有，就先组建专家团队并写入/说明专家分工、审美取向、
@@ -93,7 +93,7 @@ DATA_DIR  = {CWD}/.visual-delivery
   是专家路由依据；它可以先在 agent 内部完成，但写入画布时仍必须遵守先脚手架后内容。
 - **场景路由先行**：每轮写画布前先判断这轮是在做什么：项目导入、继续推进、局部生成、
   反馈回应、Widget 输出处理、阶段转换、全项目诊断或局部评审。场景决定覆盖哪些阶段、选择哪类
-  脚手架、是否需要 Widget、专家反馈绑到哪个对象。不要把所有请求都当诊断，也不要把普通推进
+  脚手架、是否需要 Widget、专家意见绑到哪个对象。不要把所有请求都当诊断，也不要把普通推进
   简化成在当前阶段追加几张散便签。
 - **画板结构**：默认在同一个项目工作 Page 中初始化四阶段导师工作区：项目头卡 +
   `发现 Discover`、`定义 Define`、`发展 Develop`、`交付 Deliver` 四个全宽阶段 frame
@@ -106,13 +106,28 @@ DATA_DIR  = {CWD}/.visual-delivery
   反馈目标。不得把全项目诊断缩成某一个阶段里的单个卡片或单个 Widget。成熟项目中的新功能
   也默认在同一工作 Page 内增加独立四阶段区域，而不是切换 Page。完整协议见：
   [references/design-mentor-protocol.md](references/design-mentor-protocol.md)。
-- **方法生成**：脚手架按阶段化方法库即时生成。方法规格是知识，不是预制件；agent 根据
+- **脚手架 = 专家的思考框架**：脚手架不是内容容器，而是专家对"这个项目的本质是什么、
+  当前阶段需要什么框架性支持"的顶层判断外化。框架有两个来源：**甲｜既有方法框架**
+  （设计学 / 创意领域成熟方法：Persona、旅程、各类矩阵、商业模式画布等，即方法库 A/B 类）；
+  **乙｜项目本质框架**（专家把自己领域的概念框架 / 设计框架 / 交互框架针对本项目现场构建，
+  例如"一个 agent skill 由哪些部分组成、需要什么流程、实现什么功能"、human-agent
+  interaction 框架，按 C 类署名）。生成管线固定为：**专家想清楚本质与框架 → 智能体本体把
+  框架设计成画布脚手架结构（母型、slot、工具选型、布局）→ 转成 CanvasIR / Widget 命令写入
+  画板**。脚手架同时必须贴合项目现有材料和学生正在思考的问题；与项目无关的通用分区
+  （如"已有资料 / 待补资料"式空桶）是反模式。
+- **方法生成**：脚手架按上述管线即时生成。方法规格是知识，不是预制件；agent 根据
   判断规则决定生成**方法模板（CanvasIR Template）**还是**交互组件（Widget）**，并贴合
   当前项目语境生成。方法库只供 agent 参考，不作为学生可见的工具栏或模板选择器。B 类
   跨领域方法默认可用；A 类领域方法只在对应专家入场时推荐；目录外情况由真实或虚拟专家
-  合成 C 类即席方法。优秀实例可归档到项目脚手架库。每个脚手架都带专家署名；带 ⚠️ 的方法
-  必须包含使用前提检查，跳过时触发专家警示。方法库见：
+  合成 C 类即席方法（含乙类项目本质框架）。优秀实例可归档到项目脚手架库。每个脚手架都带
+  专家署名；带 ⚠️ 的方法必须包含使用前提检查，跳过时触发专家警示。方法库见：
   [references/design-methods.md](references/design-methods.md)。
+- **每位专家至少一个框架**：在场专家每人至少以一个署名思考框架（frame 形式的方法模板，
+  或 Widget）参与当前项目；开题全景和全项目诊断时，每位在场专家各出一个框架。
+- **开题全景**：项目从零开始（只有题目 / 想法，无既有产物）进入 Discover 时的默认行为：
+  Discover 阶段先放**课题卡**（初始命题、当前阶段、目标），随后在场专家（最多 5 位）
+  各生成一个署名思考框架，围绕课题卡从各自研究审美帮学生打开题目。走通示例见：
+  [references/case-playable-city.md](references/case-playable-city.md)。
 - **先模板，后内容**：写入画板时，先建立可导航的视觉脚手架（项目四阶段模板、阶段 frame、
   方法模板 root/slot、Widget 锚点和必要的归档卡），再放种子内容、AI 草稿或诊断材料。不得把
   诊断、建议或内容节点直接散落到画布根层。
@@ -122,8 +137,9 @@ DATA_DIR  = {CWD}/.visual-delivery
 - **诊断必须四阶段可视化**：全项目诊断时，Discover 承接资料、灵感、前期想法和调研证据；
   Define 承接产品定位、用户/场景、问题定义、HMW 或评价标准；Develop 承接方案结构、信息架构、
   功能展开、版本迭代或方案比较；Deliver 承接可交付界面/产物、架构、设计原则、导则、风险和
-  搁置清单。每阶段先选择合适脚手架，再填入从项目中找到的内容；找不到证据时也要在对应 slot
-  标记"未发现 / 待补"，不能让阶段空着。
+  搁置清单。每阶段的脚手架必须是**带专家署名的思考框架**（甲类既有方法或乙类项目本质框架），
+  先选择或构建框架，再填入从项目中找到的内容；找不到证据时也要在对应 slot
+  标记"未发现 / 待补"，不能让阶段空着。禁止铺设与项目无关、不带专家署名的通用分区空桶。
 - **Widget 示例**：内置或文档中的 Widget 例子只用于启发智能体如何构造状态、输入、输出、
   可视化和异步请求流程。不要把示例当作穷尽清单；当项目需要 persona 生成器、竞品分析工具、
   海报构图控制台、主题分析图表或其他微型设计工具时，智能体应按 Widget 合约现场生成。
@@ -235,6 +251,9 @@ curl -s http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/agent-co
 - 是否已有 `stage.discover`、`stage.define`、`stage.develop`、`stage.deliver` 四阶段
   frame；若没有，先创建或修复四阶段导师工作区模板
 - 未处理的画板反馈和区域批注
+- 普通画布对象上的 `vd_user_pending_change` 黄色待处理标记，以及 Widget 上的
+  `vd_widget_pending_feedback` 待处理状态；Widget 自身边框保持黄色，用户提交内容在“我的反馈”
+  入口中按紫色反馈主题呈现
 - 可用 CanvasIR / Widget 执行能力（方法库只作 agent 参考）
 - 最近的 canvas events 和 layout reviews
 
@@ -263,6 +282,7 @@ agent 生成画板结构时，默认使用 CanvasIR 或 canvas commands。普通
 -> 再把项目证据、AI 草稿、用户反馈、Widget 输出或阶段材料填入对应 slot
 -> 必要时把 Widget 稳定结果物化为原生画板内容
 -> 专家对具体脚手架 / slot / Widget / artifact / connector 发出署名反馈、警示或讨论便签
+-> agent 写回处理结果后，清除本轮普通画布黄色待处理和 Widget pending_feedback 状态
 ```
 
 正常继续推进时，默认只推进当前阶段或用户指定阶段，但要引用上游阶段证据并给下游阶段留下
@@ -273,7 +293,7 @@ agent 生成画板结构时，默认使用 CanvasIR 或 canvas commands。普通
 全项目诊断、评审、模糊优化、改进、打磨类请求走四阶段诊断再入场：在 Discover / Define /
 Develop / Deliver 四个阶段分别放置项目化脚手架并填入证据，然后根据跨阶段证据再放
 `针灸式诊断`Widget 或等价交互脚手架。Widget 必须承载真实项目数据和可操作选择；如果只是
-抽象说"杠杆点"，不用 Widget，改用方法模板和专家反馈。不要先生成优化后成品，也不要把诊断
+抽象说"杠杆点"，不用 Widget，改用方法模板和专家意见。不要先生成优化后成品，也不要把诊断
 内容放到四阶段区域之外。只有用户指定单一阶段或单一对象时，才把诊断包落在该阶段。
 
 使用 CanvasIR 或 commands：
@@ -302,6 +322,7 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 - `delete_node`
 - `move_node`
 - `locate_node`
+- `add_connector`：在两个已有节点之间创建关系箭头（`from` / `to` / 可选 `label`、`type`）
 - `add_widget`：添加交互组件（Widget）
 - `update_widget`：更新交互组件状态或内容
 
@@ -323,6 +344,9 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 - 使用 tldraw frame shapes 作为命名 section。
 - section 名称保持短、可导航。
 - 区分结构性文字和学生 / 参与者输入。
+- **工具多样化**：专家和智能体添加内容时按语义混用原生工具——说明用 `text`、想法/条目用
+  便签 `note`、图示节点用形状 `geo`、关系用 `arrow`、材料用 `image`；一个脚手架内不得用
+  单一 kind（例如全部 text）铺满。观察类条目、清单项、讨论点默认用便签而不是 text。
 - 把相关画板对象放入命名 section。
 - 用 connector relationships 表达依赖、流程和证据关系。
 - 每次写入都要足够小，便于验证。
@@ -382,26 +406,45 @@ section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `an
   agent 查看并回应的画布区域；semantic index 会记录区域位置、大小、所在 Page、是否包含在
   frame 中、frame id / title、相交的目标 shape ids，以及供 agent 获取该区域截图的
   `screenshot.capture_hint`。旧 `completion_request` 仅作为兼容语义读取。
-- 画板左侧有全局反馈面板（feedback button 打开），聚合 annotations、annotation arrows、
-  region annotations、widget outputs、专家反馈线程和其他项目画板反馈。
+- 画板左侧有全局“我的反馈”入口（通过“我的反馈”按钮打开），只聚合用户提交给 agent / 专家的
+  annotations、annotation arrows、region annotations、widget outputs 和其他项目画板反馈；
+  这些内容才进入“待处理”。专家主动给用户的内容是“意见”，归到上方专家栏对应专家头像下，
+  不计入反馈待办。
+- 用户直接编辑普通画布对象（改文字、移动、改样式或新增普通 shape）后，该对象在本轮显示
+  黄色待处理高亮，并写入 `vd_user_pending_change`。这表示“学生改了画布内容，下一轮 agent
+  需要读取并决定如何吸收”；agent 处理并写回画布后，运行时清除该黄色待处理状态。
+- 由 agent 创建的视觉脚手架有清晰边界：方法模板只给最外层 root frame 黄色边框，内部 slot
+  和内容保持各自语义颜色；Widget 边框始终为黄色。专家意见 UI 与连接线使用黄色主题；用户
+  反馈、批注、区域批注和标注箭头使用紫色主题。
 
-### 专家反馈线程
+### 专家意见线程
 
-专家对画板内容的反馈是带署名、带关联元素的**对话线程**，收进同一个全局反馈面板：
+专家对画板内容的意见是带署名、带关联元素的**专家意见流**。UI 中专家侧统一显示为“意见”，
+从专家栏头像进入；用户提交给专家或画布的内容显示为“反馈”，从“我的反馈”入口进入。两者不要混用：
+专家意见不给 agent 标为待处理，只有用户提交/回复且需要 agent 或专家回应的内容才是待处理反馈。
 
-- **专家发起反馈**：agent 以具名专家身份调用 `POST /api/canvas-workspaces/{id}/feedback`，
+- **专家发起意见**：agent 以具名专家身份调用 `POST /api/canvas-workspaces/{id}/feedback`，
   传 `author: { kind: "expert", name: "专家名" }`、`direction: "expert_to_content"`、
   `targets: [{ shape_id }]`（可关联多个元素）。粒度由被引用的 shape 自动推导：模板根
-  frame = 整个模板，widget 锚点 = 组件，阶段 frame = 阶段，普通 shape = 元素。
-- **诊断必有专家反馈**：诊断再入场、阶段评审或优化判断必须至少产生一组专家署名反馈：
+  frame = 整个模板，widget 锚点 = 组件，阶段 frame = 阶段，普通 shape = 元素。专家主动意见
+  默认是已给出的导师判断，不设置为 `tracked` / `handled: false`，不进入反馈待办。
+- **意见正文只写意见本身**：`content` 不写 `专家：...`、`指向：...`、`观察：...`、
+  `判断：...`、`可能遮蔽：...`、`建议：...` 这类字段标签。专家是谁由 `author` 表达，指向哪里
+  由 `targets` 表达；需要保留推理时放进 `meta.rationale`、`meta.blind_spot`、
+  `meta.next_action`。正文应该像导师当面对学生说的一段短意见：具体、带判断、有一点个人立场，
+  并给一个学生能亲手做的动作。
+- **诊断必有专家意见**：诊断再入场、阶段评审或优化判断必须至少产生一组专家署名意见：
   主导专家框定主要设计张力，方法论锚点指出方法/证据风险，必要时领域或虚拟专家补充差异视角。
-  全项目诊断时，每个阶段至少有一条专家反馈绑定到该阶段的具体脚手架 root、关键 slot 或
-  Widget；另有一条跨阶段反馈总结主要设计张力。局部诊断时，反馈目标优先绑定到被诊断的
+  全项目诊断时，每个阶段至少有一条专家意见绑定到该阶段的具体脚手架 root、关键 slot 或
+  Widget；另有一条跨阶段意见总结主要设计张力。局部诊断时，反馈目标优先绑定到被诊断的
   具体脚手架 root / slot / Widget，其次才绑定到当前阶段 frame。
-- **推进也要专家反馈**：继续推进、局部生成、Widget 结果物化或阶段转换后，至少让主导专家或
+- **推进也要专家意见**：继续推进、局部生成、Widget 结果物化或阶段转换后，至少让主导专家或
   相关方法专家对本轮新增/修改的 root、slot、artifact、Widget 输出或 connector 给出一条署名
   判断。小的文字修正不必强行评审；凡是改变设计方向、问题定义、方案选择或交付标准的内容，
-  必须有专家反馈目标。
+  必须有专家意见目标。
+- **避免 AI 腔**：专家意见不要写成 checklist、报告摘要或“首先/其次/综上”。少用抽象词，多指向
+  画布上的具体证据；允许有克制的个人判断，例如“我会先担心...”“这里先别急着...”“这一步最好
+  拿一个真实用户试一下”。每条意见控制在 1-3 句，必要时另用 `meta` 保存完整结构化推理。
 - **用户向专家反馈**：批注中 `@专家名`，或在面板中选中专家后直接输入（当前画布选中元素
   会自动作为 `targets` 关联）。
 - **对话与闭环（异步）**：用户回复即刻进入线程并保持待处理；agent 下一回合读取
@@ -409,8 +452,11 @@ section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `an
   `POST /api/canvas-workspaces/{id}/feedback/{fid}/reply`（`role: "expert"`,
   `author: { kind: "expert", name }`）回应，默认标记 `resolved`（传 `resolve: false`
   保持开放）。专家回应必须遵守导师红线：给判断和方法，不替学生完成内容。
-- **UI 语义**：左侧专家头像显示该专家名下"用户提交且未处理"的条数角标；点击头像在全局
-  面板中聚焦该专家线程；hover / 选中反馈项时画布上以专家色勾勒关联元素并画连接线。
+- **UI 语义**：“我的反馈”按钮只显示用户提交的反馈数量和待处理数量；专家头像显示该专家名下
+  的意见数量，点击头像打开该专家的意见面板。专家意见面板、意见 item 和关联连线统一使用黄色
+  主题；用户反馈、批注、区域批注和标注箭头统一使用紫色主题。若用户在专家意见下回复或向专家
+  提交反馈，该用户消息才可成为待处理反馈。hover / 选中条目时画布上以对应颜色勾勒关联元素并
+  画连接线。
 
 ### 交互组件（Widgets）
 
@@ -440,7 +486,10 @@ curl -s -X POST http://localhost:3847/api/canvas-widgets/validate \
 ```
 
 Widget state 存在 shape meta 和 `semantic_index.widget_instances[].state` 中。用
-`update_widget` patch state。`vd.emit` 输出会进入 `widget_output` feedback。完整合约见：
+`update_widget` patch state。用户在 Widget 内输入或改变状态时，Widget 边框仍保持黄色，并写入
+`vd_widget_pending_feedback`，表示“这里有用户提交/变更等待 agent 处理”；显式 `vd.emit` 输出会
+进入左侧“我的反馈”的 `widget_output` 待处理项，并以紫色反馈主题呈现。agent 处理后用
+`update_widget` 回写状态或结果，运行时清除 pending_feedback，Widget 仍为黄色正常框。完整合约见：
 [references/canvas-widgets.md](references/canvas-widgets.md)。
 Widget 示例模式见：[references/widget-examples.md](references/widget-examples.md)。这些示例只
 用于引导智能体生成项目化 Widget，不是固定菜单。
@@ -495,4 +544,5 @@ canvas event 和 `semantic_index.layout_reviews`。
 - 方法模板示例：[references/template-examples.md](references/template-examples.md)
 - 交互组件合约：[references/canvas-widgets.md](references/canvas-widgets.md)
 - Widget 示例模式：[references/widget-examples.md](references/widget-examples.md)
+- 走通案例（开题全景 → 聚类 → 共创 → 交付）：[references/case-playable-city.md](references/case-playable-city.md)
 - Design tokens：[references/design-system.md](references/design-system.md)

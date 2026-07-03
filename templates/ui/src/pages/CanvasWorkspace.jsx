@@ -46,6 +46,9 @@ const DEFAULT_STAGE_CONTENT_ORIGIN = { x: 56, y: 172 };
 const DEFAULT_STAGE_FLOW_GAP = 56;
 const DEFAULT_STAGE_RIGHT_PADDING = 72;
 const ANNOTATION_PURPLE = '#7c3aed';
+const AGENT_SCAFFOLD_COLOR = 'yellow';
+const USER_PENDING_CHANGE_COLOR = 'yellow';
+const EXPERT_OPINION_YELLOW = '#f59e0b';
 const REGION_ANNOTATION_KIND = 'region_annotation';
 const LEGACY_COMPLETION_KIND = 'completion_request';
 const DESIGN_STAGE_ALIASES = new Map([
@@ -180,6 +183,67 @@ function isRegionAnnotationShape(shape) {
 
 function isAnnotationArrowShape(shape) {
   return shape?.type === 'arrow' && shape?.meta?.vd_kind === 'annotation_arrow';
+}
+
+function isAnnotationPreviewShape(shape) {
+  return shape?.meta?.vd_kind === 'annotation_arrow_preview';
+}
+
+function isAgentScaffoldRootShape(shape) {
+  const meta = shape?.meta || {};
+  const role = String(meta.vd_role || meta.vd_stage_role || '');
+  if (meta.vd_scaffold_root) return true;
+  if (role === 'scaffold.root' || role.includes('scaffold.root')) return true;
+  return shape?.type === 'frame' && Boolean(meta.vd_scaffold_id) && !meta.vd_stage_key && !meta.vd_stage_template_dropzone;
+}
+
+function shouldTrackUserPendingShape(shape) {
+  if (!shape || shape.typeName !== 'shape') return false;
+  if (isHtmlComponentShape(shape)) return false;
+  if (isRegionAnnotationShape(shape)) return false;
+  if (isAnnotationArrowShape(shape) || isAnnotationPreviewShape(shape)) return false;
+  if (shape.meta?.vd_kind === 'layout_review') return false;
+  return true;
+}
+
+function shapeVisualFingerprint(shape) {
+  if (!shape) return '';
+  return JSON.stringify({
+    type: shape.type,
+    parentId: shape.parentId || null,
+    index: shape.index || null,
+    x: Math.round(Number(shape.x || 0) * 100) / 100,
+    y: Math.round(Number(shape.y || 0) * 100) / 100,
+    rotation: Math.round(Number(shape.rotation || 0) * 1000) / 1000,
+    isLocked: Boolean(shape.isLocked),
+    opacity: Number.isFinite(shape.opacity) ? shape.opacity : 1,
+    props: shape.props || {},
+  });
+}
+
+function widgetFeedbackFrameColor(shape) {
+  return AGENT_SCAFFOLD_COLOR;
+}
+
+function pendingChangeOverlaysFromEditor(editor) {
+  const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
+  return shapes
+    .filter((shape) => shape?.meta?.vd_user_pending_change)
+    .map((shape) => {
+      const bounds = getShapePageBounds(editor, shape.id);
+      if (!bounds) return null;
+      const topLeft = pagePointToViewport(editor, { x: bounds.x, y: bounds.y });
+      const bottomRight = pagePointToViewport(editor, { x: bounds.x + bounds.w, y: bounds.y + bounds.h });
+      return {
+        shapeId: String(shape.id),
+        kind: 'user_pending_change',
+        x: Math.min(topLeft.x, bottomRight.x),
+        y: Math.min(topLeft.y, bottomRight.y),
+        w: Math.max(12, Math.abs(bottomRight.x - topLeft.x)),
+        h: Math.max(12, Math.abs(bottomRight.y - topLeft.y)),
+      };
+    })
+    .filter(Boolean);
 }
 
 function parseExpertMentions(text) {
@@ -859,7 +923,59 @@ function feedbackKindLabel(kind) {
   return '反馈';
 }
 
+function compactUiText(value, max = 34) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function summarizeWidgetPayload(payload = {}, max = 160) {
+  if (!payload || typeof payload !== 'object') return '';
+  const entries = Object.entries(payload)
+    .filter(([key, value]) => !['event_type', 'type'].includes(key) && value !== undefined && value !== null && value !== '')
+    .slice(0, 6)
+    .map(([key, value]) => {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return `${key}: ${value}`;
+      }
+      if (Array.isArray(value)) return `${key}: ${value.map((item) => (typeof item === 'object' ? JSON.stringify(item) : item)).join(', ')}`;
+      return `${key}: ${JSON.stringify(value)}`;
+    });
+  return compactUiText(entries.join('；'), max);
+}
+
+function widgetFeedbackContent(component, eventType, payload) {
+  const summary = summarizeWidgetPayload(payload);
+  return summary
+    ? `Widget 提交：${component.title}\n事件：${eventType}\n内容：${summary}`
+    : `Widget 提交：${component.title}\n事件：${eventType}`;
+}
+
+function cleanExpertOpinionContent(value, isExpertOpinion = false) {
+  const text = String(value || '').trim();
+  if (!isExpertOpinion || !text) return text;
+  const dropLabels = new Set(['专家', '指向', '审美/方法依据', '依据']);
+  const unwrapLabels = new Set(['观察', '判断', '建议', '下一步', '下一步动作']);
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^([^:：]{1,12})[:：]\s*(.*)$/);
+      if (!match) return line;
+      const label = match[1].trim();
+      const body = match[2].trim();
+      if (dropLabels.has(label)) return '';
+      if (label === '可能遮蔽') return body ? `不过，${body}` : '';
+      if (unwrapLabels.has(label)) return body;
+      return line;
+    })
+    .filter(Boolean);
+  return lines.join('\n').trim() || text;
+}
+
 function feedbackStatusLabel(item) {
+  if (isExpertOpinionItem(item) && !isFeedbackItemPending(item)) return '已给出';
   const status = item.status || item.raw?.status;
   if (status === 'resolved') return '已解决';
   if (status === 'addressed') return '已处理';
@@ -868,12 +984,29 @@ function feedbackStatusLabel(item) {
   if (status === 'completed') return '已完成';
   if (status === 'in_progress') return '进行中';
   if (status === 'open') return '开放';
+  if (status === 'shared') return '已给出';
   if (status === 'tracked' || item.raw?.handled === false || item.flagged) return '待处理';
   return '已提交';
 }
 
+function isExpertOpinionItem(item) {
+  return item?.isExpertOpinion
+    || item?.author?.kind === 'expert'
+    || item?.direction === 'expert_to_content'
+    || item?.raw?.author_kind === 'expert'
+    || item?.raw?.direction === 'expert_to_content';
+}
+
+function feedbackItemThemeColor(item) {
+  return isExpertOpinionItem(item) ? EXPERT_OPINION_YELLOW : ANNOTATION_PURPLE;
+}
+
 function isFeedbackItemPending(item) {
   const status = item?.status || item?.raw?.status;
+  if (isExpertOpinionItem(item)) {
+    const lastMessage = item?.thread?.[item.thread.length - 1];
+    if (lastMessage?.role !== 'user') return false;
+  }
   // A terminal status wins over the flagged shortcut: once an expert resolves
   // the thread, the item stops counting as pending even if it was flagged.
   if (['resolved', 'addressed', 'confirmed', 'archived', 'completed'].includes(status)) return false;
@@ -1059,6 +1192,17 @@ function canvasFeedbackPanelItems(workspace) {
   const nodeMetaByShapeId = new Map(
     (workspace?.semantic_index?.nodes || []).map((node) => [String(node.shape_id), node.meta || {}]),
   );
+  const targetInfoByShapeId = new Map();
+  [
+    ...(workspace?.semantic_index?.sections || []),
+    ...(workspace?.semantic_index?.nodes || []),
+    ...(workspace?.semantic_index?.assets || []),
+    ...(workspace?.semantic_index?.region_annotations || []),
+    ...(workspace?.semantic_index?.completion_requests || []),
+    ...(workspace?.semantic_index?.widget_instances || []),
+  ].forEach((entry) => {
+    if (entry?.shape_id) targetInfoByShapeId.set(String(entry.shape_id), entry);
+  });
   return Array.from(items.values())
     .map((item) => {
       const author = feedbackAuthorInfo(item.raw);
@@ -1066,14 +1210,37 @@ function canvasFeedbackPanelItems(workspace) {
       const targets = (storedTargets || (item.shapeIds || []).map((id) => ({ shape_id: id, level: null })))
         .map((target) => {
           const shapeId = String(target.shape_id || target.id || target);
-          return { shape_id: shapeId, level: target.level || deriveTargetLevel(nodeMetaByShapeId.get(shapeId)) };
+          const level = target.level || deriveTargetLevel(nodeMetaByShapeId.get(shapeId));
+          const info = targetInfoByShapeId.get(shapeId) || {};
+          const label = target.label
+            || target.title
+            || compactUiText(info.title || info.section_title || info.text || info.ir_id)
+            || TARGET_LEVEL_LABEL[level]
+            || '元素';
+          return { shape_id: shapeId, level, label };
         });
       const thread = Array.isArray(item.raw?.thread) && item.raw.thread.length
         ? item.raw.thread
         : [{ role: author.kind, name: author.name, text: item.content, at: item.createdAt }];
       const direction = item.raw?.direction || (author.kind === 'expert' ? 'expert_to_content' : 'user_to_expert');
       const expertName = feedbackItemExpertName(item, author, targets, nodeMetaByShapeId);
-      return { ...item, author, direction, targets, thread, expertName };
+      const isExpertOpinion = author.kind === 'expert' || direction === 'expert_to_content';
+      const shapeIds = Array.from(new Set([
+        ...(item.shapeIds || []),
+        ...targets.map((target) => target.shape_id).filter(Boolean),
+      ]));
+      return {
+        ...item,
+        label: isExpertOpinion ? '意见' : item.label,
+        content: cleanExpertOpinionContent(item.content, isExpertOpinion),
+        author,
+        direction,
+        isExpertOpinion,
+        shapeIds,
+        targets,
+        thread,
+        expertName,
+      };
     })
     .sort((a, b) => {
       const at = new Date(a.createdAt || 0).getTime();
@@ -1926,6 +2093,7 @@ function ActiveExpertsDock({
   onSummonDraftChange,
   onSubmitSummon,
   pendingByExpert,
+  opinionByExpert,
 }) {
   const hasExperts = experts.length > 0;
   return (
@@ -1940,20 +2108,30 @@ function ActiveExpertsDock({
           {experts.map((expert) => {
             const selected = selectedExpertName === expert.name;
             const pending = pendingByExpert?.get?.(expert.name) || 0;
+            const opinions = opinionByExpert?.get?.(expert.name) || 0;
+            const badgeCount = pending || opinions;
+            const badgeLabel = pending ? `${pending} 条待处理反馈` : `${opinions} 条意见`;
             return (
               <button
                 type="button"
                 key={expert.name}
-                style={STYLES.expertParticipantButton(selected, pending > 0)}
+                style={STYLES.expertParticipantButton(selected, pending > 0, opinions > 0)}
                 onClick={() => onSelectExpert(expert)}
-                title={expert.domain ? `${expert.name} · ${expert.domain}` : expert.name}
+                title={[
+                  expert.domain ? `${expert.name} · ${expert.domain}` : expert.name,
+                  opinions > 0 ? `${opinions} 条意见` : null,
+                  pending > 0 ? `${pending} 条待处理反馈` : null,
+                ].filter(Boolean).join(' · ')}
                 aria-pressed={selected}
               >
                 <span style={STYLES.expertAvatarWrap}>
                   <ExpertAvatar expert={expert} selected={selected} size={30} />
-                  {pending > 0 && (
-                    <span style={STYLES.expertPendingBadge(expert.color)} aria-label={`${pending} 条待处理`}>
-                      {pending}
+                  {badgeCount > 0 && (
+                    <span
+                      style={STYLES.expertPendingBadge(pending ? ANNOTATION_PURPLE : EXPERT_OPINION_YELLOW, pending > 0)}
+                      aria-label={badgeLabel}
+                    >
+                      {badgeCount}
                     </span>
                   )}
                 </span>
@@ -1994,10 +2172,11 @@ function CanvasCollaborationDock({
   selectedExpertName,
   summonDraft,
   summonSubmitting,
-  feedbackPanelItems,
+  feedbackItems,
+  expertOpinionItems,
   feedbackPanelOpen,
-  feedbackPanelPendingCount,
   pendingByExpert,
+  opinionByExpert,
   onSelectExpert,
   onSummonDraftChange,
   onSubmitSummon,
@@ -2019,17 +2198,17 @@ function CanvasCollaborationDock({
         onSelectExpert={onSelectExpert}
         onSummonDraftChange={onSummonDraftChange}
         onSubmitSummon={onSubmitSummon}
+        opinionByExpert={opinionByExpert}
       />
       <CanvasFeedbackPanel
-        items={feedbackPanelItems}
+        feedbackItems={feedbackItems}
+        expertOpinionItems={expertOpinionItems}
         open={feedbackPanelOpen}
         hasExperts={experts.length > 0}
-        pendingCount={feedbackPanelPendingCount}
         activeExpertName={selectedExpertName}
         onToggle={onToggleFeedback}
         onClose={onCloseFeedback}
         onFocus={onFocusFeedback}
-        onFilterExpert={onSelectExpert}
         onActiveItemChange={onActiveFeedbackChange}
         onReply={onReplyFeedback}
         onCompose={onComposeFeedback}
@@ -2044,9 +2223,10 @@ function expertColorByName(name) {
   return known?.color || expertFallbackColor(name);
 }
 
-function FeedbackThreadMessage({ message }) {
+function FeedbackThreadMessage({ message, toneColor = null }) {
   const isExpert = message.role === 'expert';
-  const color = isExpert ? expertColorByName(message.name) : null;
+  const color = isExpert ? (toneColor || expertColorByName(message.name)) : null;
+  const text = cleanExpertOpinionContent(message.text, isExpert);
   return (
     <div style={STYLES.canvasFeedbackThreadMsg(isExpert, color)}>
       <div style={STYLES.canvasFeedbackThreadMsgTop}>
@@ -2056,21 +2236,20 @@ function FeedbackThreadMessage({ message }) {
         </span>
         <span style={STYLES.canvasFeedbackTime}>{formatDate(message.at)}</span>
       </div>
-      <div style={STYLES.canvasFeedbackThreadMsgText}>{message.text}</div>
+      <div style={STYLES.canvasFeedbackThreadMsgText}>{text}</div>
     </div>
   );
 }
 
 function CanvasFeedbackPanel({
-  items,
+  feedbackItems = [],
+  expertOpinionItems = [],
   open,
   hasExperts,
-  pendingCount,
   activeExpertName,
   onToggle,
   onClose,
   onFocus,
-  onFilterExpert,
   onActiveItemChange,
   onReply,
   onCompose,
@@ -2080,19 +2259,16 @@ function CanvasFeedbackPanel({
   const [replyBusy, setReplyBusy] = useState(false);
   const [composeDraft, setComposeDraft] = useState('');
   const [composeBusy, setComposeBusy] = useState(false);
-  const total = items.length;
-  const expertChips = useMemo(() => {
-    const map = new Map();
-    items.forEach((item) => {
-      if (!item.expertName) return;
-      map.set(item.expertName, (map.get(item.expertName) || 0) + 1);
-    });
-    if (activeExpertName && !map.has(activeExpertName)) map.set(activeExpertName, 0);
-    return Array.from(map.entries()).map(([name, count]) => ({ name, count, color: expertColorByName(name) }));
-  }, [items, activeExpertName]);
-  const visibleItems = useMemo(
-    () => (activeExpertName ? items.filter((item) => item.expertName === activeExpertName) : items),
-    [items, activeExpertName],
+  const feedbackTotal = feedbackItems.length;
+  const isExpertOpinionView = Boolean(activeExpertName);
+  const visibleItems = useMemo(() => (
+    isExpertOpinionView
+      ? expertOpinionItems.filter((item) => item.expertName === activeExpertName)
+      : feedbackItems
+  ), [activeExpertName, expertOpinionItems, feedbackItems, isExpertOpinionView]);
+  const visiblePendingCount = useMemo(
+    () => visibleItems.filter((item) => isFeedbackItemPending(item)).length,
+    [visibleItems],
   );
 
   async function submitReply(item) {
@@ -2140,60 +2316,42 @@ function CanvasFeedbackPanel({
       onWheel={(event) => event.stopPropagation()}
     >
       {open && (
-        <section style={STYLES.canvasFeedbackPanel(hasExperts)} aria-label="画布提交内容">
-          <div style={STYLES.canvasFeedbackPanelHeader}>
+        <section
+          style={STYLES.canvasFeedbackPanel(hasExperts, isExpertOpinionView ? 'opinion' : 'feedback')}
+          aria-label={isExpertOpinionView ? `${activeExpertName} 的专家意见` : '我的反馈'}
+        >
+          <div style={STYLES.canvasFeedbackPanelHeader(isExpertOpinionView ? 'opinion' : 'feedback')}>
             <div>
-              <div style={STYLES.canvasFeedbackPanelTitle}>
-                {activeExpertName ? `${activeExpertName} 的反馈` : '反馈'}
+              <div style={STYLES.canvasFeedbackPanelTitle(isExpertOpinionView ? 'opinion' : 'feedback')}>
+                {isExpertOpinionView ? `${activeExpertName} 的意见` : '我的反馈'}
               </div>
               <div style={STYLES.canvasFeedbackPanelMeta}>
-                {total} 条内容 · {pendingCount} 条待处理
+                {isExpertOpinionView
+                  ? `${visibleItems.length} 条意见`
+                  : `${visibleItems.length} 条反馈 · ${visiblePendingCount} 条待处理`}
               </div>
             </div>
             <button
               type="button"
               style={STYLES.canvasFeedbackPanelClose}
               onClick={onClose}
-              aria-label="关闭反馈面板"
+              aria-label={isExpertOpinionView ? '关闭意见面板' : '关闭反馈面板'}
             >
               ×
             </button>
           </div>
-          {expertChips.length > 0 && (
-            <div style={STYLES.canvasFeedbackFilterBar}>
-              <button
-                type="button"
-                style={STYLES.canvasFeedbackFilterChip(!activeExpertName, null)}
-                onClick={() => onFilterExpert(null)}
-              >
-                全部
-              </button>
-              {expertChips.map((chip) => (
-                <button
-                  type="button"
-                  key={chip.name}
-                  style={STYLES.canvasFeedbackFilterChip(activeExpertName === chip.name, chip.color)}
-                  onClick={() => onFilterExpert(activeExpertName === chip.name ? null : { name: chip.name })}
-                >
-                  {chip.name}
-                  {chip.count > 0 && <span style={STYLES.canvasFeedbackFilterCount}>{chip.count}</span>}
-                </button>
-              ))}
-            </div>
-          )}
           <div style={STYLES.canvasFeedbackList}>
             {visibleItems.length === 0 ? (
               <div style={STYLES.canvasFeedbackEmpty}>
-                {activeExpertName ? '这位专家还没有相关反馈。' : '还没有提交内容。'}
+                {isExpertOpinionView ? '这位专家还没有意见。' : '还没有用户反馈。'}
               </div>
             ) : visibleItems.map((item) => {
               const expanded = expandedId === item.id;
               const authorIsExpert = item.author?.kind === 'expert';
-              const itemColor = authorIsExpert
-                ? item.author.color
-                : (item.expertName ? expertColorByName(item.expertName) : null);
+              const itemColor = feedbackItemThemeColor(item);
               const canReply = String(item.id || '').startsWith('feedback:');
               const thread = item.thread || [];
+              const showStatus = !item.isExpertOpinion || isFeedbackItemPending(item);
               return (
                 <article
                   key={item.id}
@@ -2203,10 +2361,12 @@ function CanvasFeedbackPanel({
                   onClick={(event) => handleFeedbackItemClick(item, event.currentTarget)}
                 >
                   <div style={STYLES.canvasFeedbackItemTop}>
-                    <span style={STYLES.canvasFeedbackKind}>{item.label}</span>
-                    <span style={STYLES.canvasFeedbackStatus(isFeedbackItemPending(item))}>
-                      {feedbackStatusLabel(item)}
-                    </span>
+                    <span style={STYLES.canvasFeedbackKind(itemColor)}>{item.label}</span>
+                    {showStatus && (
+                      <span style={STYLES.canvasFeedbackStatus(isFeedbackItemPending(item))}>
+                        {feedbackStatusLabel(item)}
+                      </span>
+                    )}
                   </div>
                   <div style={STYLES.canvasFeedbackAuthorRow}>
                     <span style={STYLES.canvasFeedbackAuthorDot(authorIsExpert ? itemColor : '#94a3b8')} />
@@ -2232,7 +2392,7 @@ function CanvasFeedbackPanel({
                           }}
                           title={target.shape_id}
                         >
-                          ⌖ {TARGET_LEVEL_LABEL[target.level] || '元素'}
+                          ⌖ {target.label || TARGET_LEVEL_LABEL[target.level] || '元素'}
                         </button>
                       ))}
                       {item.targets.length > 1 && (
@@ -2255,7 +2415,11 @@ function CanvasFeedbackPanel({
                   {expanded && thread.length > 1 && (
                     <div style={STYLES.canvasFeedbackThread}>
                       {thread.slice(1).map((message, index) => (
-                        <FeedbackThreadMessage key={`${item.id}-msg-${index}`} message={message} />
+                        <FeedbackThreadMessage
+                          key={`${item.id}-msg-${index}`}
+                          message={message}
+                          toneColor={item.isExpertOpinion ? itemColor : null}
+                        />
                       ))}
                     </div>
                   )}
@@ -2265,7 +2429,7 @@ function CanvasFeedbackPanel({
                         rows={1}
                         style={STYLES.canvasFeedbackReplyInput}
                         value={replyDraft}
-                        placeholder="回复这条反馈..."
+                        placeholder={authorIsExpert ? '回复这条意见...' : '回复这条反馈...'}
                         onChange={(event) => setReplyDraft(event.target.value)}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' && !event.shiftKey) {
@@ -2295,7 +2459,7 @@ function CanvasFeedbackPanel({
                 data-testid="canvas.feedback-panel.compose"
                 style={STYLES.canvasFeedbackReplyInput}
                 value={composeDraft}
-                placeholder={`对 ${activeExpertName} 反馈（选中画布元素可自动关联）...`}
+                placeholder={`向 ${activeExpertName} 反馈（选中画布元素可自动关联）...`}
                 onChange={(event) => setComposeDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
@@ -2321,10 +2485,10 @@ function CanvasFeedbackPanel({
         style={STYLES.canvasFeedbackButton(open)}
         onClick={onToggle}
         aria-expanded={open}
-        aria-label="打开画布提交内容"
+        aria-label="打开我的反馈"
       >
-        反馈
-        {total > 0 && <span style={STYLES.canvasFeedbackCount}>{total}</span>}
+        我的反馈
+        {feedbackTotal > 0 && <span style={STYLES.canvasFeedbackCount}>{feedbackTotal}</span>}
       </button>
     </div>
   );
@@ -2338,9 +2502,7 @@ function FeedbackConnectorOverlay({ link, editor, layerEl }) {
   if (!item || !editor) return null;
   const targets = feedbackConnectorRects(editor, item.shapeIds || []);
   if (!targets.length) return null;
-  const color = item.author?.kind === 'expert'
-    ? (item.author.color || '#7c3aed')
-    : (item.expertName ? expertColorByName(item.expertName) : '#7c3aed');
+  const color = feedbackItemThemeColor(item);
   let source = null;
   if (link.element?.isConnected && layerEl) {
     const layerRect = layerEl.getBoundingClientRect();
@@ -2733,11 +2895,13 @@ const STYLES = {
     alignItems: 'center',
     gap: 10,
   },
-  expertParticipantButton: (selected, hasPending = false) => ({
+  expertParticipantButton: (selected, hasPending = false, hasOpinions = false) => ({
     width: '100%',
     border: 'none',
     borderRadius: 12,
-    background: selected ? 'rgba(15, 23, 42, .06)' : (hasPending ? 'rgba(124, 58, 237, .07)' : 'transparent'),
+    background: selected
+      ? (hasOpinions ? 'rgba(245, 158, 11, .12)' : 'rgba(15, 23, 42, .06)')
+      : (hasPending ? 'rgba(124, 58, 237, .07)' : (hasOpinions ? 'rgba(245, 158, 11, .08)' : 'transparent')),
     padding: '3px 2px',
     cursor: 'pointer',
     display: 'flex',
@@ -2751,7 +2915,7 @@ const STYLES = {
     display: 'inline-flex',
     borderRadius: 999,
   },
-  expertPendingBadge: (color) => ({
+  expertPendingBadge: (color, urgent = true) => ({
     position: 'absolute',
     top: -3,
     right: -4,
@@ -2759,15 +2923,15 @@ const STYLES = {
     height: 14,
     padding: '0 3px',
     borderRadius: 999,
-    background: color || '#7c3aed',
-    color: '#fff',
+    background: urgent ? (color || '#7c3aed') : '#fff',
+    border: urgent ? '1.5px solid #fff' : `1.5px solid ${color || '#7c3aed'}`,
+    color: urgent ? '#fff' : (color || '#7c3aed'),
     fontSize: 9,
     fontWeight: 700,
     lineHeight: '11px',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    border: '1.5px solid #fff',
     boxShadow: `0 0 0 1.5px ${color ? `${color}44` : 'rgba(124, 58, 237, .28)'}, 0 2px 6px rgba(15, 23, 42, .22)`,
     zIndex: 1,
   }),
@@ -2887,6 +3051,7 @@ const STYLES = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 3,
+    maxWidth: '100%',
     border: `1px dashed ${color ? `${color}88` : 'rgba(124, 58, 237, .5)'}`,
     borderRadius: 6,
     padding: '1px 7px',
@@ -2894,6 +3059,9 @@ const STYLES = {
     color: color || '#6d28d9',
     background: '#fff',
     cursor: 'pointer',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   }),
   canvasFeedbackThreadHint: {
     fontSize: 11,
@@ -3042,8 +3210,10 @@ const STYLES = {
     fontSize: 11,
     fontWeight: 'var(--vd-font-weight-bold)',
   },
-  canvasFeedbackPanel: (hasExperts) => ({
-    // Float to the right of the vertical expert rail + feedback button stack.
+  canvasFeedbackPanel: (hasExperts, tone = 'feedback') => {
+    const isOpinion = tone === 'opinion';
+    return {
+    // Float to the right of the vertical expert rail + My Feedback button stack.
     position: 'absolute',
     left: 'calc(100% + 12px)',
     bottom: 0,
@@ -3051,26 +3221,28 @@ const STYLES = {
     maxHeight: 'min(560px, calc(100vh - 120px))',
     display: 'flex',
     flexDirection: 'column',
-    border: '1px solid rgba(124, 58, 237, .28)',
+    border: `1px solid ${isOpinion ? 'rgba(245, 158, 11, .36)' : 'rgba(124, 58, 237, .28)'}`,
     borderRadius: 10,
     background: 'rgba(255, 255, 255, .98)',
-    boxShadow: '0 20px 42px rgba(76, 29, 149, .18)',
+    boxShadow: isOpinion ? '0 20px 42px rgba(180, 83, 9, .16)' : '0 20px 42px rgba(76, 29, 149, .18)',
     overflow: 'hidden',
     zIndex: 5,
-  }),
-  canvasFeedbackPanelHeader: {
+    };
+  },
+  canvasFeedbackPanelHeader: (tone = 'feedback') => ({
     display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
     padding: '12px 14px',
-    borderBottom: '1px solid rgba(124, 58, 237, .14)',
-  },
-  canvasFeedbackPanelTitle: {
-    color: 'var(--vd-text-primary)',
+    borderBottom: `1px solid ${tone === 'opinion' ? 'rgba(245, 158, 11, .20)' : 'rgba(124, 58, 237, .14)'}`,
+    background: tone === 'opinion' ? 'rgba(245, 158, 11, .05)' : 'transparent',
+  }),
+  canvasFeedbackPanelTitle: (tone = 'feedback') => ({
+    color: tone === 'opinion' ? '#92400e' : 'var(--vd-text-primary)',
     fontSize: 'var(--vd-font-size-sm)',
     fontWeight: 'var(--vd-font-weight-semibold)',
-  },
+  }),
   canvasFeedbackPanelMeta: {
     marginTop: 3,
     color: 'var(--vd-text-tertiary)',
@@ -3106,17 +3278,17 @@ const STYLES = {
     justifyContent: 'space-between',
     gap: 8,
   },
-  canvasFeedbackKind: {
+  canvasFeedbackKind: (color = ANNOTATION_PURPLE) => ({
     display: 'inline-flex',
     alignItems: 'center',
     minHeight: 22,
     padding: '0 8px',
     borderRadius: 999,
-    background: 'rgba(124, 58, 237, .1)',
-    color: '#5b21b6',
+    background: `${color}14`,
+    color,
     fontSize: 'var(--vd-font-size-xs)',
     fontWeight: 'var(--vd-font-weight-semibold)',
-  },
+  }),
   canvasFeedbackStatus: (pending) => ({
     color: pending ? '#7c3aed' : 'var(--vd-text-tertiary)',
     fontSize: 'var(--vd-font-size-xs)',
@@ -3332,6 +3504,21 @@ const STYLES = {
       pointerEvents: 'none',
     };
   },
+  pendingChangeOverlay: (item) => {
+    const color = '245, 158, 11';
+    return {
+      position: 'absolute',
+      left: item.x,
+      top: item.y,
+      width: item.w,
+      height: item.h,
+      border: `2px solid rgba(${color}, .82)`,
+      background: `rgba(${color}, .10)`,
+      boxShadow: `0 0 0 4px rgba(${color}, .14), 0 0 20px rgba(${color}, .28)`,
+      borderRadius: 8,
+      pointerEvents: 'none',
+    };
+  },
   regionAnnotationOverlay: (item) => ({
     position: 'absolute',
     left: item.x,
@@ -3361,6 +3548,7 @@ export default function CanvasWorkspace() {
   const [toolMessage, setToolMessage] = useState('');
   const [htmlComponents, setHtmlComponents] = useState([]);
   const [authoredOverlays, setAuthoredOverlays] = useState([]);
+  const [pendingChangeOverlays, setPendingChangeOverlays] = useState([]);
   const [previewMode, setPreviewMode] = useState('normal');
   const [scaffolds, setScaffolds] = useState([]);
   const [scaffoldPickerOpen, setScaffoldPickerOpen] = useState(false);
@@ -3385,13 +3573,20 @@ export default function CanvasWorkspace() {
   const knownShapeIds = useRef(new Set());
   const pendingCanvasEvent = useRef(null);
   const widgetAspectGuard = useRef(false);
+  const userPendingMarkGuard = useRef(false);
+  const programmaticCanvasWriteGuard = useRef(false);
+  const shapeFingerprints = useRef(new Map());
   const widgetDragRef = useRef(null);
   // Rev of the snapshot this client loaded/saved last. Echoed as base_rev on
   // saves so the server can protect agent shapes from stale-client writes.
   const snapshotRevRef = useRef(0);
   const feedbackPanelItems = useMemo(() => canvasFeedbackPanelItems(workspace), [workspace]);
-  const feedbackPanelPendingCount = useMemo(
-    () => feedbackPanelItems.filter(isFeedbackItemPending).length,
+  const expertOpinionItems = useMemo(
+    () => feedbackPanelItems.filter((item) => isExpertOpinionItem(item)),
+    [feedbackPanelItems],
+  );
+  const userFeedbackItems = useMemo(
+    () => feedbackPanelItems.filter((item) => !isExpertOpinionItem(item)),
     [feedbackPanelItems],
   );
   // Per-expert badge: user-submitted items that are still awaiting that
@@ -3408,6 +3603,14 @@ export default function CanvasWorkspace() {
     });
     return map;
   }, [feedbackPanelItems]);
+  const expertOpinionsByExpert = useMemo(() => {
+    const map = new Map();
+    expertOpinionItems.forEach((item) => {
+      if (!item.expertName) return;
+      map.set(item.expertName, (map.get(item.expertName) || 0) + 1);
+    });
+    return map;
+  }, [expertOpinionItems]);
   const [activeFeedbackLink, setActiveFeedbackLink] = useState(null);
   const overlayLayerRef = useRef(null);
   const discussionExperts = useMemo(() => collectDiscussionExperts(workspace), [workspace]);
@@ -3421,6 +3624,7 @@ export default function CanvasWorkspace() {
   function refreshHtmlComponents(editor = editorRef.current) {
     setHtmlComponents(editor ? htmlComponentOverlaysFromEditor(editor) : []);
     setAuthoredOverlays(editor ? authoredOverlaysFromEditor(editor) : []);
+    setPendingChangeOverlays(editor ? pendingChangeOverlaysFromEditor(editor) : []);
   }
 
   useEffect(() => {
@@ -3456,6 +3660,104 @@ export default function CanvasWorkspace() {
     } finally {
       widgetAspectGuard.current = false;
     }
+  }
+
+  function resetShapeFingerprints(editor = editorRef.current) {
+    const next = new Map();
+    for (const shape of currentPageShapes(editor)) {
+      next.set(String(shape.id), shapeVisualFingerprint(shape));
+    }
+    shapeFingerprints.current = next;
+  }
+
+  function normalizeVisualDeliveryShapeStates(editor = editorRef.current) {
+    if (!editor) return [];
+    const updates = [];
+    for (const shape of currentPageShapes(editor)) {
+      const meta = shape.meta || {};
+      let props = null;
+      let nextMeta = null;
+      if (isHtmlComponentShape(shape)) {
+        const nextColor = widgetFeedbackFrameColor(shape);
+        if (shape.props?.color !== nextColor) {
+          props = { ...(shape.props || {}), color: nextColor };
+        }
+      } else if (isAgentScaffoldRootShape(shape)) {
+        if (shape.props?.color !== AGENT_SCAFFOLD_COLOR) {
+          props = { ...(shape.props || {}), color: AGENT_SCAFFOLD_COLOR };
+        }
+        if (!meta.vd_scaffold_root) {
+          nextMeta = { ...meta, vd_scaffold_root: true };
+        }
+      }
+      if (props || nextMeta) {
+        updates.push({
+          id: shape.id,
+          type: shape.type,
+          ...(props ? { props } : {}),
+          ...(nextMeta ? { meta: nextMeta } : {}),
+        });
+      }
+    }
+    if (updates.length === 0) {
+      resetShapeFingerprints(editor);
+      return [];
+    }
+    programmaticCanvasWriteGuard.current = true;
+    try {
+      editor.updateShapes?.(updates);
+    } finally {
+      programmaticCanvasWriteGuard.current = false;
+      resetShapeFingerprints(editor);
+    }
+    return updates.map((item) => String(item.id));
+  }
+
+  function processUserVisibleShapeChanges(editor) {
+    if (!editor) return false;
+    if (programmaticCanvasWriteGuard.current || userPendingMarkGuard.current) {
+      resetShapeFingerprints(editor);
+      return false;
+    }
+    const previous = shapeFingerprints.current;
+    const shapes = currentPageShapes(editor);
+    const next = new Map();
+    const updates = [];
+    const now = new Date().toISOString();
+    for (const shape of shapes) {
+      const id = String(shape.id);
+      const fingerprint = shapeVisualFingerprint(shape);
+      next.set(id, fingerprint);
+      const before = previous.get(id);
+      if (before === fingerprint) continue;
+      if (!shouldTrackUserPendingShape(shape)) continue;
+      const meta = shape.meta || {};
+      const isNewShape = before === undefined;
+      const createdBy = meta.vd_created_by || meta.vd_author || '';
+      if (isNewShape && createdBy && createdBy !== 'user') continue;
+      if (meta.vd_user_pending_change) continue;
+      updates.push({
+        id: shape.id,
+        type: shape.type,
+        meta: {
+          ...meta,
+          vd_user_pending_change: true,
+          vd_user_pending_at: now,
+          vd_last_edited_by: 'user',
+          vd_updated_at: now,
+        },
+      });
+    }
+    shapeFingerprints.current = next;
+    if (updates.length === 0) return false;
+    userPendingMarkGuard.current = true;
+    try {
+      editor.updateShapes?.(updates);
+    } finally {
+      userPendingMarkGuard.current = false;
+      resetShapeFingerprints(editor);
+    }
+    return true;
   }
 
   async function loadWorkspaceDocument() {
@@ -3528,6 +3830,8 @@ export default function CanvasWorkspace() {
         || saved.write_protection?.restored_shape_ids?.length > 0) && saved.snapshot) {
         try {
           loadSnapshot(editor.store, saved.snapshot);
+          normalizeVisualDeliveryShapeStates(editor);
+          resetShapeFingerprints(editor);
           refreshHtmlComponents(editor);
           markToolMessage(`已同步 ${saved.write_protection.restored_shape_ids.length} 个来自 Agent 的画布对象。`);
         } catch { /* keep local state; next reload converges */ }
@@ -3550,11 +3854,12 @@ export default function CanvasWorkspace() {
     setSelectedExpertName((current) => {
       if (current === expert.name) {
         setPreviewMode('normal');
+        setFeedbackPanelOpen(false);
+        setActiveFeedbackLink(null);
         return null;
       }
       setPreviewMode('highlight');
-      // Focusing an expert also opens the global feedback panel filtered to
-      // that expert's conversation thread.
+      // Focusing an expert opens that expert's opinion stream.
       setFeedbackPanelOpen(true);
       return expert.name;
     });
@@ -3814,7 +4119,7 @@ export default function CanvasWorkspace() {
         w: Math.round(bounds.w),
         h: Math.round(bounds.h),
         fill: 'none',
-        color: 'violet',
+        color: AGENT_SCAFFOLD_COLOR,
         richText: toRichText(`${title}\n\nWidget 占位。真实内容由透明 iframe 渲染。`),
       },
       meta: {
@@ -3897,18 +4202,26 @@ export default function CanvasWorkspace() {
       w: Math.round(Math.min(sizing.max_width || bounds.w, Math.max(sizing.min_width || 240, bounds.w))),
       h: Math.round(Math.min(sizing.max_height || bounds.h, Math.max(sizing.min_height || 120, bounds.h))),
     };
-    editor.createShapes([
-      createHtmlComponentShape({
-        shapeId,
-        title,
-        description: scaffold?.description || '画布内嵌 HTML 组件',
-        html: scaffold?.html || DEFAULT_CANVAS_HTML_COMPONENT,
-        bounds: finalBounds,
-        scaffold,
-        stageParent,
-      }),
-    ]);
-    if (section) editor.reparentShapes?.([shapeId], section.id);
+    if (scaffold) programmaticCanvasWriteGuard.current = true;
+    try {
+      editor.createShapes([
+        createHtmlComponentShape({
+          shapeId,
+          title,
+          description: scaffold?.description || '画布内嵌 HTML 组件',
+          html: scaffold?.html || DEFAULT_CANVAS_HTML_COMPONENT,
+          bounds: finalBounds,
+          scaffold,
+          stageParent,
+        }),
+      ]);
+      if (section) editor.reparentShapes?.([shapeId], section.id);
+    } finally {
+      if (scaffold) {
+        programmaticCanvasWriteGuard.current = false;
+        resetShapeFingerprints(editor);
+      }
+    }
     editor.setSelectedShapes?.([shapeId]);
     refreshHtmlComponents(editor);
     markToolMessage(section ? `已在 ${section.props?.name || 'Section'} 中添加 ${title}。` : `已添加 ${title}。`);
@@ -4001,18 +4314,59 @@ export default function CanvasWorkspace() {
     editor.updateShapes?.([{ id: shape.id, type: shape.type, meta: nextMeta }]);
   }
 
+  function markWidgetPendingFeedback(component, extraMeta = {}) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const shape = editor.getShape?.(component.shapeId);
+    if (!shape) return;
+    const now = new Date().toISOString();
+    editor.updateShapes?.([{
+      id: shape.id,
+      type: shape.type,
+      props: {
+        ...(shape.props || {}),
+        color: AGENT_SCAFFOLD_COLOR,
+      },
+      meta: {
+        ...(shape.meta || {}),
+        vd_widget_pending_feedback: true,
+        vd_widget_pending_at: now,
+        vd_last_edited_by: 'user',
+        vd_updated_at: now,
+        ...extraMeta,
+      },
+    }]);
+  }
+
   // User interaction inside the widget wrote state: merge into shape meta.
   // The store listener then persists it through the normal snapshot save.
   function handleWidgetStatePatch(component, data) {
-    updateWidgetShapeMeta(component, (meta) => ({
-      ...meta,
-      vd_widget_state: data?.replace
-        ? (data?.state || {})
-        : { ...(meta.vd_widget_state || {}), ...(data?.patch || {}) },
-      vd_state_version: (meta.vd_state_version || 0) + 1,
-      vd_state_actor: 'user',
-      vd_updated_at: new Date().toISOString(),
-    }));
+    const editor = editorRef.current;
+    if (!editor) return;
+    const shape = editor.getShape?.(component.shapeId);
+    if (!shape) return;
+    const meta = shape.meta || {};
+    const now = new Date().toISOString();
+    editor.updateShapes?.([{
+      id: shape.id,
+      type: shape.type,
+      props: {
+        ...(shape.props || {}),
+        color: AGENT_SCAFFOLD_COLOR,
+      },
+      meta: {
+        ...meta,
+        vd_widget_state: data?.replace
+          ? (data?.state || {})
+          : { ...(meta.vd_widget_state || {}), ...(data?.patch || {}) },
+        vd_state_version: (meta.vd_state_version || 0) + 1,
+        vd_state_actor: 'user',
+        vd_widget_pending_feedback: true,
+        vd_widget_pending_at: now,
+        vd_last_edited_by: 'user',
+        vd_updated_at: now,
+      },
+    }]);
   }
 
   // Explicit vd.emit output: routed to the feedback pool (continuous state
@@ -4021,15 +4375,20 @@ export default function CanvasWorkspace() {
     if (!workspace) return;
     const payload = data?.payload || {};
     const eventType = payload.event_type || 'widget_event';
+    markWidgetPendingFeedback(component, {
+      vd_widget_feedback_event_type: eventType,
+    });
     try {
       const feedback = await addCanvasWorkspaceFeedback(workspace.id, {
         kind: 'widget_output',
-        content: `Widget 输出：${component.title} / ${eventType}`,
+        content: widgetFeedbackContent(component, eventType, payload),
         author: 'user',
+        targets: [{ shape_id: component.shapeId, level: 'widget' }],
         target: {
           kind: 'html_component',
           workspace_id: workspace.id,
           shape_id: component.shapeId,
+          shape_ids: [component.shapeId],
           component_id: component.componentId,
           component_title: component.title,
           bounds: component.pageBounds,
@@ -4703,12 +5062,13 @@ export default function CanvasWorkspace() {
           name: sectionSpec?.title || scaffold.title,
           w: Math.round(sectionBounds.w || DEFAULT_SECTION_SIZE.w),
           h: Math.round(sectionBounds.h || DEFAULT_SECTION_SIZE.h),
-          color: 'violet',
+          color: AGENT_SCAFFOLD_COLOR,
         },
         meta: {
           vd_kind: 'section',
           vd_created_by: 'agent',
           vd_created_at: new Date().toISOString(),
+          vd_scaffold_root: true,
           vd_scaffold_id: scaffold.id,
           vd_scaffold_title: scaffold.title,
           vd_stage: normalizedStage,
@@ -4771,11 +5131,18 @@ export default function CanvasWorkspace() {
       }));
     });
 
-    editor.createShapes(shapes);
-    if (childIds.length > 0) editor.reparentShapes?.(childIds, sectionId);
-    if (stagePlacement?.section) editor.reparentShapes?.([sectionId], stagePlacement.section.id);
-    editor.sendToBack?.([sectionId]);
-    const scaffoldReview = reviewAndRepairScaffoldLayout(editor, { sectionId, childIds, scaffold });
+    let scaffoldReview = null;
+    programmaticCanvasWriteGuard.current = true;
+    try {
+      editor.createShapes(shapes);
+      if (childIds.length > 0) editor.reparentShapes?.(childIds, sectionId);
+      if (stagePlacement?.section) editor.reparentShapes?.([sectionId], stagePlacement.section.id);
+      editor.sendToBack?.([sectionId]);
+      scaffoldReview = reviewAndRepairScaffoldLayout(editor, { sectionId, childIds, scaffold });
+    } finally {
+      programmaticCanvasWriteGuard.current = false;
+      resetShapeFingerprints(editor);
+    }
     editor.setSelectedShapes?.([sectionId]);
     editor.zoomToSelection?.();
     refreshHtmlComponents(editor);
@@ -4984,9 +5351,21 @@ export default function CanvasWorkspace() {
     } else {
       seedWorkspace(editor);
     }
+    const normalizedVisualStateShapeIds = normalizeVisualDeliveryShapeStates(editor);
     refreshHtmlComponents(editor);
     knownShapeIds.current = shapeIdSet(editor);
+    resetShapeFingerprints(editor);
     mounted.current = true;
+    if (normalizedVisualStateShapeIds.length > 0 && workspace) {
+      saveSnapshot(editor, workspace, {
+        type: 'visual_state_sync',
+        actor: 'system',
+        summary: '同步脚手架与 Widget 的视觉状态颜色。',
+        target: { kind: 'canvas_workspace', workspace_id: workspace.id },
+        mutated_shape_ids: normalizedVisualStateShapeIds,
+        meta: { visual_state_sync: true },
+      });
+    }
     const handleResize = () => refreshHtmlComponents(editor);
     window.addEventListener('resize', handleResize);
     // Ctrl + wheel（以及触控板双指捏合，也会带 ctrlKey）只缩放画布，绝不触发浏览器
@@ -5081,6 +5460,7 @@ export default function CanvasWorkspace() {
     const unsubscribe = editor.store.listen(() => {
       if (!mounted.current) return;
       processCanvasToolShapeChanges(editor);
+      processUserVisibleShapeChanges(editor);
       enforceWidgetAspect(editor);
       refreshHtmlComponents(editor);
       if (!annotationArrowDrag.current) queueCanvasSnapshotSave(editor);
@@ -5093,9 +5473,11 @@ export default function CanvasWorkspace() {
       setAnnotationTargetToolMode(false);
       setAnnotationArrowToolMode(false);
       knownShapeIds.current = new Set();
+      shapeFingerprints.current = new Map();
       pendingCanvasEvent.current = null;
       annotationArrowDrag.current = null;
       setHtmlComponents([]);
+      setPendingChangeOverlays([]);
       setSelectedAnnotationTarget(null);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('wheel', preventBrowserZoom, { capture: true });
@@ -5249,14 +5631,22 @@ export default function CanvasWorkspace() {
                   selectedExpertName={selectedExpertName}
                   summonDraft={expertSummonDraft}
                   summonSubmitting={expertSummonSubmitting}
-                  feedbackPanelItems={feedbackPanelItems}
+                  feedbackItems={userFeedbackItems}
+                  expertOpinionItems={expertOpinionItems}
                   feedbackPanelOpen={feedbackPanelOpen}
-                  feedbackPanelPendingCount={feedbackPanelPendingCount}
                   pendingByExpert={pendingFeedbackByExpert}
+                  opinionByExpert={expertOpinionsByExpert}
                   onSelectExpert={handleSelectDiscussionExpert}
                   onSummonDraftChange={setExpertSummonDraft}
                   onSubmitSummon={handleSubmitExpertSummon}
                   onToggleFeedback={() => {
+                    if (selectedExpertName) {
+                      setSelectedExpertName(null);
+                      setPreviewMode('normal');
+                      setFeedbackPanelOpen(true);
+                      setActiveFeedbackLink(null);
+                      return;
+                    }
                     setFeedbackPanelOpen((value) => {
                       if (value) setActiveFeedbackLink(null);
                       return !value;
@@ -5317,6 +5707,9 @@ export default function CanvasWorkspace() {
                   )}
                   {highlightedAuthorOverlays.map((item) => (
                     <div key={item.shapeId} style={STYLES.highlightOverlay(item)} />
+                  ))}
+                  {pendingChangeOverlays.map((item) => (
+                    <div key={`pending-${item.shapeId}`} style={STYLES.pendingChangeOverlay(item)} />
                   ))}
                   {selectedAnnotationTarget && (
                     <CanvasAnnotationPopover
