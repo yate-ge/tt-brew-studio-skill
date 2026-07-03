@@ -252,7 +252,9 @@ v1 支持的 commands：
 缩放会保持方法模板 root frame、child frames、文本、形状、便签、图片等内容的比例，同时保留
 非 frame seed 内容相对容器左上角的偏移与尺寸。自由 `add_node` 创建的 `scaffold.root` 可用
 `meta.vd_scaffold_scale` 指定初始缩放。便签编译为 tldraw note，并通过 `props.scale` 跟随
-脚手架整体缩放。
+脚手架整体缩放。运行时会在写入阶段检查 `scaffold.root` 的直接子元素；若发现重叠、越界或
+低于可读尺寸，会自动按 root frame 宽度重排为不重叠的行列，并在 `layout_report.auto_repairs`
+记录 `SCAFFOLD_CHILD_REFLOW`。用户手动拖拽 root frame 边缘时，前端按比例缩放内部元素。
 
 示例：
 

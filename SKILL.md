@@ -375,6 +375,9 @@ section 中。`scaffold.root` frame 的可见名称必须是该脚手架的 `tit
 方法模板（CanvasIR Template）插入可使用 `scale` 和 `anchor`；自由创建的视觉脚手架可在 root
 `meta.vd_scaffold_scale` 给建议缩放。缩放会保持根 frame、子 frame、文字、形状、便签、图片等
 内容相对容器左上角的偏移和尺寸；便签使用 tldraw note 的 `scale` 跟随缩放，不用固定成普通矩形。
+写入时如果脚手架内直接子元素重叠、越界或便签比例不合适，运行时会按 root frame 宽度自动重排，
+优先保证不重叠、可读、比例舒服。用户后续手动拖拽 root frame 边缘改变大小时，内部元素按比例
+同步缩放。
 
 ### 画布工具边界
 

@@ -974,6 +974,8 @@ function resolveLayout(ir, nodesById, childrenByParent) {
     growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy);
     if (!moved) break;
   }
+  repairScaffoldInteriorLayout(ir, layout, childrenByParent);
+  growContainersToFitChildren(ir, layout, childrenByParent, layoutPolicy);
   layoutStageScaffolds(ir, layout, childrenByParent, layoutPolicy);
   return layout;
 }
@@ -1037,6 +1039,116 @@ function reflowAutoFlowedChildren(ir, layout, childrenByParent, layoutPolicy = D
     }
   }
   return movedAny;
+}
+
+function isScaffoldRootNode(node) {
+  return node?.role === 'scaffold.root' || node?.meta?.vd_scaffold_root === true;
+}
+
+function readableMinimumForNode(node) {
+  if (node?.kind === 'sticky' || node?.kind === 'sticky_note') return { w: 96, h: 96 };
+  if (node?.kind === 'text') return { w: 120, h: 40 };
+  return { w: 96, h: 56 };
+}
+
+function hasSiblingLayoutProblem(items, parentBounds) {
+  for (let i = 0; i < items.length; i += 1) {
+    const min = readableMinimumForNode(items[i].node);
+    if (items[i].bounds.w < min.w || items[i].bounds.h < min.h) return true;
+    if (!boundsContain(parentBounds, items[i].bounds, 4)) return true;
+    for (let j = i + 1; j < items.length; j += 1) {
+      if (boundsOverlap(items[i].bounds, items[j].bounds, 10)) return true;
+    }
+  }
+  return false;
+}
+
+function resizeSubtreeToBounds(nodeId, nextBounds, layout, childrenByParent) {
+  const current = layout.get(nodeId);
+  if (!current) return;
+  const prev = current.bounds;
+  const scaleX = prev.w > 0 ? nextBounds.w / prev.w : 1;
+  const scaleY = prev.h > 0 ? nextBounds.h / prev.h : 1;
+  const apply = (id) => {
+    const entry = layout.get(id);
+    if (!entry) return;
+    const isRoot = id === nodeId;
+    entry.bounds = isRoot ? { ...nextBounds } : {
+      ...entry.bounds,
+      x: Math.round(nextBounds.x + (entry.bounds.x - prev.x) * scaleX),
+      y: Math.round(nextBounds.y + (entry.bounds.y - prev.y) * scaleY),
+      w: Math.max(1, Math.round(entry.bounds.w * scaleX)),
+      h: Math.max(1, Math.round(entry.bounds.h * scaleY)),
+    };
+    layout.set(id, entry);
+    for (const child of childrenByParent.get(id) || []) apply(child.id);
+  };
+  apply(nodeId);
+}
+
+function fittedChildBounds(node, bounds, innerW) {
+  const min = readableMinimumForNode(node);
+  if (node.kind === 'sticky' || node.kind === 'sticky_note') {
+    const size = Math.max(min.w, Math.min(240, innerW, Math.max(bounds.w, bounds.h)));
+    return { w: Math.round(size), h: Math.round(size) };
+  }
+  const maxW = Math.max(min.w, innerW);
+  const w = Math.max(min.w, Math.min(maxW, bounds.w));
+  const aspect = bounds.w > 0 && bounds.h > 0 ? bounds.h / bounds.w : 0.56;
+  const h = Math.max(min.h, Math.round(w * aspect));
+  return { w: Math.round(w), h: Math.round(h) };
+}
+
+function repairScaffoldInteriorLayout(ir, layout, childrenByParent) {
+  const roots = ir.nodes.filter((node) => CONTAINER_KINDS.has(node.kind) && isScaffoldRootNode(node));
+  for (const root of roots) {
+    const rootEntry = layout.get(root.id);
+    if (!rootEntry) continue;
+    const children = (childrenByParent.get(root.id) || [])
+      .filter((child) => child.visible !== false)
+      .map((child) => ({ node: child, bounds: layout.get(child.id)?.bounds }))
+      .filter((item) => item.bounds);
+    if (children.length < 2) continue;
+    if (!hasSiblingLayoutProblem(children, rootEntry.bounds)) continue;
+
+    const padding = 56;
+    const gap = 32;
+    const innerW = Math.max(160, rootEntry.bounds.w - padding * 2);
+    let cursorX = 0;
+    let cursorY = 0;
+    let rowH = 0;
+    let maxBottom = padding;
+
+    for (const item of children) {
+      const size = fittedChildBounds(item.node, item.bounds, innerW);
+      if (cursorX > 0 && cursorX + size.w > innerW) {
+        cursorX = 0;
+        cursorY += rowH + gap;
+        rowH = 0;
+      }
+      const nextBounds = {
+        x: Math.round(rootEntry.bounds.x + padding + cursorX),
+        y: Math.round(rootEntry.bounds.y + padding + cursorY),
+        w: size.w,
+        h: size.h,
+      };
+      resizeSubtreeToBounds(item.node.id, nextBounds, layout, childrenByParent);
+      cursorX += size.w + gap;
+      rowH = Math.max(rowH, size.h);
+      maxBottom = Math.max(maxBottom, padding + cursorY + size.h);
+    }
+
+    const neededH = Math.max(rootEntry.bounds.h, maxBottom + padding);
+    if (neededH > rootEntry.bounds.h) {
+      rootEntry.bounds = { ...rootEntry.bounds, h: Math.round(neededH) };
+      layout.set(root.id, rootEntry);
+    }
+    layout.autoRepairs.push({
+      code: 'SCAFFOLD_CHILD_REFLOW',
+      node_id: root.id,
+      items: children.length,
+    });
+  }
 }
 
 // Outer layout pass. Each stage is a SINGLE horizontal row of scaffolds:
