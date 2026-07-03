@@ -42,6 +42,9 @@ const DEFAULT_SECTION_SIZE = { w: 960, h: 640 };
 const SECTION_DUPLICATE_OFFSET = { x: 160, y: 120 };
 const DEFAULT_HTML_COMPONENT_SIZE = { w: 360, h: 220 };
 const DEFAULT_COMPLETION_SIZE = { w: 520, h: 300 };
+const NOTE_BASE_SIZE = 200;
+const NOTE_MIN_SCALE = 0.18;
+const NOTE_MAX_SCALE = 3;
 const DEFAULT_STAGE_CONTENT_ORIGIN = { x: 56, y: 172 };
 const DEFAULT_STAGE_FLOW_GAP = 56;
 const DEFAULT_STAGE_RIGHT_PADDING = 72;
@@ -52,6 +55,11 @@ const USER_PENDING_CHANGE_RGB = '124, 58, 237';
 const EXPERT_OPINION_YELLOW = '#f59e0b';
 const REGION_ANNOTATION_KIND = 'region_annotation';
 const LEGACY_COMPLETION_KIND = 'completion_request';
+function noteScaleForWidth(width, fallback = NOTE_BASE_SIZE) {
+  const raw = Number(width || fallback) / NOTE_BASE_SIZE;
+  return Math.max(NOTE_MIN_SCALE, Math.min(NOTE_MAX_SCALE, Number.isFinite(raw) && raw > 0 ? raw : 1));
+}
+
 const DESIGN_STAGE_ALIASES = new Map([
   ['discover', 'discover'], ['discovery', 'discover'], ['explore', 'discover'], ['exploration', 'discover'], ['research', 'discover'], ['发现', 'discover'], ['探索', 'discover'], ['调研', 'discover'],
   ['define', 'define'], ['definition', 'define'], ['framing', 'define'], ['synthesis', 'define'], ['problem', 'define'], ['定义', 'define'], ['收束', 'define'],
@@ -1503,6 +1511,11 @@ function categorizeSectionChild(shape) {
 }
 
 function localShapeSize(editor, shape) {
+  if (shape?.type === 'note') {
+    const scale = Number.isFinite(Number(shape.props?.scale)) ? Number(shape.props.scale) : 1;
+    const size = NOTE_BASE_SIZE * scale;
+    return { w: size, h: size };
+  }
   const bounds = getShapePageBounds(editor, shape.id) || {};
   return {
     w: shape.props?.w || bounds.w || 220,
@@ -1557,8 +1570,9 @@ function scaledTemplateShapePatch(shape, scaleX, scaleY) {
   const props = { ...shape.props };
   if (Number.isFinite(props.w)) props.w = Math.max(1, shape.w * scaleX);
   if (Number.isFinite(props.h)) props.h = Math.max(1, shape.h * scaleY);
-  if (shape.type === 'note' && Number.isFinite(props.scale)) {
-    props.scale = Math.max(0.35, props.scale * Math.min(scaleX, scaleY));
+  if (shape.type === 'note') {
+    const initialScale = Number.isFinite(Number(shape.props?.scale)) ? Number(shape.props.scale) : 1;
+    props.scale = Math.max(NOTE_MIN_SCALE, Math.min(NOTE_MAX_SCALE, initialScale * Math.min(scaleX, scaleY)));
   } else if (Number.isFinite(props.scale)) {
     props.scale = Math.max(0.1, props.scale * Math.min(scaleX, scaleY));
   }
@@ -1777,7 +1791,7 @@ function updateShapeLayout(editor, shape, layout, timestamp) {
   if (!shape) return null;
   const nextProps = { ...(shape.props || {}) };
   if (shape.type === 'note') {
-    nextProps.scale = Math.max(0.75, Math.min(1.3, Number(layout.w || 200) / 200));
+    nextProps.scale = noteScaleForWidth(layout.w);
   } else {
     nextProps.w = Math.round(layout.w);
     nextProps.h = Math.round(layout.h);
@@ -4321,7 +4335,7 @@ export default function CanvasWorkspace() {
           growY: 0,
           url: '',
           richText: toRichText(text || ''),
-          scale: Math.max(0.75, Math.min(1.25, Number(w || 200) / 200)),
+          scale: noteScaleForWidth(w),
           textFirstEditedBy: null,
         },
         meta: {

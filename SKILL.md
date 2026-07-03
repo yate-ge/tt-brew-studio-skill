@@ -374,7 +374,7 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 section 中。`scaffold.root` frame 的可见名称必须是该脚手架的 `title`，便于选择和导航。
 方法模板（CanvasIR Template）插入可使用 `scale` 和 `anchor`；自由创建的视觉脚手架可在 root
 `meta.vd_scaffold_scale` 给建议缩放。缩放会保持根 frame、子 frame、文字、形状、便签、图片等
-内容相对容器左上角的偏移和尺寸。
+内容相对容器左上角的偏移和尺寸；便签使用 tldraw note 的 `scale` 跟随缩放，不用固定成普通矩形。
 
 ### 画布工具边界
 

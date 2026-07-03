@@ -63,6 +63,9 @@ const DEFAULT_NODE_SIZE = {
 
 const AGENT_SCAFFOLD_COLOR = 'yellow';
 const USER_PENDING_CHANGE_COLOR = 'violet';
+const NOTE_BASE_SIZE = 200;
+const NOTE_MIN_SCALE = 0.18;
+const NOTE_MAX_SCALE = 3;
 
 const DESIGN_STAGE_SEQUENCE = [
   {
@@ -1641,7 +1644,10 @@ function createTextRecord(node, parentId, index, bounds, now) {
 
 // note tool: a real sticky note — one participant-style idea per note.
 function createNoteRecord(node, parentId, index, bounds, now) {
-  const scale = Math.max(0.75, Math.min(1.25, Math.round(bounds.w || 200) / 200));
+  const explicitScale = Number(node.meta?.vd_note_scale ?? node.scale);
+  const scale = Number.isFinite(explicitScale) && explicitScale > 0
+    ? Math.max(NOTE_MIN_SCALE, Math.min(NOTE_MAX_SCALE, explicitScale))
+    : Math.max(NOTE_MIN_SCALE, Math.min(NOTE_MAX_SCALE, (bounds.w || NOTE_BASE_SIZE) / NOTE_BASE_SIZE));
   return {
     ...baseShapeRecord(node, parentId, index, bounds, now),
     type: 'note',
