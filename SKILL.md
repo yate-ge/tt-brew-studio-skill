@@ -347,6 +347,17 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 - **工具多样化**：专家和智能体添加内容时按语义混用原生工具——说明用 `text`、想法/条目用
   便签 `note`、图示节点用形状 `geo`、关系用 `arrow`、材料用 `image`；一个脚手架内不得用
   单一 kind（例如全部 text）铺满。观察类条目、清单项、讨论点默认用便签而不是 text。
+- **内部布局你来给坐标（关键）**：脚手架内部用显式 `bounds:{x,y,w,h}`（相对根 frame 左上角）
+  设计布局，画出该框架该有的形状——时间轴横排、矩阵网格、字段堆叠、关系放射——不要只发语义
+  节点让后端流式排布（那会挤成雷同竖条）。**外层是后端硬写死的**：每阶段一排横向脚手架、
+  自动占满阶段高度（多出空白=学生工作区）、不够往右加宽；你只管内部，不用管脚手架外层
+  位置和大小。母型坐标配方见 [references/canvas-templates.md](references/canvas-templates.md) §4.5，
+  框架级画布配方见 [references/scaffold-gallery.md](references/scaffold-gallery.md)。
+- **画布只放"说明 + 提问 + 留白"**：脚手架要像真实设计画布——顶部一句话说明（大标题 `xl sans`
+  + 一句灰色"你要做什么"），每个分区标题 + 一句灰色引导问题（`s grey`）+ 留白等学生填。
+  **不上画布**：专家署名、"训练什么判断/可能遮蔽/AI 边界/为什么创建"等元信息——归属只写进
+  `vd_method_source` meta（→左侧专家坝亮起并连线）。可选样式字段 `text_size`/`font`/`fill`/
+  `text_align`/`dash`（`fill:none` = 包围形只描边）。完整规范见 canvas-templates.md §6。
 - 把相关画板对象放入命名 section。
 - 用 connector relationships 表达依赖、流程和证据关系。
 - 每次写入都要足够小，便于验证。
@@ -460,7 +471,8 @@ section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `an
   的意见数量，点击头像打开该专家的意见面板。专家意见面板、意见 item 和关联连线统一使用黄色
   主题；用户反馈、批注、区域批注和标注箭头统一使用紫色主题。若用户在专家意见下回复或向专家
   提交反馈，该用户消息才可成为待处理反馈。hover / 选中条目时画布上以对应颜色勾勒关联元素并
-  画连接线。
+  画连接线。专家栏顶部保留一个无文字的白色小矩形按钮；点击后选中整个专家栏，显示所有专家
+  意见到其目标画布元素的黄色连线和目标轮廓，再次点击或选择单个专家时取消总览连线。
 
 ### 交互组件（Widgets）
 
@@ -549,4 +561,5 @@ canvas event 和 `semantic_index.layout_reviews`。
 - 交互组件合约：[references/canvas-widgets.md](references/canvas-widgets.md)
 - Widget 示例模式：[references/widget-examples.md](references/widget-examples.md)
 - 走通案例（开题全景 → 聚类 → 共创 → 交付）：[references/case-playable-city.md](references/case-playable-city.md)
+- 视觉脚手架图库（框架级画布配方）：[references/scaffold-gallery.md](references/scaffold-gallery.md)
 - Design tokens：[references/design-system.md](references/design-system.md)

@@ -2143,9 +2143,12 @@ function ExpertAvatar({ expert, selected = false, size = 58 }) {
 function ActiveExpertsDock({
   experts,
   selectedExpertName,
+  overviewSelected,
+  overviewButtonRef,
   summonDraft,
   summonSubmitting,
   onSelectExpert,
+  onToggleOverview,
   onSummonDraftChange,
   onSubmitSummon,
   pendingByExpert,
@@ -2160,42 +2163,53 @@ function ActiveExpertsDock({
       onWheel={(event) => event.stopPropagation()}
     >
       {hasExperts ? (
-        <div style={STYLES.expertParticipantList}>
-          {experts.map((expert) => {
-            const selected = selectedExpertName === expert.name;
-            const pending = pendingByExpert?.get?.(expert.name) || 0;
-            const opinions = opinionByExpert?.get?.(expert.name) || 0;
-            const badgeCount = pending || opinions;
-            const badgeLabel = pending ? `${pending} 条待处理反馈` : `${opinions} 条意见`;
-            return (
-              <button
-                type="button"
-                key={expert.name}
-                style={STYLES.expertParticipantButton(selected, pending > 0, opinions > 0)}
-                onClick={() => onSelectExpert(expert)}
-                title={[
-                  expert.domain ? `${expert.name} · ${expert.domain}` : expert.name,
-                  opinions > 0 ? `${opinions} 条意见` : null,
-                  pending > 0 ? `${pending} 条待处理反馈` : null,
-                ].filter(Boolean).join(' · ')}
-                aria-pressed={selected}
-              >
-                <span style={STYLES.expertAvatarWrap}>
-                  <ExpertAvatar expert={expert} selected={selected} size={30} />
-                  {badgeCount > 0 && (
-                    <span
-                      style={STYLES.expertPendingBadge(pending ? ANNOTATION_PURPLE : EXPERT_OPINION_YELLOW, pending > 0)}
-                      aria-label={badgeLabel}
-                    >
-                      {badgeCount}
-                    </span>
-                  )}
-                </span>
-                <span style={STYLES.expertParticipantName(selected)}>{expert.name}</span>
-              </button>
-            );
-          })}
-        </div>
+        <>
+          <button
+            ref={overviewButtonRef}
+            type="button"
+            style={STYLES.expertBarOverviewButton(overviewSelected)}
+            onClick={onToggleOverview}
+            aria-label={overviewSelected ? '隐藏全部专家意见连线' : '显示全部专家意见连线'}
+            aria-pressed={overviewSelected}
+            title={overviewSelected ? '隐藏全部专家意见连线' : '显示全部专家意见连线'}
+          />
+          <div style={STYLES.expertParticipantList}>
+            {experts.map((expert) => {
+              const selected = selectedExpertName === expert.name;
+              const pending = pendingByExpert?.get?.(expert.name) || 0;
+              const opinions = opinionByExpert?.get?.(expert.name) || 0;
+              const badgeCount = pending || opinions;
+              const badgeLabel = pending ? `${pending} 条待处理反馈` : `${opinions} 条意见`;
+              return (
+                <button
+                  type="button"
+                  key={expert.name}
+                  style={STYLES.expertParticipantButton(selected, pending > 0, opinions > 0)}
+                  onClick={() => onSelectExpert(expert)}
+                  title={[
+                    expert.domain ? `${expert.name} · ${expert.domain}` : expert.name,
+                    opinions > 0 ? `${opinions} 条意见` : null,
+                    pending > 0 ? `${pending} 条待处理反馈` : null,
+                  ].filter(Boolean).join(' · ')}
+                  aria-pressed={selected}
+                >
+                  <span style={STYLES.expertAvatarWrap}>
+                    <ExpertAvatar expert={expert} selected={selected} size={30} />
+                    {badgeCount > 0 && (
+                      <span
+                        style={STYLES.expertPendingBadge(pending ? ANNOTATION_PURPLE : EXPERT_OPINION_YELLOW, pending > 0)}
+                        aria-label={badgeLabel}
+                      >
+                        {badgeCount}
+                      </span>
+                    )}
+                  </span>
+                  <span style={STYLES.expertParticipantName(selected)}>{expert.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <form style={STYLES.activeExpertsEmptyState} onSubmit={onSubmitSummon}>
           <div style={STYLES.activeExpertsEmpty}>当前未有专家参与讨论</div>
@@ -2226,6 +2240,8 @@ function ActiveExpertsDock({
 function CanvasCollaborationDock({
   experts,
   selectedExpertName,
+  expertBarOverviewSelected,
+  expertBarOverviewButtonRef,
   summonDraft,
   summonSubmitting,
   feedbackItems,
@@ -2234,6 +2250,7 @@ function CanvasCollaborationDock({
   pendingByExpert,
   opinionByExpert,
   onSelectExpert,
+  onToggleExpertBarOverview,
   onSummonDraftChange,
   onSubmitSummon,
   onToggleFeedback,
@@ -2248,10 +2265,13 @@ function CanvasCollaborationDock({
       <ActiveExpertsDock
         experts={experts}
         selectedExpertName={selectedExpertName}
+        overviewSelected={expertBarOverviewSelected}
+        overviewButtonRef={expertBarOverviewButtonRef}
         summonDraft={summonDraft}
         summonSubmitting={summonSubmitting}
         pendingByExpert={pendingByExpert}
         onSelectExpert={onSelectExpert}
+        onToggleOverview={onToggleExpertBarOverview}
         onSummonDraftChange={onSummonDraftChange}
         onSubmitSummon={onSubmitSummon}
         opinionByExpert={opinionByExpert}
@@ -2553,7 +2573,7 @@ function CanvasFeedbackPanel({
 // Connector overlay: outlines each target shape of the active feedback item and
 // draws lines from the panel card to those shapes. Recomputed every render (the
 // parent re-renders on store changes, so the geometry follows the camera).
-function FeedbackConnectorOverlay({ link, editor, layerEl }) {
+function FeedbackConnectorOverlay({ link, editor, layerEl, showExpertName = false }) {
   const item = link?.item;
   if (!item || !editor) return null;
   const targets = feedbackConnectorRects(editor, item.shapeIds || []);
@@ -2600,10 +2620,32 @@ function FeedbackConnectorOverlay({ link, editor, layerEl }) {
           style={STYLES.feedbackConnectorOutline(rect, color)}
         >
           <span style={STYLES.feedbackConnectorTag(color)}>
-            {TARGET_LEVEL_LABEL[levelByShapeId.get(rect.shapeId)] || '元素'}
+            {[
+              showExpertName ? item.expertName : null,
+              TARGET_LEVEL_LABEL[levelByShapeId.get(rect.shapeId)] || '元素',
+            ].filter(Boolean).join(' · ')}
           </span>
         </div>
       ))}
+    </>
+  );
+}
+
+function ExpertOpinionOverviewOverlay({ items, sourceElement, editor, layerEl }) {
+  if (!sourceElement || !Array.isArray(items) || items.length === 0) return null;
+  return (
+    <>
+      {items
+        .filter((item) => item?.shapeIds?.length > 0)
+        .map((item) => (
+          <FeedbackConnectorOverlay
+            key={`expert-overview-${item.id}`}
+            link={{ item, element: sourceElement }}
+            editor={editor}
+            layerEl={layerEl}
+            showExpertName
+          />
+        ))}
     </>
   );
 }
@@ -2909,6 +2951,20 @@ const STYLES = {
     textAlign: 'center',
     letterSpacing: 0,
   },
+  expertBarOverviewButton: (selected) => ({
+    width: 24,
+    height: 8,
+    minHeight: 8,
+    border: selected ? '1px solid rgba(245, 158, 11, .72)' : '1px solid rgba(226, 232, 240, .95)',
+    borderRadius: 3,
+    background: '#fff',
+    boxShadow: selected
+      ? '0 0 0 2px rgba(245, 158, 11, .18), 0 4px 10px rgba(146, 64, 14, .16)'
+      : '0 3px 8px rgba(15, 23, 42, .10)',
+    cursor: 'pointer',
+    flexShrink: 0,
+    padding: 0,
+  }),
   expertSummonField: {
     display: 'flex',
     alignItems: 'center',
@@ -3616,6 +3672,7 @@ export default function CanvasWorkspace() {
   const [annotationSubmitting, setAnnotationSubmitting] = useState(false);
   const [feedbackPanelOpen, setFeedbackPanelOpen] = useState(false);
   const [selectedExpertName, setSelectedExpertName] = useState(null);
+  const [expertBarOverviewSelected, setExpertBarOverviewSelected] = useState(false);
   const [expertSummonDraft, setExpertSummonDraft] = useState('');
   const [expertSummonSubmitting, setExpertSummonSubmitting] = useState(false);
   const editorRef = useRef(null);
@@ -3633,6 +3690,7 @@ export default function CanvasWorkspace() {
   const shapeFingerprints = useRef(new Map());
   const pendingContentBaselines = useRef(new Map());
   const widgetDragRef = useRef(null);
+  const expertBarOverviewButtonRef = useRef(null);
   // Rev of the snapshot this client loaded/saved last. Echoed as base_rev on
   // saves so the server can protect agent shapes from stale-client writes.
   const snapshotRevRef = useRef(0);
@@ -3694,6 +3752,12 @@ export default function CanvasWorkspace() {
       setSelectedExpertName(null);
     }
   }, [discussionExperts, selectedExpertName]);
+
+  useEffect(() => {
+    if (discussionExperts.length === 0 && expertBarOverviewSelected) {
+      setExpertBarOverviewSelected(false);
+    }
+  }, [discussionExperts.length, expertBarOverviewSelected]);
 
   // Widgets scale proportionally: after any edit, snap the anchor shape's
   // height back to the intrinsic aspect ratio (width is the driving axis).
@@ -3940,6 +4004,7 @@ export default function CanvasWorkspace() {
   }
 
   function handleSelectDiscussionExpert(expert) {
+    setExpertBarOverviewSelected(false);
     if (!expert?.name) {
       setPreviewMode('normal');
       setSelectedExpertName(null);
@@ -3956,6 +4021,19 @@ export default function CanvasWorkspace() {
       // Focusing an expert opens that expert's opinion stream.
       setFeedbackPanelOpen(true);
       return expert.name;
+    });
+  }
+
+  function handleToggleExpertBarOverview() {
+    setExpertBarOverviewSelected((selected) => {
+      const next = !selected;
+      if (next) {
+        setSelectedExpertName(null);
+        setFeedbackPanelOpen(false);
+        setActiveFeedbackLink(null);
+        setPreviewMode('normal');
+      }
+      return next;
     });
   }
 
@@ -5724,6 +5802,8 @@ export default function CanvasWorkspace() {
                 <CanvasCollaborationDock
                   experts={discussionExperts}
                   selectedExpertName={selectedExpertName}
+                  expertBarOverviewSelected={expertBarOverviewSelected}
+                  expertBarOverviewButtonRef={expertBarOverviewButtonRef}
                   summonDraft={expertSummonDraft}
                   summonSubmitting={expertSummonSubmitting}
                   feedbackItems={userFeedbackItems}
@@ -5732,9 +5812,11 @@ export default function CanvasWorkspace() {
                   pendingByExpert={pendingFeedbackByExpert}
                   opinionByExpert={expertOpinionsByExpert}
                   onSelectExpert={handleSelectDiscussionExpert}
+                  onToggleExpertBarOverview={handleToggleExpertBarOverview}
                   onSummonDraftChange={setExpertSummonDraft}
                   onSubmitSummon={handleSubmitExpertSummon}
                   onToggleFeedback={() => {
+                    setExpertBarOverviewSelected(false);
                     if (selectedExpertName) {
                       setSelectedExpertName(null);
                       setPreviewMode('normal');
@@ -5796,6 +5878,14 @@ export default function CanvasWorkspace() {
                   {feedbackPanelOpen && activeFeedbackLink?.item && (
                     <FeedbackConnectorOverlay
                       link={activeFeedbackLink}
+                      editor={editorRef.current}
+                      layerEl={overlayLayerRef.current}
+                    />
+                  )}
+                  {expertBarOverviewSelected && (
+                    <ExpertOpinionOverviewOverlay
+                      items={expertOpinionItems}
+                      sourceElement={expertBarOverviewButtonRef.current}
                       editor={editorRef.current}
                       layerEl={overlayLayerRef.current}
                     />

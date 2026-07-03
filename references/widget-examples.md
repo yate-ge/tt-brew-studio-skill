@@ -2,7 +2,8 @@
 
 本文是给智能体使用的 Widget 示例参考，不是固定组件库。智能体应根据当前项目阶段、用户目标、
 画板证据和专家判断，自行决定是否创建 Widget、创建哪类 Widget，以及如何生成具体 UI、state、
-events 和画板物化结果。
+events 和画板物化结果。一个已实测的局部操作型 Widget（共创角色：拖拽换组、contenteditable
+组名、状态写回、物化 emit）见 [case-playable-city.md](case-playable-city.md) 幕二。
 
 核心原则：
 

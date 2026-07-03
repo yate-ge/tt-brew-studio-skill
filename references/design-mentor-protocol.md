@@ -327,6 +327,10 @@ meta: {
 Widget 内普通状态变化不新增反馈 item，但会让该 Widget 进入 pending_feedback，直到 agent
 读取并回写；待处理期间 Widget 边框为紫色，回写后恢复黄色。
 
+专家栏顶部有一个无文字的白色小矩形总览按钮。点击该按钮时视为选中整个专家栏，画布应显示
+所有专家意见到对应目标元素的黄色连线和目标轮廓；再次点击、选择单个专家或打开“我的反馈”时
+退出总览态。
+
 #### 诊断反模式
 
 - 只在 Develop 或 Deliver 放一个"诊断总结"卡片。
@@ -350,10 +354,11 @@ Widget 内普通状态变化不新增反馈 item，但会让该 Widget 进入 pe
   说明 / 提示语用 `text`，观察条目 / 想法 / 讨论点用便签 `note`，图示节点用形状 `geo`
   （按含义选型），关系 / 证据流向用 `connector`，参考材料用 `image`。一个脚手架内
   不得用单一 kind 铺满（协议反模式）。
-- **带署名的脚手架**：每个方法脚手架底部有一行来源说明，例如
-  `方法来源：马谨（服务设计）、娄永琪（社区设计）`，根 frame 上有机器可读 meta：
-  `meta.vd_method_source = { method_id, class: "B"|"A"|"C", experts: [...] }`。
-  类别决定 frame 颜色和 caveat 措辞（见 design-methods.md 第 1 节）。
+- **归属只入 meta，不上画布**：脚手架的专家归属**不写成画布上的署名文字**，只写进根 frame 的
+  机器可读 meta：`meta.vd_method_source = { method_id, class: "B"|"A"|"C", experts: [{ name, domain,
+  virtual }] }`。运行时据此让**左侧专家坝**亮起对应专家，并把脚手架连到专家。学生想知道"这来自
+  谁"就看左侧专家、悬停连线；画布本身保持干净（画布只放"一句话说明 + 分区引导问题 + 留白"，
+  见 canvas-templates.md §6）。类别（A/B/C）只决定 meta 和加载规则，不在画布上写 caveat。
 - **评审 / 意见**：annotations / feedback entries 使用 `author = 专家名`，并引用该专家的评审
   视角。意见正文只呈现专家真正想说的话，不重写学生内容，不显示 `专家：`、`指向：`、`观察：`
   等字段标签；证据、审美方向、遮蔽风险和下一步动作可写进 `meta`。

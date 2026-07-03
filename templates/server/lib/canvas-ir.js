@@ -648,8 +648,39 @@ function normalizeIRNode(node = {}, index = 0) {
     src: typeof node.src === 'string' ? node.src : (typeof node.image_src === 'string' ? node.image_src : null),
     alt_text: typeof node.alt_text === 'string' ? node.alt_text : (typeof node.alt === 'string' ? node.alt : ''),
     items: Array.isArray(node.items) ? node.items : [],
+    // Optional style controls, for canvas-grade scaffolds (bold titles, grey
+    // prompts, outline-only enclosing shapes). All fall back to sensible defaults.
+    text_size: normalizeTextSize(node.text_size || node.size),
+    font: normalizeFontName(node.font),
+    text_align: normalizeTextAlign(node.text_align || node.align),
+    fill: normalizeGeoFill(node.fill),
+    dash: normalizeDashStyle(node.dash),
     meta: normalizeNodeMeta(node.meta),
   };
+}
+
+function normalizeTextSize(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return ['s', 'm', 'l', 'xl'].includes(v) ? v : null;
+}
+function normalizeFontName(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return ['draw', 'sans', 'serif', 'mono'].includes(v) ? v : null;
+}
+function normalizeTextAlign(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (['start', 'left'].includes(v)) return 'start';
+  if (['middle', 'center'].includes(v)) return 'middle';
+  if (['end', 'right'].includes(v)) return 'end';
+  return null;
+}
+function normalizeGeoFill(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return ['none', 'semi', 'solid', 'pattern'].includes(v) ? v : null;
+}
+function normalizeDashStyle(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return ['draw', 'solid', 'dashed', 'dotted'].includes(v) ? v : null;
 }
 
 function normalizeRelationship(rel = {}) {
@@ -1505,13 +1536,20 @@ function baseShapeRecord(node, parentId, index, bounds, now) {
 }
 
 function createFrameRecord(node, parentId, index, bounds, now) {
+  // The scaffold-root outer frame carries the framework title in meta (for nav
+  // /dock/attribution), but its visible label is suppressed: the in-canvas
+  // one-line caption (xl) is the sole visible title, so the name never shows
+  // twice. Zone slots keep their labels (that's the zone name).
+  const isScaffoldRoot = node.role === 'scaffold.root' || node.meta?.vd_scaffold_root === true;
+  const base = baseShapeRecord(node, parentId, index, bounds, now);
+  if (isScaffoldRoot && node.title) base.meta = { ...base.meta, vd_title: node.title };
   return {
-    ...baseShapeRecord(node, parentId, index, bounds, now),
+    ...base,
     type: 'frame',
     props: {
       w: bounds.w,
       h: bounds.h,
-      name: node.title || node.id,
+      name: isScaffoldRoot ? '' : (node.title || node.id),
       color: frameColor(node),
     },
   };
@@ -1551,9 +1589,9 @@ function createTextRecord(node, parentId, index, bounds, now) {
     type: 'text',
     props: {
       color: node.color || 'black',
-      size: bounds.h < 88 || width < 200 ? 's' : 'm',
-      font: 'draw',
-      textAlign: 'start',
+      size: node.text_size || (bounds.h < 88 || width < 200 ? 's' : 'm'),
+      font: node.font || 'draw',
+      textAlign: node.text_align || 'start',
       w: width,
       richText: makeRichText(node.content || node.title || ''),
       scale: 1,
@@ -1596,16 +1634,16 @@ function createGeoRecord(node, parentId, index, bounds, now) {
       w: bounds.w,
       h: bounds.h,
       geo: geoSubtypeForShapeNode(node),
-      dash: 'draw',
+      dash: node.dash || 'draw',
       growY: 0,
       url: '',
       scale: 1,
       color: color === 'black' ? 'blue' : color,
       labelColor: 'black',
-      fill: 'solid',
-      size: bounds.w < 150 || bounds.h < 88 ? 's' : 'm',
-      font: 'draw',
-      align: 'middle',
+      fill: node.fill || 'solid',
+      size: node.text_size || (bounds.w < 150 || bounds.h < 88 ? 's' : 'm'),
+      font: node.font || 'draw',
+      align: node.text_align || 'middle',
       verticalAlign: 'middle',
       richText: makeRichText(contentText(node)),
     },
@@ -2666,6 +2704,12 @@ function applyCanvasIRCommands(currentIR, commands = []) {
         bounds,
         content: command.content || command.text,
         color: command.color,
+        shape_type: command.shape_type || command.geo,
+        text_size: command.text_size || command.size,
+        font: command.font,
+        text_align: command.text_align || command.align,
+        fill: command.fill,
+        dash: command.dash,
         meta: {
           ...(command.meta || {}),
           ...(parent ? {

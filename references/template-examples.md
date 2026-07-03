@@ -3,6 +3,8 @@
 本文是给智能体使用的方法模板示例参考，不是固定模板库。智能体应结合当前阶段、专家组、画板
 证据和用户目标，自行决定是否生成方法模板、用哪个结构母型、以及具体板块与提示语。合约见
 [canvas-templates.md](canvas-templates.md)，方法规格见 [design-methods.md](design-methods.md)。
+一个已在真实运行时走通的完整案例（开题全景 5 个专家框架 + 三层框架 + 六维评价 + 证据链）
+见 [case-playable-city.md](case-playable-city.md)。
 
 ## 怎么读这些示例
 
