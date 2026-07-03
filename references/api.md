@@ -381,6 +381,11 @@ Adds canvas-native feedback such as annotations, widget outputs, and component
 feedback. Annotation feedback is created from the in-canvas annotation tool or
 from an annotation arrow's post-draw popover, and may include `meta.mentions`
 when the user types `@专家名` in the canvas annotation popover.
+Region annotations are also user feedback. If the user draws a purple region
+without entering text, the runtime treats it as “please let the agent or an
+expert fill in this region.” When an agent write handles the current pending
+feedback, the runtime resolves the user feedback, clears purple pending states,
+and removes open purple region/completion shapes from the canvas.
 
 Widget `vd.emit` submissions create `kind: "widget_output"` feedback items.
 They are user feedback, appear in the left “我的反馈” entry, and count as pending

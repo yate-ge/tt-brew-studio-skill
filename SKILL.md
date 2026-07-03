@@ -420,9 +420,10 @@ section 中。`scaffold.root` frame 的可见名称必须是该脚手架的 `tit
   终点，松开位置是箭头起点；拖动过程中应实时显示紫色箭头预览，松开后打开同一个批注
   popover，用于填写箭头批注内容。
 - 用户可以创建紫色发光矩形 `region_annotation` 并附带说明文字。该区域表示学生希望专家或
-  agent 查看并回应的画布区域；semantic index 会记录区域位置、大小、所在 Page、是否包含在
-  frame 中、frame id / title、相交的目标 shape ids，以及供 agent 获取该区域截图的
-  `screenshot.capture_hint`。旧 `completion_request` 仅作为兼容语义读取。
+  agent 查看并回应的画布区域；如果用户只圈出区域但没有写文本，默认意图是**请智能体或专家在
+  该区域补全内容**。semantic index 会记录区域位置、大小、所在 Page、是否包含在 frame 中、
+  frame id / title、相交的目标 shape ids，以及供 agent 获取该区域截图的 `screenshot.capture_hint`。
+  旧 `completion_request` 仅作为兼容语义读取。
 - 画板左侧有全局“我的反馈”入口（通过“我的反馈”按钮打开），只聚合用户提交给 agent / 专家的
   annotations、annotation arrows、region annotations、widget outputs 和其他项目画板反馈；
   这些内容才进入“待处理”。专家主动给用户的内容是“意见”，归到上方专家栏对应专家头像下，
@@ -436,7 +437,8 @@ section 中。`scaffold.root` frame 的可见名称必须是该脚手架的 `tit
 - 由 agent 创建的视觉脚手架有清晰边界：方法模板只给最外层 root frame 黄色边框，内部 slot
   和内容保持各自语义颜色；Widget 由 agent 创建时为黄色正常框，用户输入或提交后转为紫色
   待处理框，agent 处理后恢复黄色。专家意见 UI 与连接线使用黄色主题；用户修改、反馈、批注、
-  区域批注和标注箭头使用紫色主题。
+  区域批注和标注箭头使用紫色主题。agent 处理并写回后，应把本轮用户 feedback 标为已解决；
+  若待处理对象是紫色区域批注 / 补全区域，则从画布移除该区域并关闭对应语义索引条目。
 
 ### 专家意见线程
 

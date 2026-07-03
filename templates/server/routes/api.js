@@ -361,6 +361,26 @@ function setupRoutes(app, dataDir) {
     return changed ? next : meta;
   }
 
+  function isOpenPendingRegionMeta(meta = {}) {
+    const kind = meta.vd_kind;
+    const status = meta.vd_status || meta.vd_annotation_status || 'open';
+    return (kind === 'region_annotation' || kind === 'completion_request')
+      && ['open', 'in_progress', 'tracked'].includes(status);
+  }
+
+  function recordReferencesRemovedShape(record, removedShapeIds) {
+    if (!record || removedShapeIds.size === 0) return false;
+    const ids = [
+      record.fromId,
+      record.toId,
+      record.props?.fromId,
+      record.props?.toId,
+      record.props?.terminalId,
+      record.props?.shapeId,
+    ].filter(Boolean).map(String);
+    return ids.some((id) => removedShapeIds.has(id));
+  }
+
   function restorePendingUserProps(record) {
     const meta = record?.meta || {};
     const props = record?.props || {};
@@ -387,10 +407,16 @@ function setupRoutes(app, dataDir) {
     const store = snapshot?.document?.store;
     if (!store || typeof store !== 'object') return snapshot;
     let changed = false;
+    const removedShapeIds = new Set();
     const nextStore = {};
     Object.entries(store).forEach(([id, record]) => {
       if (record?.typeName !== 'shape' || !record.meta) {
         nextStore[id] = record;
+        return;
+      }
+      if (isOpenPendingRegionMeta(record.meta)) {
+        removedShapeIds.add(String(record.id || id));
+        changed = true;
         return;
       }
       const nextMeta = clearPendingUserMeta(record.meta);
@@ -402,6 +428,14 @@ function setupRoutes(app, dataDir) {
         nextStore[id] = record;
       }
     });
+    if (removedShapeIds.size > 0) {
+      Object.entries(nextStore).forEach(([id, record]) => {
+        if (record?.typeName === 'binding' && recordReferencesRemovedShape(record, removedShapeIds)) {
+          delete nextStore[id];
+          changed = true;
+        }
+      });
+    }
     if (!changed) return snapshot;
     return {
       ...snapshot,
@@ -428,6 +462,11 @@ function setupRoutes(app, dataDir) {
         pending_at: null,
       }))
       : index.widget_instances;
+    const closePendingRegions = (list) => (Array.isArray(list)
+      ? list
+        .filter((item) => !['open', 'in_progress', 'tracked'].includes(item?.status || 'open'))
+        .map((item) => ({ ...item, status: item.status || 'resolved' }))
+      : list);
     const canvasIr = index.canvas_ir && typeof index.canvas_ir === 'object'
       ? {
         ...index.canvas_ir,
@@ -445,6 +484,8 @@ function setupRoutes(app, dataDir) {
       nodes: clearMetaList(index.nodes),
       assets: clearMetaList(index.assets),
       widget_instances: widgetInstances,
+      region_annotations: closePendingRegions(index.region_annotations),
+      completion_requests: closePendingRegions(index.completion_requests),
       canvas_ir: canvasIr,
     };
   }
@@ -800,6 +841,91 @@ function setupRoutes(app, dataDir) {
     return readCanvasFeedback(workspaceId).filter(isOpenCanvasFeedback);
   }
 
+  function isOpenUserCanvasFeedback(item = {}) {
+    return !isExpertOpinionFeedback(item) && isOpenCanvasFeedback(item);
+  }
+
+  async function resolvePendingUserFeedback(workspaceId, now, reason = 'agent_canvas_update') {
+    let changed = false;
+    await updateJSON(canvasFeedbackFile(workspaceId), (items) => (Array.isArray(items) ? items : []).map((item) => {
+      if (!isOpenUserCanvasFeedback(item)) return item;
+      changed = true;
+      return {
+        ...item,
+        status: 'resolved',
+        handled: true,
+        updated_at: now,
+        updatedAt: now,
+        meta: {
+          ...(item.meta || {}),
+          resolved_by: 'agent',
+          resolved_reason: reason,
+          resolved_at: now,
+        },
+      };
+    }), []);
+    return changed;
+  }
+
+  function regionFeedbackContentFromEvent(event = {}) {
+    const command = Array.isArray(event.commands) ? event.commands.find((item) => item?.op === 'add_region_annotation') : null;
+    const explicit = String(command?.note || event.target?.note || event.target?.prompt || '').trim();
+    if (explicit) return explicit;
+    return '用户圈出了一个空白区域，默认意图是请智能体或专家在该区域补全内容。';
+  }
+
+  async function ensureRegionFeedbackForEvent(workspaceId, event) {
+    if (event?.actor !== 'user' || event?.type !== 'region_annotation_created') return null;
+    const shapeId = String(event.target?.shape_id || event.created_shape_ids?.[0] || '').trim();
+    if (!shapeId) return null;
+    const now = event.created_at || event.createdAt || new Date().toISOString();
+    const content = regionFeedbackContentFromEvent(event);
+    let created = null;
+    await updateJSON(canvasFeedbackFile(workspaceId), (items) => {
+      const current = Array.isArray(items) ? items : [];
+      const exists = current.some((item) => (
+        item?.kind === 'region_annotation'
+        && String(item?.target?.shape_id || item?.meta?.region_shape_id || '') === shapeId
+      ));
+      if (exists) return current;
+      created = {
+        id: generateId('fb'),
+        kind: 'region_annotation',
+        workspace_id: workspaceId,
+        direction: 'user_to_expert',
+        target: {
+          kind: 'region_annotation',
+          shape_id: shapeId,
+          bounds: event.target?.bounds || null,
+          page_id: event.target?.page_id || null,
+          frame_id: event.target?.frame_id || null,
+          target_shape_ids: event.target?.target_shape_ids || [],
+        },
+        targets: [{ shape_id: shapeId, level: 'region' }],
+        status: 'tracked',
+        handled: false,
+        content,
+        author: 'user',
+        author_kind: 'user',
+        round: null,
+        thread: [{ role: 'user', name: 'user', text: content, at: now }],
+        meta: {
+          region_shape_id: shapeId,
+          event_id: event.id || null,
+          event_type: event.type,
+          screenshot: event.target?.screenshot || null,
+        },
+        source: { type: 'canvas_workspace', workspace_id: workspaceId },
+        created_at: now,
+        updated_at: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+      return [...current, created];
+    }, []);
+    return created;
+  }
+
   function openCompletionRequests(workspace) {
     return (normalizeCanvasSemanticIndex(workspace?.semantic_index).completion_requests || [])
       .filter((item) => !item.status || item.status === 'open' || item.status === 'in_progress');
@@ -981,6 +1107,9 @@ function setupRoutes(app, dataDir) {
       ...normalizedNextIndex,
       edit_summary: hasSemanticDiff(semanticDiff) ? semanticDiff : normalizedNextIndex.edit_summary || null,
     };
+    if (shouldClearPendingUserState) {
+      await resolvePendingUserFeedback(workspace.id, now, 'agent_canvas_ir_write');
+    }
     await writeJSON(canvasSnapshotFile(workspace.id), snapshotToWrite);
     const nextRev = (workspace.snapshot_rev || 0) + 1;
     const saved = await writeCanvasWorkspace({
@@ -1052,6 +1181,7 @@ function setupRoutes(app, dataDir) {
       createdAt: event.createdAt || event.created_at || now,
     };
     await updateJSON(canvasEventsFile(workspaceId), (items) => [...items, item], []);
+    await ensureRegionFeedbackForEvent(workspaceId, item);
     return item;
   }
 
@@ -1729,6 +1859,9 @@ function setupRoutes(app, dataDir) {
       const semanticIndexToSave = shouldClearPendingUserState
         ? clearPendingUserSemanticState(nextSemanticIndex)
         : nextSemanticIndex;
+      if (shouldClearPendingUserState) {
+        await resolvePendingUserFeedback(workspace.id, now, 'agent_snapshot_write');
+      }
       await writeJSON(canvasSnapshotFile(workspace.id), snapshotToWrite);
       const saved = await writeCanvasWorkspace({
         ...workspace,
