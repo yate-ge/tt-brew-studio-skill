@@ -166,6 +166,8 @@ const SCAFFOLD_SLOT = {
   fillFloorHeight: 1180,    // scaffolds fill at least this tall; extra = student area
   minWidth: 720,            // never a sliver
   maxWidth: 2600,           // never absurdly wide
+  minScale: 0.42,            // keep large teaching scaffolds readable after fit
+  maxScale: 1.1,
   gap: 80,                  // horizontal gap between scaffolds
   widgetTargetHeight: 900,  // widgets read as tools: shorter than method scaffolds
   widgetMinHeight: 420,
@@ -1061,6 +1063,36 @@ function layoutStageScaffolds(ir, layout, childrenByParent, layoutPolicy = DEFAU
   };
 
   const isWidget = (node) => node.kind === 'html_component';
+  const scaleSubtree = (nodeId, scale, origin) => {
+    if (!Number.isFinite(scale) || Math.abs(scale - 1) < 0.001) return;
+    const entry = layout.get(nodeId);
+    if (entry) {
+      entry.bounds = {
+        ...entry.bounds,
+        x: Math.round(origin.x + (entry.bounds.x - origin.x) * scale),
+        y: Math.round(origin.y + (entry.bounds.y - origin.y) * scale),
+        w: Math.max(1, Math.round(entry.bounds.w * scale)),
+        h: Math.max(1, Math.round(entry.bounds.h * scale)),
+      };
+      layout.set(nodeId, entry);
+    }
+    for (const child of childrenByParent.get(nodeId) || []) scaleSubtree(child.id, scale, origin);
+  };
+  const scaffoldScaleFor = (node, bounds) => {
+    if (isWidget(node)) return 1;
+    const explicit = Number(node.meta?.vd_scaffold_scale ?? node.meta?.vd_template_scale ?? node.scale);
+    const requested = Number.isFinite(explicit) && explicit > 0 ? explicit : 1;
+    const fitScale = Math.min(
+      1,
+      bounds.w > 0 ? SCAFFOLD_SLOT.maxWidth / bounds.w : 1,
+      bounds.h > 0 ? SCAFFOLD_SLOT.stageContentHeight / bounds.h : 1,
+    );
+    const scale = Math.min(requested, fitScale, SCAFFOLD_SLOT.maxScale);
+    if (scale < SCAFFOLD_SLOT.minScale && fitScale >= SCAFFOLD_SLOT.minScale && requested >= SCAFFOLD_SLOT.minScale) {
+      return SCAFFOLD_SLOT.minScale;
+    }
+    return Math.max(0.18, scale);
+  };
 
   for (const stage of stageFrames) {
     const stageLayout = layout.get(stage.id);
@@ -1081,6 +1113,13 @@ function layoutStageScaffolds(ir, layout, childrenByParent, layoutPolicy = DEFAU
     let maxItemBottom = originY;
     for (const item of rowItems) {
       const entry = layout.get(item.id);
+      const scale = scaffoldScaleFor(item, entry.bounds);
+      if (Math.abs(scale - 1) >= 0.001) {
+        scaleSubtree(item.id, scale, { x: entry.bounds.x, y: entry.bounds.y });
+        const scaled = layout.get(item.id);
+        layout.autoRepairs.push({ code: 'SCAFFOLD_SCALE_TO_FIT', node_id: item.id, scale });
+        entry.bounds = scaled.bounds;
+      }
       const fitted = entry.bounds;
       let targetW;
       let targetH;
@@ -1536,20 +1575,20 @@ function baseShapeRecord(node, parentId, index, bounds, now) {
 }
 
 function createFrameRecord(node, parentId, index, bounds, now) {
-  // The scaffold-root outer frame carries the framework title in meta (for nav
-  // /dock/attribution), but its visible label is suppressed: the in-canvas
-  // one-line caption (xl) is the sole visible title, so the name never shows
-  // twice. Zone slots keep their labels (that's the zone name).
+  // Scaffold-root frames keep their own title as the frame name, so the canvas
+  // object remains recognizable in selection, navigation, and attribution UI.
   const isScaffoldRoot = node.role === 'scaffold.root' || node.meta?.vd_scaffold_root === true;
   const base = baseShapeRecord(node, parentId, index, bounds, now);
-  if (isScaffoldRoot && node.title) base.meta = { ...base.meta, vd_title: node.title };
+  if (isScaffoldRoot) {
+    base.meta = { ...base.meta, ...(node.title ? { vd_title: node.title } : {}), vd_template_scaled: true };
+  }
   return {
     ...base,
     type: 'frame',
     props: {
       w: bounds.w,
       h: bounds.h,
-      name: isScaffoldRoot ? '' : (node.title || node.id),
+      name: node.title || node.id,
       color: frameColor(node),
     },
   };

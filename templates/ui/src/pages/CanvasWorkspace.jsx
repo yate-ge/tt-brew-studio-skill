@@ -1072,7 +1072,7 @@ function isFeedbackItemPending(item) {
 
 const TARGET_LEVEL_LABEL = {
   element: '元素',
-  template: '模板',
+  template: '专家框架',
   widget: '组件',
   stage: '阶段',
   section: '区块',
@@ -1522,46 +1522,52 @@ function isTemplateScaleFrame(shape) {
   const role = String(shape.meta?.vd_role || '');
   return role.includes('pattern.')
     || role.includes('bmc.')
+    || role === 'scaffold.root'
+    || role.includes('scaffold.root')
+    || shape.meta?.vd_scaffold_root === true
     || shape.meta?.vd_template_scaled === true
     || Number.isFinite(Number(shape.meta?.vd_template_scale));
 }
 
-function collectTemplateDescendantFrames(editor, rootId) {
-  const frames = [];
+function collectTemplateDescendantShapes(editor, rootId) {
+  const items = [];
   const visit = (parentId) => {
     const childIds = editor?.getSortedChildIdsForParent?.(parentId) || [];
     childIds.forEach((childId) => {
       const child = editor.getShape?.(childId);
       if (!child) return;
-      if (isCanvasSectionShape(child)) {
-        frames.push({
-          id: child.id,
-          type: child.type,
-          x: Number(child.x || 0),
-          y: Number(child.y || 0),
-          w: Number(child.props?.w || 0),
-          h: Number(child.props?.h || 0),
-          props: { ...(child.props || {}) },
-        });
-      }
+      const size = localShapeSize(editor, child);
+      items.push({
+        id: child.id,
+        type: child.type,
+        x: Number(child.x || 0),
+        y: Number(child.y || 0),
+        w: Number(size.w || 0),
+        h: Number(size.h || 0),
+        props: { ...(child.props || {}) },
+      });
       visit(child.id);
     });
   };
   visit(rootId);
-  return frames;
+  return items;
 }
 
-function scaledFramePatch(frame, scaleX, scaleY) {
+function scaledTemplateShapePatch(shape, scaleX, scaleY) {
+  const props = { ...shape.props };
+  if (Number.isFinite(props.w)) props.w = Math.max(1, shape.w * scaleX);
+  if (Number.isFinite(props.h)) props.h = Math.max(1, shape.h * scaleY);
+  if (shape.type === 'note' && Number.isFinite(props.scale)) {
+    props.scale = Math.max(0.35, props.scale * Math.min(scaleX, scaleY));
+  } else if (Number.isFinite(props.scale)) {
+    props.scale = Math.max(0.1, props.scale * Math.min(scaleX, scaleY));
+  }
   return {
-    id: frame.id,
-    type: frame.type,
-    x: frame.x * scaleX,
-    y: frame.y * scaleY,
-    props: {
-      ...frame.props,
-      w: Math.max(1, frame.w * scaleX),
-      h: Math.max(1, frame.h * scaleY),
-    },
+    id: shape.id,
+    type: shape.type,
+    x: shape.x * scaleX,
+    y: shape.y * scaleY,
+    props,
   };
 }
 
@@ -1577,7 +1583,7 @@ class VisualDeliveryFrameShapeUtil extends FrameShapeUtil {
 
   onResizeStart(shape) {
     if (!isTemplateScaleFrame(shape)) return undefined;
-    this.templateResizeSnapshots.set(String(shape.id), collectTemplateDescendantFrames(this.editor, shape.id));
+    this.templateResizeSnapshots.set(String(shape.id), collectTemplateDescendantShapes(this.editor, shape.id));
     return undefined;
   }
 
@@ -1594,10 +1600,10 @@ class VisualDeliveryFrameShapeUtil extends FrameShapeUtil {
 
     const scaleX = nextW / initialW;
     const scaleY = nextH / initialH;
-    const frames = this.templateResizeSnapshots.get(String(initial.id)) || [];
-    const patches = frames
-      .filter((frame) => frame.w > 0 && frame.h > 0)
-      .map((frame) => scaledFramePatch(frame, scaleX, scaleY));
+    const shapes = this.templateResizeSnapshots.get(String(initial.id)) || [];
+    const patches = shapes
+      .filter((item) => item.w > 0 && item.h > 0)
+      .map((item) => scaledTemplateShapePatch(item, scaleX, scaleY));
     if (patches.length > 0) this.editor.updateShapes(patches);
     return resized;
   }

@@ -350,8 +350,9 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 - **内部布局你来给坐标（关键）**：脚手架内部用显式 `bounds:{x,y,w,h}`（相对根 frame 左上角）
   设计布局，画出该框架该有的形状——时间轴横排、矩阵网格、字段堆叠、关系放射——不要只发语义
   节点让后端流式排布（那会挤成雷同竖条）。**外层是后端硬写死的**：每阶段一排横向脚手架、
-  自动占满阶段高度（多出空白=学生工作区）、不够往右加宽；你只管内部，不用管脚手架外层
-  位置和大小。母型坐标配方见 [references/canvas-templates.md](references/canvas-templates.md) §4.5，
+  自动占满阶段高度（多出空白=学生工作区）、不够往右加宽；过大的脚手架会按阶段可用区域
+  **等比例缩小**，也可以在 root `meta.vd_scaffold_scale` 显式给缩放比例。你只管内部结构和
+  教学价值，不要把单个脚手架画得过大。母型坐标配方见 [references/canvas-templates.md](references/canvas-templates.md) §4.5，
   框架级画布配方见 [references/scaffold-gallery.md](references/scaffold-gallery.md)。
 - **画布只放"说明 + 提问 + 留白"**：脚手架要像真实设计画布——顶部一句话说明（大标题 `xl sans`
   + 一句灰色"你要做什么"），每个分区标题 + 一句灰色引导问题（`s grey`）+ 留白等学生填。
@@ -370,8 +371,10 @@ curl -s -X POST http://localhost:3847/api/canvas-workspaces/{PROJECT_CANVAS_ID}/
 当使用 commands 写入时，优先传 `stage`；没有显式 `parent` 时，运行时会把
 `insert_template`、`add_node` 和 `add_widget` 自动放到该阶段区域。阶段内内容从左上角开始
 流动，必要时换行，容器随内容增长。多 section 的新生成内容应包在单个 `scaffold.root`
-section 中。方法模板（CanvasIR Template）插入可使用 `scale` 和 `anchor`，同时保持根 frame
-比例、子 frame 比例，以及非 frame 内容相对容器左上角的偏移。
+section 中。`scaffold.root` frame 的可见名称必须是该脚手架的 `title`，便于选择和导航。
+方法模板（CanvasIR Template）插入可使用 `scale` 和 `anchor`；自由创建的视觉脚手架可在 root
+`meta.vd_scaffold_scale` 给建议缩放。缩放会保持根 frame、子 frame、文字、形状、便签、图片等
+内容相对容器左上角的偏移和尺寸。
 
 ### 画布工具边界
 

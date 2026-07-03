@@ -166,8 +166,11 @@ top-left corner; root `bounds` are page coordinates.
 
 **外层（阶段带内的脚手架摆放）由后端硬写死**：每个阶段是一排**横向**脚手架，从左到右排；
 脚手架宽度按其内部内容自适应，高度**占满阶段可用高度**（多出的空白 = 学生工作区）；阶段
-随脚手架增多**向右加宽**（单排不换行），四个阶段带纵向堆叠不重叠。agent 不需要给脚手架根
-frame 的外层坐标——只设计内部。
+随脚手架增多**向右加宽**（单排不换行），四个阶段带纵向堆叠不重叠。过大的脚手架会按阶段
+可用高度和最大宽度**等比例缩小**；root `meta.vd_scaffold_scale` / `meta.vd_template_scale` 可给
+建议缩放，但仍受可用区域约束。agent 不需要给脚手架根 frame 的外层坐标——只设计内部。
+
+`scaffold.root` frame 的可见名称使用节点 `title`，便于画布选择、导航和专家归属定位。
 
 When a content node has no `area` and no `bounds`, the compiler auto-places it
 inside the parent from the top-left with a readable size. Containers grow to fit
@@ -246,8 +249,9 @@ v1 支持的 commands：
   成功写回时清除 Widget 的 `pending_feedback` 状态。
 
 `insert_template` 接受可选 `stage`、`parent`、`scale` 和 `anchor` / `position` / `x` + `y`。
-缩放会保持方法模板 root frame 和 child frames 的比例，同时保留非 frame seed 内容相对容器
-左上角的偏移与尺寸。
+缩放会保持方法模板 root frame、child frames、文本、形状、便签、图片等内容的比例，同时保留
+非 frame seed 内容相对容器左上角的偏移与尺寸。自由 `add_node` 创建的 `scaffold.root` 可用
+`meta.vd_scaffold_scale` 指定初始缩放。
 
 示例：
 

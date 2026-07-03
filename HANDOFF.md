@@ -30,10 +30,9 @@
   魏佛兰(参与式观察·紫批注) / 吴端(空间线索·黄批注) / 王受之(文献·词云叙事2)。
 - **脚手架 = 专家思考框架**：内层智能体给坐标画母型形状，外层后端横向铺开占满阶段高度。
   画布只放"一句话说明(xl sans 标题 + 灰色 s '你要做什么') + 每分区一句引导问题 + 留白"。
-  **画布上无署名、无 AI 元信息**；scaffold.root frame 的可见 label 已在后端压掉。
+  **画布上无署名、无 AI 元信息**；scaffold.root frame 的可见名称使用脚手架 title，便于选择和导航。
 - **配色两套，不能混**（详见 collaboration-model §3.1）：
-  - ① **贴纸本身颜色**（按评论类型，高级感）：🔴重大 `#C15B5B` / 🟡小修 `#C99A3B` / 🟣参考 `#9B8AC4`。
-  - ② **外围 highlight/关联描边**（与①独立）：**专家关联=黄 / 用户目标=紫**，**只描边、极淡填充、
+  - **关联颜色**：**专家关联=黄 / 用户目标=紫**，**只描边、极淡填充、
     不覆盖内容**。区域批注工具=紫框 + 高透明度紫填充（**已做**：`STYLES.highlightOverlay`/
     `regionAnnotationOverlay` fill 已降到 .04–.05）。
 - **归属 = 连线到左侧专家 bar，不在画布上放头像/署名**（最新方向，关键！见下 A）。
@@ -60,20 +59,16 @@
   `ActiveExpertsDock` 给每个专家按钮注册 ref；`focusedScaffoldAttributionItems` 根据 hover/selected 专家
   过滤后复用 `FeedbackConnectorOverlay`，说明浮层由 `feedbackConnectorNote` 渲染。
 
-### E — 画布彩色批注贴纸（最大亮点，未实现）
-- **目标**（叙事3）：专家评论渲染成画布上的**彩色贴纸**：贴纸色=评论类型(①红/黄/紫)，
-  **箭头指向目标内容**，**右下角专家头像**，**点专家头像只高亮该专家全部贴纸**。
-- **后端要加**：feedback 存一个 `comment_type`（major/minor/reference）→ 决定贴纸色。POST /feedback
-  已支持 author/targets/meta（`templates/server/routes/api.js:1649`）。
-- **前端**：新增一个 overlay 组件，把 `author=expert & direction=expert_to_content` 的 feedback
-  渲染成贴纸卡（定位在 target shape 附近，用 `feedbackConnectorRects`/`pagePointToViewport` 算位置），
-  箭头复用 FeedbackConnectorOverlay 的画法；贴纸右下角放 ExpertAvatar；点头像 → 设
-  `selectedExpertName` 高亮该专家贴纸。
-- feedback 数据模型已能承载，主要工作是"把 feedback 画成画布贴纸"。
+### E — 左侧专家栏统一承载专家意见（简化版，基本可）
+- **目标**（叙事3）：专家智能体的批注不再额外生成画布批注卡或 floating UI；统一进入左侧专家栏。
+  左侧专家头像显示意见数量；点头像打开专家意见流；悬停/选中某条意见时复用连线指向目标内容。
+- **现状**：`author=expert & direction=expert_to_content` 的 feedback 已进入专家意见栏，已有数量 badge、
+  专家筛选、意见 hover/click 连线。
+- **不要做**：不要再实现“画布彩色批注卡 / 右下角头像 / 卡片 ✅”这一层额外画布 UI。
 
-### F — ✅ 收起 + 左侧专家可追溯档案（依赖 E，未实现）
-- 贴纸右上角 ✅ → 调后端 `POST /feedback/:fid/status`（已存在，`api.js`）标 resolved → 贴纸从主画布
-  收起。点左侧专家头像 → 展开该专家档案：原批注 / 小雷修改 / 修改时间 / 专家二次反馈——数据都在
+### F — 左侧专家可追溯档案（未实现）
+- 调后端 `POST /feedback/:fid/status`（已存在，`api.js`）标 resolved → 该意见在左侧专家记录里标为
+  已回应 / 已解决。点左侧专家头像 → 展开该专家档案：原批注 / 小雷修改 / 修改时间 / 专家二次反馈——数据都在
   `feedback.thread[]`（有 role/name/text/at）+ resolve 状态里。做一个档案面板即可。
 
 ### G — zoom-out Discover 整理视图（未实现）
@@ -84,7 +79,7 @@
 
 - `design-experts.md:9,24` 和 `design-mentor-protocol.md:48,237` 写"最多 5 位"——已定 5 位，
   措辞可保留（不用再纠结 8）。
-- `design-mentor-protocol.md §5` 现在写"专家评论只入 meta/左侧栏"，要补"评论=画布彩色贴纸(E)"。
+- `design-mentor-protocol.md §5` 继续保持"专家评论统一入左侧专家栏"，不要补额外画布批注 UI。
 - `widget-examples.md` 标注"Widget 四类"框架，点名 case 两类（词云=可视化型、HMW=请求型）。
 
 ## 关键代码地图（`templates/ui/src/pages/CanvasWorkspace.jsx`，约 5000+ 行）
