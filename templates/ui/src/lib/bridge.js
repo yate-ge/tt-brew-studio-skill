@@ -29,6 +29,7 @@
  *                    vd:widget:state-patch {patch,state} | vd:widget:event
  *                    vd:widget:error {message}
  *                    vd:widget:drag {phase:start|move|end, dx, dy}  (iframe px)
+ *                    vd:canvas:wheel {deltaX,deltaY,deltaMode,clientX,clientY}
  *   parent → iframe: vd:widget:state {state, actor}
  *
  *   Drag contract: pointerdown on a non-interactive background area (widget
@@ -311,6 +312,26 @@ export function getBridgeScript(lang) {
 
   document.addEventListener('click', handleFeedbackClick);
   document.addEventListener('submit', handleFeedbackSubmit);
+
+  // When the pointer is inside an iframe, the host page never sees the wheel
+  // event. Capture browser-zoom gestures here so ctrl/cmd + wheel still zooms
+  // the canvas instead of the browser window.
+  window.addEventListener('wheel', function(e) {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    window.parent.postMessage({
+      type: 'vd:canvas:wheel',
+      deltaX: e.deltaX || 0,
+      deltaY: e.deltaY || 0,
+      deltaMode: e.deltaMode || 0,
+      clientX: e.clientX || 0,
+      clientY: e.clientY || 0,
+      ctrlKey: !!e.ctrlKey,
+      metaKey: !!e.metaKey,
+      shiftKey: !!e.shiftKey,
+      altKey: !!e.altKey,
+    }, ORIGIN);
+  }, { passive: false, capture: true });
 
   /* ------------------------------------------------------------------ */
   /*  3. Height sync via ResizeObserver                                  */

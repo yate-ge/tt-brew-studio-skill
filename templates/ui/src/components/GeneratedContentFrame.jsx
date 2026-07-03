@@ -74,6 +74,7 @@ export default function GeneratedContentFrame({
   onWidgetReady,
   onWidgetError,
   onWidgetDrag,
+  onCanvasWheel,
 }) {
   const iframeRef = useRef(null);
   const [height, setHeight] = useState(0);
@@ -143,8 +144,12 @@ export default function GeneratedContentFrame({
       case 'vd:widget:drag':
         if (widget) onWidgetDrag?.(e.data);
         break;
+
+      case 'vd:canvas:wheel':
+        onCanvasWheel?.(e.data);
+        break;
     }
-  }, [onAnnotation, onInteractive, onReplaceDraft, widget, onWidgetStatePatch, onWidgetEvent, onWidgetSize, onWidgetReady, onWidgetError, onWidgetDrag]);
+  }, [onAnnotation, onInteractive, onReplaceDraft, widget, onWidgetStatePatch, onWidgetEvent, onWidgetSize, onWidgetReady, onWidgetError, onWidgetDrag, onCanvasWheel]);
 
   useEffect(() => {
     window.addEventListener('message', handleMessage);

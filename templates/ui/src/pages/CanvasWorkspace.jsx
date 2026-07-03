@@ -616,6 +616,32 @@ function screenPointToPage(editor, point) {
   return point;
 }
 
+function normalizeWheelDelta(eventData = {}) {
+  const mode = Number(eventData.deltaMode || 0);
+  const unit = mode === 1 ? 16 : (mode === 2 ? 800 : 1);
+  return {
+    x: Number(eventData.deltaX || 0) * unit,
+    y: Number(eventData.deltaY || 0) * unit,
+  };
+}
+
+function zoomCanvasAtViewportPoint(editor, viewportPoint, wheelData) {
+  const camera = editor?.getCamera?.();
+  if (!camera || !Number.isFinite(camera.z) || !Number.isFinite(wheelData?.y) || wheelData.y === 0) return;
+  const options = editor.getCameraOptions?.() || {};
+  const { x: cx, y: cy, z: cz } = camera;
+  const zoomSpeed = Number.isFinite(options.zoomSpeed) ? options.zoomSpeed : 1;
+  const delta = Math.abs(wheelData.y) > 10 ? 10 * Math.sign(wheelData.y) / 100 : wheelData.y / 100;
+  const nextZ = Math.max(0.02, cz + delta * zoomSpeed * cz);
+  if (!Number.isFinite(nextZ) || Math.abs(nextZ - cz) < 0.0001) return;
+
+  editor.setCamera?.({
+    x: cx + viewportPoint.x / nextZ - viewportPoint.x / cz,
+    y: cy + viewportPoint.y / nextZ - viewportPoint.y / cz,
+    z: nextZ,
+  }, { immediate: true });
+}
+
 function htmlComponentOverlaysFromEditor(editor) {
   const shapes = editor?.getCurrentPageShapesSorted?.() || editor?.getCurrentPageShapes?.() || [];
   return shapes.filter(isHtmlComponentShape).map((shape) => {
@@ -1682,6 +1708,7 @@ function CanvasHtmlComponentOverlay({
   onWidgetReady,
   onWidgetError,
   onWidgetDrag,
+  onCanvasWheel,
   onBorderDragStart,
 }) {
   return (
@@ -1719,6 +1746,7 @@ function CanvasHtmlComponentOverlay({
           onWidgetReady={() => onWidgetReady(component)}
           onWidgetError={(err) => onWidgetError(component, err)}
           onWidgetDrag={(data) => onWidgetDrag(component, data)}
+          onCanvasWheel={(data) => onCanvasWheel(component, data)}
         />
       </div>
       {['top', 'right', 'bottom', 'left'].map((edge) => (
@@ -4130,6 +4158,21 @@ export default function CanvasWorkspace() {
     }
   }
 
+  function handleWidgetCanvasWheel(component, data) {
+    const editor = editorRef.current;
+    if (!editor || (!data?.ctrlKey && !data?.metaKey)) return;
+    const delta = normalizeWheelDelta(data);
+    if (!delta.y) return;
+    const scale = Number.isFinite(component.scale) && component.scale > 0 ? component.scale : 1;
+    const viewportPoint = {
+      x: component.x + Number(data.clientX || 0) * scale,
+      y: component.y + Number(data.clientY || 0) * scale,
+    };
+    editor.stopCameraAnimation?.();
+    zoomCanvasAtViewportPoint(editor, viewportPoint, delta);
+    window.requestAnimationFrame(() => refreshHtmlComponents(editor));
+  }
+
   // Border-ring drag handled on the host side with pointer capture.
   function handleWidgetBorderDragStart(component, e) {
     const editor = editorRef.current;
@@ -5299,6 +5342,7 @@ export default function CanvasWorkspace() {
                       onWidgetReady={handleWidgetReady}
                       onWidgetError={handleWidgetError}
                       onWidgetDrag={handleWidgetDrag}
+                      onCanvasWheel={handleWidgetCanvasWheel}
                       onBorderDragStart={handleWidgetBorderDragStart}
                     />
                   ))}
